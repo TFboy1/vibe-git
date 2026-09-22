@@ -83,8 +83,8 @@ vibe-git codex status
 
 专用池只执行：
 
-- 多份 `plan.md` 的需求对齐与任务拆分；
-- 多份 `change.md` 的冲突与影响范围审核。
+- 多份计划 Markdown 的需求对齐与任务拆分；
+- 多份变更 Markdown 的冲突与影响范围审核。
 
 真正的开发任务使用成员日常 Codex。默认 App Server 优先、CLI 回退：
 
@@ -104,10 +104,10 @@ vibe-git codex unbind
 成员只维护文件，不填写网页表单：
 
 ```powershell
-vibe-git plan submit .\plan.md
+vibe-git plan submit .\我的方案.md
 ```
 
-文件必须是 UTF-8、非空、文件名严格为 `plan.md`，上限 256 KiB。重复内容是幂等的；变更内容会形成新版本。
+可以选择任意文件名的 `.md`。文件必须是 UTF-8、非空且不超过 256 KiB；原文件名会保留，提交入口会把它归类为“计划”。重复内容是幂等的，变更内容会形成新版本。
 
 队长决定何时冻结当前各节点最新计划并启动对齐：
 
@@ -129,13 +129,13 @@ vibe-git tasks publish <alignment-id>
 ```powershell
 vibe-git task list
 vibe-git task pull <task-id>                 # 默认写出 task.md
-vibe-git task push <task-id> .\task.md
+vibe-git task push <task-id> .\我的执行步骤.md
 vibe-git task start <task-id>
 vibe-git task sync <task-id>
 vibe-git task done <task-id>
 ```
 
-- `task.md` 只能补充执行步骤、文件范围、验证命令和备注，不能覆盖正式目标、边界或验收。
+- 上传的任意 `.md` 会归类为该任务的执行细化，只能补充执行步骤、文件范围、验证命令和备注，不能覆盖正式目标、边界或验收。`task pull` 仍默认导出为 `task.md`，也可指定输出名。
 - 发布任务不会自动抢跑；只有负责人执行 `task start` 才会向自己的 Codex App Server/CLI 发命令。
 - 后台每 15 秒同步 Codex 阶段、Git 分支、完整 SHA 和 dirty 状态，不上传对话正文或工具记录。
 - Codex 正常结束后状态为 `WAITING_CONFIRMATION`。负责人必须在结束后做一次新鲜同步，才能 `task done`。
@@ -146,7 +146,7 @@ vibe-git task done <task-id>
 这里的 Pull Request 是内部需求变更单，不会创建 GitHub PR：
 
 ```powershell
-vibe-git pr submit .\change.md
+vibe-git pr submit .\调整登录流程.md
 vibe-git pr list
 ```
 
@@ -165,7 +165,7 @@ vibe-git review apply <review-id>
 vibe-git review reject <review-id>
 ```
 
-审核期间新提交的 `change.md` 自动进入下一批。阶段结束后获批的变更会形成下一阶段待发布草稿。
+上传的任意 `.md` 会由该入口归类为需求变更。审核期间新提交的变更文档自动进入下一批；阶段结束后获批的变更会形成下一阶段待发布草稿。
 
 ## 网页
 
@@ -204,4 +204,3 @@ Host API 健康检查：`GET /health`。运行问题优先查看：
 vibe-git logs
 Get-Content "$HOME/.vibe-git/host.log" -Tail 100
 ```
-

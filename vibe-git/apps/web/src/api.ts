@@ -23,9 +23,9 @@ const post = <T>(path: string, body: unknown = {}) => request<T>(path, { method:
 
 export const api = {
   bootstrap: () => request<V20BootstrapPayload>("/api/v1/bootstrap"),
-  uploadPlan: (content: string) => post<MarkdownDocument>("/api/v1/plans", { filename: "plan.md", content }),
-  uploadTask: (taskId: string, content: string) => post<MarkdownDocument>(`/api/v1/tasks/${encodeURIComponent(taskId)}/detail`, { filename: "task.md", content }),
-  uploadChange: (content: string) => post(`/api/v1/pull-requests`, { filename: "change.md", content }),
+  uploadPlan: (filename: string, content: string) => post<MarkdownDocument>("/api/v1/plans", { filename, content }),
+  uploadTask: (taskId: string, filename: string, content: string) => post<MarkdownDocument>(`/api/v1/tasks/${encodeURIComponent(taskId)}/detail`, { filename, content }),
+  uploadChange: (filename: string, content: string) => post(`/api/v1/pull-requests`, { filename, content }),
   document: (id: string) => request<MarkdownDocument>(`/api/v1/documents/${encodeURIComponent(id)}`),
   taskDetail: (id: string) => request<{ markdown: string }>(`/api/v1/tasks/${encodeURIComponent(id)}/detail`),
   startAlignment: () => post(`/api/v1/alignments`),
@@ -44,4 +44,3 @@ export const api = {
   tunnelStart: () => post(`/api/v1/local/cloudflare/start`),
   tunnelStop: () => post(`/api/v1/local/cloudflare/stop`)
 };
-

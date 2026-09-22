@@ -41,10 +41,10 @@ function usage(): string {
   vibe-git connect <join-url> | status | logs | disconnect | open
   vibe-git codex bind | status | unbind
   vibe-git config set work.transport auto|app-server|cli
-  vibe-git plan submit ./plan.md
-  vibe-git task list | pull <task-id> [output] | push <task-id> ./task.md
+  vibe-git plan submit <任意文件.md>
+  vibe-git task list | pull <task-id> [output] | push <task-id> <任意文件.md>
   vibe-git task start <task-id> | sync [task-id] | done <task-id>
-  vibe-git pr submit ./change.md | list`;
+  vibe-git pr submit <任意文件.md> | list`;
 }
 
 function isAlive(pid: number | null | undefined): boolean {
@@ -207,17 +207,18 @@ async function status(): Promise<void> {
   });
 }
 
-async function readMarkdown(pathRaw: string | undefined, expected: string): Promise<string> {
-  if (!pathRaw) throw new Error(`缺少 ${expected} 路径`);
+async function readMarkdown(pathRaw: string | undefined, purpose: string): Promise<{ filename: string; content: string }> {
+  if (!pathRaw) throw new Error(`缺少${purpose} Markdown 路径`);
   const path = resolve(pathRaw);
-  if (basename(path) !== expected) throw new Error(`文件名必须是 ${expected}`);
+  const filename = basename(path);
+  if (!/\.md$/i.test(filename)) throw new Error("请选择任意一个 .md 文件");
   const info = await stat(path);
-  if (info.size > 256 * 1024) throw new Error(`${expected} 不能超过 256 KiB`);
+  if (info.size > 256 * 1024) throw new Error("Markdown 不能超过 256 KiB");
   let content: string;
   try { content = new TextDecoder("utf-8", { fatal: true }).decode(await readFile(path)); }
-  catch { throw new Error(`${expected} 必须是有效 UTF-8`); }
-  if (!content.trim() || content.includes("\u0000")) throw new Error(`${expected} 必须是非空 UTF-8 文本`);
-  return content;
+  catch { throw new Error("Markdown 必须是有效 UTF-8"); }
+  if (!content.trim() || content.includes("\u0000")) throw new Error("Markdown 必须是非空 UTF-8 文本");
+  return { filename, content };
 }
 
 async function bootstrap(): Promise<{ config: ClientConfig; data: V20BootstrapPayload }> {
@@ -283,9 +284,9 @@ async function main(): Promise<void> {
     if (action === "rotate") { const value = await post<{ command: string }>(config, "/api/v1/invite/rotate"); out(`邀请已轮换：\n${value.command}`); return; }
   }
   if (group === "plan" && action === "submit") {
-    const config = await loadConfig(); if (!config) return; const content = await readMarkdown(third, "plan.md");
-    const doc = await post<MarkdownDocument>(config, "/api/v1/plans", { filename: "plan.md", content });
-    out(`plan.md 已提交：r${doc.revision} ${doc.sha256}`); return;
+    const config = await loadConfig(); if (!config) return; const markdown = await readMarkdown(third, "计划");
+    const doc = await post<MarkdownDocument>(config, "/api/v1/plans", markdown);
+    out(`${doc.filename} 已作为计划提交：r${doc.revision} ${doc.sha256}`); return;
   }
   if (group === "align") {
     const { config, data } = await bootstrap();
@@ -319,9 +320,9 @@ async function main(): Promise<void> {
       const path = resolve(fourth || "task.md"); await writeFile(path, value.markdown, "utf8"); out(`已导出：${path}`); return;
     }
     if (action === "push") {
-      if (!third || !fourth) throw new Error("用法：vibe-git task push <task-id> ./task.md");
-      const content = await readMarkdown(fourth, "task.md"); const doc = await post<MarkdownDocument>(config, `/api/v1/tasks/${encodeURIComponent(third)}/detail`, { filename: "task.md", content });
-      out(`task.md 已上传：r${doc.revision}`); return;
+      if (!third || !fourth) throw new Error("用法：vibe-git task push <task-id> <任意文件.md>");
+      const markdown = await readMarkdown(fourth, "任务细化"); const doc = await post<MarkdownDocument>(config, `/api/v1/tasks/${encodeURIComponent(third)}/detail`, markdown);
+      out(`${doc.filename} 已作为任务细化上传：r${doc.revision}`); return;
     }
     if (action === "start") { if (!third) throw new Error("缺少 task-id"); const job = await post<{ id: string }>(config, `/api/v1/tasks/${encodeURIComponent(third)}/start`); out(`开工作业已发布：${job.id}`); return; }
     if (action === "sync") { const job = await post<{ id: string }>(config, third ? `/api/v1/tasks/${encodeURIComponent(third)}/sync` : "/api/v1/tasks/sync"); out(`同步作业已发布：${job.id}`); return; }
@@ -329,7 +330,7 @@ async function main(): Promise<void> {
   }
   if (group === "pr") {
     const config = await loadConfig(); if (!config) return;
-    if (action === "submit") { const content = await readMarkdown(third, "change.md"); const value = await post<{ id: string }>(config, "/api/v1/pull-requests", { filename: "change.md", content }); out(`Vibe-Git Pull Request 已提交：${value.id}`); return; }
+    if (action === "submit") { const markdown = await readMarkdown(third, "需求变更"); const value = await post<{ id: string }>(config, "/api/v1/pull-requests", markdown); out(`Vibe-Git Pull Request 已提交：${value.id}`); return; }
     if (action === "list") { out(await api(config, "/api/v1/pull-requests")); return; }
   }
   if (group === "review") {

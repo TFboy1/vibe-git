@@ -88,12 +88,13 @@ describe("Vibe-Git v0.20 Host", () => {
 
   it("校验 Markdown、保留版本和哈希，并隔离任务权限", async () => {
     const { app, captain, member } = await setup();
-    expect((await post(app, "/api/v1/plans", member.nodeToken, { filename: "other.md", content: "x" })).statusCode).toBe(400);
-    expect((await post(app, "/api/v1/plans", member.nodeToken, { filename: "plan.md", content: "" })).statusCode).toBe(400);
-    const first = await post(app, "/api/v1/plans", member.nodeToken, { filename: "plan.md", content: "# A" });
-    const same = await post(app, "/api/v1/plans", member.nodeToken, { filename: "plan.md", content: "# A" });
-    const second = await post(app, "/api/v1/plans", member.nodeToken, { filename: "plan.md", content: "# B" });
+    expect((await post(app, "/api/v1/plans", member.nodeToken, { filename: "other.txt", content: "x" })).statusCode).toBe(400);
+    expect((await post(app, "/api/v1/plans", member.nodeToken, { filename: "empty.md", content: "" })).statusCode).toBe(400);
+    const first = await post(app, "/api/v1/plans", member.nodeToken, { filename: "frontend-design.md", content: "# A" });
+    const same = await post(app, "/api/v1/plans", member.nodeToken, { filename: "frontend-design.md", content: "# A" });
+    const second = await post(app, "/api/v1/plans", member.nodeToken, { filename: "implementation-notes.MD", content: "# B" });
     expect(first.json().revision).toBe(1); expect(same.json().id).toBe(first.json().id); expect(second.json().revision).toBe(2);
+    expect(first.json().filename).toBe("frontend-design.md"); expect(second.json().filename).toBe("implementation-notes.MD");
     expect(first.json().sha256).toMatch(/^[0-9a-f]{64}$/);
     const ready = await completeAlignment(app, captain.nodeToken, member.nodeToken, member.node.id);
     expect(ready.status).toBe("READY");
@@ -101,7 +102,8 @@ describe("Vibe-Git v0.20 Host", () => {
     expect(publish.statusCode).toBe(200);
     const task = (await bootstrap(app, captain.nodeToken)).tasks[0]!;
     expect((await post(app, `/api/v1/tasks/${task.id}/detail`, captain.nodeToken, { filename: "task.md", content: "越权" })).statusCode).toBe(403);
-    expect((await post(app, `/api/v1/tasks/${task.id}/detail`, member.nodeToken, { filename: "task.md", content: "# 执行细节\n只补步骤" })).statusCode).toBe(200);
+    const detail = await post(app, `/api/v1/tasks/${task.id}/detail`, member.nodeToken, { filename: "my-steps.md", content: "# 执行细节\n只补步骤" });
+    expect(detail.statusCode).toBe(200); expect(detail.json().filename).toBe("my-steps.md");
     await app.close();
   });
 
@@ -130,8 +132,8 @@ describe("Vibe-Git v0.20 Host", () => {
     const ready = await completeAlignment(app, captain.nodeToken, member.nodeToken, member.node.id);
     await post(app, `/api/v1/alignments/${ready.id}/publish`, captain.nodeToken);
     const task = (await bootstrap(app, captain.nodeToken)).tasks[0]!;
-    const change = await post(app, "/api/v1/pull-requests", member.nodeToken, { filename: "change.md", content: "# 变更\n调整验收" });
-    const duplicate = await post(app, "/api/v1/pull-requests", member.nodeToken, { filename: "change.md", content: "# 变更\n调整验收" });
+    const change = await post(app, "/api/v1/pull-requests", member.nodeToken, { filename: "验收调整.md", content: "# 变更\n调整验收" });
+    const duplicate = await post(app, "/api/v1/pull-requests", member.nodeToken, { filename: "验收调整.md", content: "# 变更\n调整验收" });
     expect(duplicate.json().id).toBe(change.json().id);
     expect((await post(app, "/api/v1/reviews", member.nodeToken, { force: true })).statusCode).toBe(403);
     const reviewResponse = await post(app, "/api/v1/reviews", captain.nodeToken, { force: true });

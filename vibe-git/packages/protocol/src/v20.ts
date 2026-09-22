@@ -43,7 +43,7 @@ export interface MarkdownDocument {
   kind: MarkdownKind;
   ownerNodeId: string;
   entityId: string | null;
-  filename: "plan.md" | "task.md" | "change.md";
+  filename: string;
   revision: number;
   sha256: string;
   bytes: number;

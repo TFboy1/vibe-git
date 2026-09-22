@@ -35,9 +35,9 @@ function requireCaptain(node: CollaborationNode): void {
   if (node.role !== "captain") throw forbidden("该操作仅限队长");
 }
 
-function markdownBody(body: MarkdownBody | undefined, expected: "plan.md" | "task.md" | "change.md"): { filename: string; content: string } {
+function markdownBody(body: MarkdownBody | undefined, purpose: string): { filename: string; content: string } {
   if (!body || typeof body.filename !== "string" || typeof body.content !== "string") {
-    throw badRequest(`请上传 UTF-8 ${expected}`);
+    throw badRequest(`请上传 UTF-8 Markdown 作为${purpose}`);
   }
   return { filename: body.filename, content: body.content };
 }
@@ -66,11 +66,11 @@ export async function registerV20Routes(app: FastifyInstance, service: V20Servic
   app.post<{ Body: NodeHeartbeatInput }>("/api/v1/nodes/heartbeat", async (request) => service.heartbeat(authenticate(request, service), request.body));
 
   app.post<{ Body: MarkdownBody }>("/api/v1/plans", async (request) => {
-    const body = markdownBody(request.body, "plan.md");
+    const body = markdownBody(request.body, "计划");
     return service.submitPlan(authenticate(request, service), body.filename, body.content);
   });
   app.post<{ Params: { id: string }; Body: MarkdownBody }>("/api/v1/tasks/:id/detail", async (request) => {
-    const body = markdownBody(request.body, "task.md");
+    const body = markdownBody(request.body, "任务细化");
     return service.submitTaskDetail(authenticate(request, service), request.params.id, body.filename, body.content);
   });
   app.get<{ Params: { id: string } }>("/api/v1/tasks/:id/detail", async (request) => {
@@ -85,7 +85,7 @@ export async function registerV20Routes(app: FastifyInstance, service: V20Servic
       markdown: [
         `# ${task.title}`,
         "",
-        "## 正式目标（不可由 task.md 修改）",
+        "## 正式目标（不可由任务细化 Markdown 修改）",
         task.goal,
         "",
         "## 边界",
@@ -96,12 +96,12 @@ export async function registerV20Routes(app: FastifyInstance, service: V20Servic
         "",
         "## 依赖",
         ...(task.dependencies.length ? task.dependencies.map((item) => `- ${item}`) : ["- 无"]),
-        detail ? `\n---\n\n## 成员执行细节（task.md r${detail.revision}）\n\n${detail.content}` : ""
+        detail ? `\n---\n\n## 成员执行细节（${detail.filename} r${detail.revision}）\n\n${detail.content}` : ""
       ].filter(Boolean).join("\n")
     };
   });
   app.post<{ Body: MarkdownBody }>("/api/v1/pull-requests", async (request) => {
-    const body = markdownBody(request.body, "change.md");
+    const body = markdownBody(request.body, "需求变更");
     return service.submitPullRequest(authenticate(request, service), body.filename, body.content);
   });
   app.get("/api/v1/pull-requests", async (request) => {
