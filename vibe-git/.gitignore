@@ -1,0 +1,14 @@
+node_modules/
+dist/
+*.tsbuildinfo
+data/*.db
+data/*.db-*
+data/tools/
+data/v20/
+.env
+.DS_Store
+coverage/
+
+data/backups/
+data/*.log
+data/local-server.json

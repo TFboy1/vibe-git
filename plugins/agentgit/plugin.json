@@ -1,0 +1,5 @@
+{
+  "name": "agentgit", "version": "0.1.0", "description": "Codex 原生提案提交与验证任务读取的本地 MVP。",
+  "author": {"name":"AgentGit contributors"},
+  "extensions": {"com.openai":{"interface":{"displayName":"AgentGit","shortDescription":"在原会话提交提案，读取团队任务。","longDescription":"M0 本地验证版。冻结正文、幂等回执和任务收件。","developerName":"AgentGit contributors","category":"Productivity","capabilities":["Read","Write"],"defaultPrompt":["使用 AgentGit 同步团队状态。"]}}}
+}

@@ -1,0 +1,32 @@
+{
+  "name": "vibe-git",
+  "version": "0.20.0",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "bin": {
+    "vibe-git": "apps/cli/dist/index.js"
+  },
+  "scripts": {
+    "predev": "npm run build -w @vibe-git/protocol",
+    "dev": "concurrently -k -n host,web -c cyan,magenta \"npm run dev -w @vibe-git/host\" \"npm run dev -w @vibe-git/web\"",
+    "dev:relay": "npm run dev -w @vibe-git/relay",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "pretest": "npm run build -w @vibe-git/protocol",
+    "test": "npm run test -w @vibe-git/host && npm run test -w @vibe-git/cli",
+    "build": "npm run build -w @vibe-git/protocol && npm run build -w @vibe-git/host && npm run build -w @vibe-git/cli && npm run build -w @vibe-git/web",
+    "reset": "node apps/host/scripts/reset.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "^24.5.2",
+    "concurrently": "^9.2.1",
+    "typescript": "^5.9.2",
+    "vitest": "^3.2.4"
+  },
+  "engines": {
+    "node": ">=24"
+  }
+}

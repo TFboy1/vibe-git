@@ -1,0 +1,7 @@
+apikey.txt
+.env
+.env.*
+!.env.example
+.agentgit/
+node_modules/
+test-results/

@@ -1,0 +1,13 @@
+{
+  "name": "@vibe-git/cli",
+  "version": "0.20.0",
+  "private": true,
+  "type": "module",
+  "bin": { "vibe-git": "dist/index.js" },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "build": "tsc -p tsconfig.build.json",
+    "test": "vitest run test/config.test.ts"
+  },
+  "dependencies": { "@vibe-git/protocol": "0.1.0" }
+}

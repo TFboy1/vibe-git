@@ -1,0 +1,191 @@
+{
+  "timestamp": "2026-09-21T09:19:45.409Z",
+  "sanitized": true,
+  "pluginSkills": [
+    {
+      "name": "agentgit:agentgit",
+      "description": "在 Codex 内加入 AgentGit 房间，准备并提交已确认项目提案，同步状态和读取 M0 验证任务。",
+      "enabled": true,
+      "pluginId": "agentgit@personal"
+    }
+  ],
+  "pluginServers": [
+    {
+      "name": "agentgit",
+      "pluginId": "agentgit@personal",
+      "serverInfo": {
+        "name": "agentgit",
+        "title": null,
+        "version": "0.1.0",
+        "description": null,
+        "icons": null,
+        "websiteUrl": null
+      },
+      "serverCapabilities": {
+        "tools": {}
+      },
+      "tools": {
+        "agentgit_join_room": {
+          "name": "agentgit_join_room",
+          "description": "加入房间并持久化本机成员、仓库绑定。不输出凭据。. This tool is part of plugin `AgentGit`.",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "host": {
+                "type": "string"
+              },
+              "invite": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "repository": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "host",
+              "invite",
+              "name",
+              "repository"
+            ],
+            "additionalProperties": false
+          },
+          "annotations": {
+            "readOnlyHint": false,
+            "destructiveHint": false,
+            "openWorldHint": true
+          }
+        },
+        "agentgit_read_tasks": {
+          "name": "agentgit_read_tasks",
+          "description": "读取本成员验证任务包并记录已读；fixture 不是正式任务，不授权改代码。. This tool is part of plugin `AgentGit`.",
+          "inputSchema": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+            "additionalProperties": false
+          },
+          "annotations": {
+            "readOnlyHint": false,
+            "destructiveHint": false,
+            "openWorldHint": true
+          }
+        },
+        "agentgit_submit_proposal": {
+          "name": "agentgit_submit_proposal",
+          "description": "仅在用户已确认同一冻结正文和 hash 后提交。超时返回待确认，幂等重试。. This tool is part of plugin `AgentGit`.",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "submission_id": {
+                "type": "string"
+              },
+              "content_hash": {
+                "type": "string"
+              },
+              "confirmed": {
+                "type": "boolean",
+                "const": true
+              }
+            },
+            "required": [
+              "submission_id",
+              "content_hash",
+              "confirmed"
+            ],
+            "additionalProperties": false
+          },
+          "annotations": {
+            "readOnlyHint": false,
+            "destructiveHint": false,
+            "openWorldHint": true
+          }
+        },
+        "agentgit_sync": {
+          "name": "agentgit_sync",
+          "description": "同步收件箱并记录送达状态，不代表 Codex 已阅读或开工。. This tool is part of plugin `AgentGit`.",
+          "inputSchema": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+            "additionalProperties": false
+          },
+          "annotations": {
+            "readOnlyHint": false,
+            "destructiveHint": false,
+            "openWorldHint": true
+          }
+        },
+        "agentgit_prepare_submission": {
+          "name": "agentgit_prepare_submission",
+          "description": "冻结用户选定的完整项目提案并返回预览。这是本地写入，不是只读。. This tool is part of plugin `AgentGit`.",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "body": {
+                "type": "string"
+              },
+              "repository": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "body",
+              "repository"
+            ],
+            "additionalProperties": false
+          },
+          "annotations": {
+            "readOnlyHint": false,
+            "destructiveHint": false,
+            "openWorldHint": true
+          }
+        },
+        "agentgit_get_receipt": {
+          "name": "agentgit_get_receipt",
+          "description": "查询某个提交的权威回执。. This tool is part of plugin `AgentGit`.",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "submission_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "submission_id"
+            ],
+            "additionalProperties": false
+          },
+          "annotations": {
+            "readOnlyHint": true,
+            "destructiveHint": false,
+            "openWorldHint": true
+          }
+        }
+      },
+      "toolsError": null
+    }
+  ],
+  "modes": {
+    "data": [
+      {
+        "name": "Plan",
+        "mode": "plan",
+        "model": null,
+        "reasoning_effort": "medium"
+      },
+      {
+        "name": "Default",
+        "mode": "default",
+        "model": null,
+        "reasoning_effort": null
+      }
+    ]
+  },
+  "notes": [
+    "Installation paths and user-agent machine details removed.",
+    "Inventory evidence only; M0 native submission and CF verification remain incomplete."
+  ]
+}

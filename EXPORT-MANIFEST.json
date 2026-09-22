@@ -1,0 +1,207 @@
+{
+  "format": 1,
+  "created_at": "20260921T092651Z",
+  "status": "M0_PARTIAL_NOT_ACCEPTED",
+  "files": [
+    {
+      "path": ".gitignore",
+      "bytes": 76,
+      "sha256": "e07d6bc3a9f7012c08797fa05229e7d0f7711ac2180de013bf8f2c06b04ab863"
+    },
+    {
+      "path": "Codex多人协作开发计划.md",
+      "bytes": 53796,
+      "sha256": "f51acdf7db0fab74a9a5aee261ac79bceeee971ed78dd482b29b455684f0d921"
+    },
+    {
+      "path": "DESIGN.md",
+      "bytes": 637,
+      "sha256": "b4c13de73f50baa4b8570f52ba545e22bd13da700b6b868e1bc50ee839dc869c"
+    },
+    {
+      "path": "DEVELOPMENT_PLAN.md",
+      "bytes": 53796,
+      "sha256": "f51acdf7db0fab74a9a5aee261ac79bceeee971ed78dd482b29b455684f0d921"
+    },
+    {
+      "path": "M0-HANDOFF.md",
+      "bytes": 4780,
+      "sha256": "914eb360803c5f6c46f3d6e1740fa9ee5a66f08ab36ea1ddbe4aeef12fed1d3e"
+    },
+    {
+      "path": "M0-VALIDATION.md",
+      "bytes": 4684,
+      "sha256": "2cbbd7d209d23cf0dbd9c72989200dc83a5e623f88cda08452393f642984cd28"
+    },
+    {
+      "path": "README.md",
+      "bytes": 1428,
+      "sha256": "6449ca9acede158afaeb96809a6133f0018304682343df5277ae99070a4324b2"
+    },
+    {
+      "path": "SANITIZATION-REPORT.md",
+      "bytes": 1142,
+      "sha256": "dc524e55d599325e06b147d57c060a0b97ef1f8ef35b0dc8eca3b2ead507590c"
+    },
+    {
+      "path": "Start-AgentGit.ps1",
+      "bytes": 1181,
+      "sha256": "36cdcd6256091c633c2e3af35a420abc36310725d4953d40ff5d079ac520a1e1"
+    },
+    {
+      "path": "apps/host/events.mjs",
+      "bytes": 1674,
+      "sha256": "7f29bf63c58eea7756757e3dc4a69430d4e76efae8781346cb392db74429b913"
+    },
+    {
+      "path": "apps/host/server.mjs",
+      "bytes": 4980,
+      "sha256": "1c001ff988e33c7335232184f88ce1d5fa66f5ff2cf4df453998a273ec095d9a"
+    },
+    {
+      "path": "apps/host/store.mjs",
+      "bytes": 5643,
+      "sha256": "c83fa36e01582fb001bbb6a58712e5b585df0a07fc53474565de161be05d2f1a"
+    },
+    {
+      "path": "apps/web/app.js",
+      "bytes": 8100,
+      "sha256": "1faf4ff423c9c08e74635681ea4b0ec97ae21dd7755ab491030aeb3bad7d620b"
+    },
+    {
+      "path": "apps/web/index.html",
+      "bytes": 1589,
+      "sha256": "6e9bc77e76b30b35640fc2cc17b88a8d3f8aaac1419463f5105a142c844f7b54"
+    },
+    {
+      "path": "apps/web/style.css",
+      "bytes": 6374,
+      "sha256": "191c10635e8848702b5c77e4c3ab225a7bc898981b80a44641f01b7360280fbf"
+    },
+    {
+      "path": "evidence/codex-inventory.json",
+      "bytes": 5698,
+      "sha256": "51624dc9c6a8006d5675ed9b88fe2f3cfb7153f19f0dbb8c3cfaa429746f22f4"
+    },
+    {
+      "path": "package-lock.json",
+      "bytes": 896,
+      "sha256": "af2d757a7fef4cd2921c54a0d3c790fd1fbdb1d5125e1f80b7539752f28a2e77"
+    },
+    {
+      "path": "package.json",
+      "bytes": 377,
+      "sha256": "2972d9f9a546c603a80731e585eb21d004504ff59207dcbf16067adb874383bc"
+    },
+    {
+      "path": "plugins/agentgit/.codex-plugin/plugin.json",
+      "bytes": 672,
+      "sha256": "af30f0a042bcfcd33bd703e22951b8bcf75349395df5f630f258c1dc87962fbc"
+    },
+    {
+      "path": "plugins/agentgit/.mcp.json",
+      "bytes": 112,
+      "sha256": "33f0295e823672c96b15bb4346b2295b583103aa77a742525f45895576a6989e"
+    },
+    {
+      "path": "plugins/agentgit/mcp.json",
+      "bytes": 129,
+      "sha256": "79a34c370b5c5ba59138dd6bc2881d7cab39a9d7c831227f45eb7d1c7ea35a41"
+    },
+    {
+      "path": "plugins/agentgit/plugin.json",
+      "bytes": 557,
+      "sha256": "36c373ce6703e1bfdf80951cb0492217e72a0e68e1c7ee6c377367cd0c2794d7"
+    },
+    {
+      "path": "plugins/agentgit/runtime/bridge.mjs",
+      "bytes": 2748,
+      "sha256": "7117511e26f48c81ce3ab748a16f22b71ba8b81187c405891520574a3ed1fcf0"
+    },
+    {
+      "path": "plugins/agentgit/runtime/client.mjs",
+      "bytes": 4703,
+      "sha256": "85efe5ead305523c700b3d894e0a11f92a152762fa93dac94da655a12a0f8625"
+    },
+    {
+      "path": "plugins/agentgit/runtime/common.mjs",
+      "bytes": 1562,
+      "sha256": "ed757eac6cb3be1c218ed16b5ac5b5ad1e923203b5db40a8ba337ea7dfeb41a2"
+    },
+    {
+      "path": "plugins/agentgit/runtime/live.mjs",
+      "bytes": 1292,
+      "sha256": "e6956fe2f1225219ff023d027a5259116303ce59f4c44883b039f86ee72a7263"
+    },
+    {
+      "path": "plugins/agentgit/runtime/relay.mjs",
+      "bytes": 2117,
+      "sha256": "e36dc2ce248a973a8a89a6e2ded240fd642ba0fe4bd12fea5fe10867eb823f13"
+    },
+    {
+      "path": "plugins/agentgit/skills/agentgit/SKILL.md",
+      "bytes": 1620,
+      "sha256": "365191dd18c2bb22a6d5b1d8901a5947b573f19a99c0bf5c775824052c972c29"
+    },
+    {
+      "path": "scripts/Install-AgentGit.ps1",
+      "bytes": 2975,
+      "sha256": "973bd54838759ec44f79e21e9de1c5573b74bf1aaf62dcddafad9226a283ff5c"
+    },
+    {
+      "path": "scripts/Start-Relay.ps1",
+      "bytes": 243,
+      "sha256": "eaaece5f73e85347a43dbf7de5c29eb8e9fe608576a358438b2a2ecba9cf35b1"
+    },
+    {
+      "path": "scripts/Start-Tunnel.ps1",
+      "bytes": 871,
+      "sha256": "35b59af0ba5751c31f2169e1d8ba983bbd73e05706a9d39f27111856b6830a74"
+    },
+    {
+      "path": "scripts/codex-probe.mjs",
+      "bytes": 2466,
+      "sha256": "177418e97c019de96d5b27a70ee0811f863f17a6ad71b6e9cc9e770078264f53"
+    },
+    {
+      "path": "scripts/demo.mjs",
+      "bytes": 611,
+      "sha256": "d09d341f6beba67f50fe4697e3333d6aabd96810b6685d28df7fb66fa17180c0"
+    },
+    {
+      "path": "scripts/plugin-tools/PROVENANCE.md",
+      "bytes": 351,
+      "sha256": "a42e8227c3431879861cade012bf803e8c1482bc68df6e601676ff380d564568"
+    },
+    {
+      "path": "scripts/plugin-tools/create_basic_plugin.py",
+      "bytes": 11731,
+      "sha256": "272cb14e02ad7c76ac40777443c49cfecfa333ee28ab7f6214210b72c8fd02ae"
+    },
+    {
+      "path": "scripts/plugin-tools/identifier_validation.py",
+      "bytes": 784,
+      "sha256": "a6d51ce4a9a7e8f85626ff5808a467a67574e7f8cdf1167ffb467c5f67e57223"
+    },
+    {
+      "path": "scripts/plugin-tools/read_marketplace_name.py",
+      "bytes": 1644,
+      "sha256": "ba24e6d91eed6f778bde022a967be335c6253983b5ecd1c5e30c8483385887fd"
+    },
+    {
+      "path": "scripts/plugin-tools/update_plugin_cachebuster.py",
+      "bytes": 3045,
+      "sha256": "6a630dfbdc2bca6952580da9c2c7ece08030926819ccd81d9deb518c24c1b0ed"
+    },
+    {
+      "path": "tests/core.test.mjs",
+      "bytes": 6958,
+      "sha256": "3a204b142cd6a6cc5f6bdf31e3ec147cf7c6fde5259e1f5b4fed59439518acaa"
+    },
+    {
+      "path": "tests/transport.test.mjs",
+      "bytes": 2508,
+      "sha256": "41b0f937cba3e2884f474a92648b3eae90e2f39b5ad0042c14dab39d0b3034df"
+    }
+  ]
+}
