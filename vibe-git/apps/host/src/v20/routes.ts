@@ -5,6 +5,7 @@ import type { CloudflareManager } from "../integrations/cloudflare/manager.js";
 import type { V20Service } from "./service.js";
 
 type MarkdownBody = { filename?: string; content?: string };
+type PlanUpdateBody = MarkdownBody & { expectedRevision?: number };
 
 function firstHeader(value: string | string[] | undefined): string | undefined {
   return Array.isArray(value) ? value[0] : value;
@@ -68,6 +69,12 @@ export async function registerV20Routes(app: FastifyInstance, service: V20Servic
   app.post<{ Body: MarkdownBody }>("/api/v1/plans", async (request) => {
     const body = markdownBody(request.body, "计划");
     return service.submitPlan(authenticate(request, service), body.filename, body.content);
+  });
+  app.put<{ Params: { id: string }; Body: PlanUpdateBody }>("/api/v1/plans/:id", async (request) => {
+    const body = markdownBody(request.body, "计划更新");
+    const expectedRevision = request.body?.expectedRevision;
+    if (!Number.isInteger(expectedRevision) || Number(expectedRevision) < 1) throw badRequest("缺少有效的 expectedRevision");
+    return service.updatePlan(authenticate(request, service), request.params.id, Number(expectedRevision), body.filename, body.content);
   });
   app.post<{ Params: { id: string }; Body: MarkdownBody }>("/api/v1/tasks/:id/detail", async (request) => {
     const body = markdownBody(request.body, "任务细化");

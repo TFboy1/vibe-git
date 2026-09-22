@@ -20,10 +20,12 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 }
 
 const post = <T>(path: string, body: unknown = {}) => request<T>(path, { method: "POST", body: JSON.stringify(body) });
+const put = <T>(path: string, body: unknown = {}) => request<T>(path, { method: "PUT", body: JSON.stringify(body) });
 
 export const api = {
   bootstrap: () => request<V20BootstrapPayload>("/api/v1/bootstrap"),
   uploadPlan: (filename: string, content: string) => post<MarkdownDocument>("/api/v1/plans", { filename, content }),
+  updatePlan: (id: string, expectedRevision: number, filename: string, content: string) => put<MarkdownDocument>(`/api/v1/plans/${encodeURIComponent(id)}`, { expectedRevision, filename, content }),
   uploadTask: (taskId: string, filename: string, content: string) => post<MarkdownDocument>(`/api/v1/tasks/${encodeURIComponent(taskId)}/detail`, { filename, content }),
   uploadChange: (filename: string, content: string) => post(`/api/v1/pull-requests`, { filename, content }),
   document: (id: string) => request<MarkdownDocument>(`/api/v1/documents/${encodeURIComponent(id)}`),

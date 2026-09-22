@@ -184,6 +184,28 @@ export class V20Service {
     return document;
   }
 
+  updatePlan(node: CollaborationNode, documentId: string, expectedRevision: number, filename: string, content: string): MarkdownDocument {
+    const target = this.repo.getDocument(documentId);
+    if (!target || target.kind !== "plan") throw notFound("提案不存在");
+    if (target.ownerNodeId !== node.id) throw forbidden("只能修改自己的提案");
+    const current = this.repo.latestDocument(node.id, "plan", null);
+    if (!current || current.id !== target.id || current.revision !== expectedRevision) {
+      throw revisionConflict("提案已经更新，请刷新后重试", current ? { documentId: current.id, revision: current.revision } : undefined);
+    }
+    const validated = this.validateMarkdown(filename, content);
+    if (current.sha256 === validated.sha256) return current;
+    const document: MarkdownDocument = {
+      id: id("DOC"), kind: "plan", ownerNodeId: node.id, entityId: null, filename: validated.filename,
+      revision: current.revision + 1, sha256: validated.sha256, bytes: validated.bytes,
+      content: validated.content, createdAt: now()
+    };
+    this.repo.tx(() => {
+      this.repo.putDocument(document);
+      this.event("plan.updated", node.id, "document", document.id, { previousDocumentId: current.id, revision: document.revision, sha256: document.sha256 });
+    });
+    return document;
+  }
+
   submitTaskDetail(node: CollaborationNode, taskId: string, filename: string, content: string): MarkdownDocument {
     const task = this.repo.getTask(taskId); if (!task) throw notFound("任务不存在");
     if (task.assigneeNodeId !== node.id) throw forbidden("只能细化分配给自己的任务");

@@ -447,14 +447,23 @@ code { font-family: "DM Mono", "SFMono-Regular", Consolas, monospace; font-size:
 
 /* documents and alignment */
 .plan-grid { columns: 2 330px; column-gap: 16px; }
+.plan-toolbar { display: flex; align-items: center; gap: 11px; }
+.plan-toolbar > span { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font: 8px "DM Mono", monospace; white-space: nowrap; }
 .paper { position: relative; overflow: hidden; border: 1px solid rgba(47,62,54,.14); border-radius: 5px 18px 5px 18px; background: var(--paper-high); box-shadow: 0 18px 40px rgba(52,61,52,.09); }
 .plan-grid .paper { margin: 0 0 16px; break-inside: avoid; transition: transform .45s var(--ease-out), box-shadow .45s, border-radius .45s; }
 .plan-grid .paper:nth-child(odd) { transform: rotate(-.35deg); }.plan-grid .paper:nth-child(even) { transform: rotate(.45deg); }
 .plan-grid .paper:hover { transform: rotate(0) translateY(-5px); border-radius: 15px 5px 15px 5px; box-shadow: 0 27px 55px rgba(52,61,52,.15); }
 .paper.compact { max-height: 520px; overflow: auto; scrollbar-width: thin; scrollbar-color: var(--accent-soft) transparent; }
+.plan-card.paper.compact { max-height: none; display: grid; grid-template-rows: auto auto minmax(0, 1fr) auto; overflow: hidden; }
+.plan-card.is-mine { border-color: rgba(72,103,86,.33); box-shadow: 0 20px 48px rgba(55,78,65,.13), inset 0 0 0 1px rgba(91,124,105,.07); }
+.plan-card.is-mine::before { content: ""; position: absolute; z-index: 4; left: 0; top: 0; bottom: 0; width: 3px; background: var(--accent); }
 .paper-fold { position: absolute; z-index: 3; right: 0; top: 0; width: 28px; height: 28px; background: linear-gradient(225deg, var(--paper-low) 49%, transparent 51%); box-shadow: -1px 1px rgba(47,62,54,.12); }
 .paper-meta { min-height: 49px; padding: 9px 35px 9px 16px; display: flex; align-items: center; flex-wrap: wrap; gap: 8px; border-bottom: 1px solid var(--line); background: rgba(238,236,226,.68); }
 .paper-meta > b { font-size: 10px; }.paper-meta > span:last-of-type + code, .paper-meta > code:last-child { margin-left: auto; color: var(--muted); }
+.plan-owner { min-width: 100px; display: flex; flex-direction: column; }.plan-owner span { color: var(--faint); font: 7px "DM Mono", monospace; letter-spacing: .09em; }.plan-owner b { margin-top: 2px; font-size: 10px; }
+.plan-filename { min-width: 0; padding: 11px 17px; display: flex; align-items: center; gap: 7px; color: var(--accent); border-bottom: 1px solid var(--line); background: rgba(251,250,244,.82); }.plan-filename b { overflow: hidden; color: var(--ink); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }.plan-filename span { margin-left: auto; color: var(--faint); font: 8px "DM Mono", monospace; white-space: nowrap; }
+.plan-card .markdown { max-height: 390px; overflow: auto; scrollbar-width: thin; scrollbar-color: var(--accent-soft) transparent; }
+.plan-actions { min-height: 56px; padding: 9px 13px 9px 17px; display: flex; align-items: center; justify-content: space-between; gap: 12px; border-top: 1px solid var(--line); background: rgba(239,237,228,.7); }.plan-actions > span { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font: 8px "DM Mono", monospace; white-space: nowrap; }.plan-actions .button, .plan-actions button { min-height: 32px; padding-block: 6px; }
 .markdown { padding: 25px 27px 30px; color: #3c453f; font-size: 12px; line-height: 1.82; overflow-wrap: anywhere; }
 .markdown h2 { margin: 2px 0 22px; color: var(--ink); font-size: 25px; line-height: 1.2; letter-spacing: -.04em; }.markdown h3 { margin: 27px 0 9px; color: var(--ink); font-size: 16px; letter-spacing: -.025em; }.markdown h4 { margin: 20px 0 7px; color: var(--ink); font-size: 13px; }.markdown p { margin: 7px 0; }.markdown li { margin: 6px 0; }.markdown hr { margin: 26px 0; border: 0; border-top: 1px solid var(--line); }.markdown pre { padding: 15px; overflow: auto; border: 1px solid var(--line); border-radius: 4px 10px 4px 10px; background: #efede4; white-space: pre-wrap; }
 .section-bottom { margin-top: 21px; display: flex; align-items: center; justify-content: flex-end; gap: 18px; }.section-bottom > span { max-width: 500px; color: var(--muted); font-size: 10px; line-height: 1.6; }
@@ -558,11 +567,13 @@ code { font-family: "DM Mono", "SFMono-Regular", Consolas, monospace; font-size:
   .section { padding: 33px 20px 37px; border-radius: 20px 6px 20px 6px; }
   .section-title { align-items: flex-start; flex-direction: column; margin-bottom: 27px; }
   .section-actions { width: 100%; }.section-actions > * { flex: 1; }
+  .plan-toolbar { width: 100%; flex-wrap: wrap; }.plan-toolbar > span { width: 100%; }.plan-toolbar .button { flex: 1; }
   .chapter-number { right: 16px; font-size: 78px; }
   .empty { min-height: 210px; grid-template-columns: 1fr; justify-items: center; gap: 13px; padding: 25px; text-align: center; }
   .node-list { grid-template-columns: 1fr; }.node-card:nth-child(even) { transform: none; }.node-grid { grid-template-columns: repeat(2,1fr); }.node-grid span:nth-child(2) { border-right: 0; }.node-grid span:nth-child(-n+2) { border-bottom: 1px solid rgba(233,240,230,.08); }
   .tunnel { grid-template-columns: auto 1fr auto; }.tunnel .button-row { grid-column: 1 / -1; }
   .plan-grid { columns: 1; }.plan-grid .paper { transform: none; }
+  .plan-actions { align-items: flex-start; flex-direction: column; }.plan-actions .button-row { width: 100%; }.plan-actions .button-row > * { flex: 1; }
   .paper-meta > code { display: none; }
   .task-card, .task-card:nth-child(3n + 1), .task-card:nth-child(3n + 2) { grid-column: 1 / -1; }
   .change-row { grid-template-columns: 25px 1fr auto; }.change-row small { display: none; }

@@ -15,6 +15,7 @@ import {
   Circle,
   Cloud,
   Copy,
+  Eye,
   FileText,
   GitBranch,
   GitCommitHorizontal,
@@ -32,6 +33,7 @@ import {
 import type {
   AlignmentRun,
   CollaborationNode,
+  MarkdownDocument,
   StageTask,
   V20BootstrapPayload
 } from "@vibe-git/protocol";
@@ -221,6 +223,34 @@ function NodeCard({ node, viewer, onRevoke }: {
   </article>;
 }
 
+function PlanCard({ plan, data, run, download }: {
+  plan: MarkdownDocument;
+  data: V20BootstrapPayload;
+  run(work: () => Promise<unknown>, message: string): void;
+  download(plan: MarkdownDocument): void;
+}) {
+  const mine = plan.ownerNodeId === data.viewer.id;
+  const owner = data.nodes.find((node) => node.id === plan.ownerNodeId);
+  return <article className={`paper compact plan-card ${mine ? "is-mine" : "is-team"}`}>
+    <div className="paper-fold" aria-hidden="true"/>
+    <div className="paper-meta">
+      <div className="plan-owner"><span>{mine ? "MY PROPOSAL" : "TEAM PROPOSAL"}</span><b>{owner?.label ?? short(plan.ownerNodeId)}</b></div>
+      <Pill tone={mine ? "green" : "plain"}>{mine ? "我的提案" : "只读"}</Pill>
+      <Pill>r{plan.revision}</Pill>
+      <code>{short(plan.sha256)}</code>
+    </div>
+    <div className="plan-filename"><FileText size={13}/><b>{plan.filename}</b><span>{Math.ceil(plan.bytes / 1024)} KiB</span></div>
+    <Markdown>{plan.content}</Markdown>
+    <footer className="plan-actions">
+      <span><Eye size={12}/>团队全员可见</span>
+      <div className="button-row">
+        <button onClick={() => download(plan)}><ArrowDownToLine size={13}/>下载</button>
+        {mine && <FileButton label="更新我的提案" onFile={(filename, content) => run(() => api.updatePlan(plan.id, plan.revision, filename, content), `${filename} 已更新为 r${plan.revision + 1}`)}/>}
+      </div>
+    </footer>
+  </article>;
+}
+
 function CollaborationMap({ data, taskCount, doneCount }: {
   data: V20BootstrapPayload;
   taskCount: number;
@@ -387,6 +417,16 @@ export function App() {
     }, "task.md 已下载");
   }, [run]);
 
+  const downloadPlan = useCallback((plan: MarkdownDocument) => {
+    const blob = new Blob([plan.content], { type: "text/markdown;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = plan.filename;
+    anchor.click();
+    URL.revokeObjectURL(url);
+  }, []);
+
   if (booting) return <BootScreen/>;
   if (!data) return <Welcome error={unauthorized}/>;
 
@@ -396,6 +436,7 @@ export function App() {
   const latestReview = [...data.reviews].reverse()[0];
   const queuedChanges = data.pullRequests.filter((item) => item.status === "QUEUED");
   const captain = data.viewer.role === "captain";
+  const myPlan = data.plans.find((plan) => plan.ownerNodeId === data.viewer.id);
   const doneCount = tasks.filter((task) => task.status === "DONE").length;
   const activeIndex = Math.max(0, NAV_ITEMS.findIndex(([id]) => id === activeSection));
   const railStyle = { "--active-step": activeIndex } as CSSProperties;
@@ -446,10 +487,10 @@ export function App() {
             {captain && data.tunnel && <div className="tunnel"><span className="tunnel-icon"><Cloud size={16}/><i/></span><div><small>PUBLIC EDGE</small><b>Cloudflare Quick Tunnel</b><span>{data.tunnel.url || data.tunnel.phase}</span></div><Pill tone={data.tunnel.running ? "green" : "amber"}>{data.tunnel.running ? "运行中" : data.tunnel.phase}</Pill><div className="button-row">{!data.tunnel.installed && <button onClick={() => run(() => api.tunnelInstall(), "cloudflared 已安装")}>安装</button>}{!data.tunnel.running ? <button onClick={() => run(() => api.tunnelStart(), "Tunnel 已启动")}>启动</button> : <button onClick={() => run(() => api.tunnelStop(), "Tunnel 已停止")}>停止</button>}</div></div>}
           </Section>
 
-          <Section id="plans" eyebrow="02 · INPUT" title="计划桌面" aside={<FileButton label="上传任意 MD" onFile={(filename, content) => run(() => api.uploadPlan(filename, content), `${filename} 已作为计划提交`)}/>}>
+          <Section id="plans" eyebrow="02 · INPUT" title="团队提案桌面" aside={<div className="plan-toolbar"><span><Eye size={12}/>{data.plans.length} 份提案 · 全员可见</span><FileButton label={myPlan ? "更新我的提案" : "提交我的提案"} onFile={(filename, content) => run(() => myPlan ? api.updatePlan(myPlan.id, myPlan.revision, filename, content) : api.uploadPlan(filename, content), myPlan ? `${filename} 已更新为 r${myPlan.revision + 1}` : `${filename} 已作为提案提交`)}/></div>}>
             {data.plans.length
-              ? <div className="plan-grid">{data.plans.map((plan) => <article className="paper compact" key={plan.id}><div className="paper-fold" aria-hidden="true"/><div className="paper-meta"><b>{data.nodes.find((node) => node.id === plan.ownerNodeId)?.label ?? short(plan.ownerNodeId)}</b><Pill>{plan.filename}</Pill><Pill>r{plan.revision}</Pill><code>{short(plan.sha256)}</code></div><Markdown>{plan.content}</Markdown></article>)}</div>
-              : <Empty>每位成员都可用 CLI 或文件按钮提交任意 .md；至少一份即可由队长开始对齐。</Empty>}
+              ? <div className="plan-grid">{data.plans.map((plan) => <PlanCard key={plan.id} plan={plan} data={data} run={run} download={downloadPlan}/>)}</div>
+              : <Empty>每位成员都可提交一份任意名称的 .md 提案。提交后全员可见，并且只有提案所有者可以继续更新。</Empty>}
             {captain && <div className="section-bottom"><span>开始时冻结每个节点的最新版本，后续上传自动进入下一轮。</span><button className="primary" disabled={!data.plans.length || busy} onClick={() => run(() => api.startAlignment(), "需求对齐已进入审核池")}><Bot size={14}/>开始对齐<ChevronRight size={13}/></button></div>}
           </Section>
 

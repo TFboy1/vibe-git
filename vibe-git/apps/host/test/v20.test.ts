@@ -39,6 +39,10 @@ async function post(app: Awaited<ReturnType<typeof buildApp>>, url: string, toke
   return response;
 }
 
+async function put(app: Awaited<ReturnType<typeof buildApp>>, url: string, token: string, payload: unknown = {}) {
+  return app.inject({ method: "PUT", url, headers: { authorization: `Bearer ${token}` }, payload: payload as never });
+}
+
 async function bootstrap(app: Awaited<ReturnType<typeof buildApp>>, token: string): Promise<V20BootstrapPayload> {
   const response = await app.inject({ method: "GET", url: "/api/v1/bootstrap", headers: { authorization: `Bearer ${token}` } });
   expect(response.statusCode).toBe(200); return response.json() as V20BootstrapPayload;
@@ -83,6 +87,38 @@ describe("Vibe-Git v0.20 Host", () => {
     expect((await app.inject({ method: "GET", url: ticketUrl.pathname })).statusCode).toBe(403);
     expect((await post(app, `/api/v1/nodes/${member.node.id}/revoke`, captain.nodeToken)).statusCode).toBe(200);
     expect((await app.inject({ method: "GET", url: "/api/v1/bootstrap", headers: { authorization: `Bearer ${member.nodeToken}` } })).statusCode).toBe(403);
+    await app.close();
+  });
+
+  it("所有节点都能查看团队最新提案，但只能由所有者修改", async () => {
+    const { app, captain, invite, member } = await setup();
+    const secondJoin = await app.inject({ method: "POST", url: "/api/v1/join", payload: { invite: invite.inviteToken } });
+    const second = secondJoin.json() as { node: CollaborationNode; nodeToken: string };
+    const captainPlan = (await post(app, "/api/v1/plans", captain.nodeToken, { filename: "captain.md", content: "# 队长提案" })).json();
+    const memberPlan = (await post(app, "/api/v1/plans", member.nodeToken, { filename: "member-a.md", content: "# 成员 A 提案" })).json();
+    await post(app, "/api/v1/plans", second.nodeToken, { filename: "member-b.md", content: "# 成员 B 提案" });
+
+    for (const token of [captain.nodeToken, member.nodeToken, second.nodeToken]) {
+      const visible = await bootstrap(app, token);
+      expect(visible.plans).toHaveLength(3);
+      expect(new Set(visible.plans.map((plan) => plan.ownerNodeId))).toEqual(new Set([captain.nodeId, member.node.id, second.node.id]));
+    }
+
+    expect((await put(app, `/api/v1/plans/${memberPlan.id}`, second.nodeToken, { expectedRevision: 1, filename: "越权.md", content: "# 越权" })).statusCode).toBe(403);
+    expect((await put(app, `/api/v1/plans/${memberPlan.id}`, captain.nodeToken, { expectedRevision: 1, filename: "队长也不能代改.md", content: "# 越权" })).statusCode).toBe(403);
+    expect((await put(app, `/api/v1/plans/${captainPlan.id}`, member.nodeToken, { expectedRevision: 1, filename: "越权.md", content: "# 越权" })).statusCode).toBe(403);
+
+    const updated = await put(app, `/api/v1/plans/${memberPlan.id}`, member.nodeToken, { expectedRevision: 1, filename: "member-a-v2.md", content: "# 成员 A 提案\n第二版" });
+    expect(updated.statusCode).toBe(200);
+    expect(updated.json().revision).toBe(2);
+    expect(updated.json().filename).toBe("member-a-v2.md");
+    expect((await put(app, `/api/v1/plans/${memberPlan.id}`, member.nodeToken, { expectedRevision: 1, filename: "stale.md", content: "# 过期修改" })).statusCode).toBe(409);
+
+    for (const token of [captain.nodeToken, member.nodeToken, second.nodeToken]) {
+      const visible = await bootstrap(app, token);
+      expect(visible.plans).toHaveLength(3);
+      expect(visible.plans.find((plan) => plan.ownerNodeId === member.node.id)?.content).toContain("第二版");
+    }
     await app.close();
   });
 
