@@ -7,7 +7,7 @@ Vibe-Git 是一个 **CLI 主导、网页观察** 的多人 Codex 协作控制面
 需要 Node.js 24+、Git、Codex CLI。
 
 ```powershell
-npm install
+npm ci
 npm run build
 npm link
 ```
@@ -16,6 +16,15 @@ npm link
 
 ```powershell
 node .\apps\cli\dist\index.js
+```
+
+仓库根目录提供 Codex Skill：[`.agents/skills/vibe-git/SKILL.md`](../.agents/skills/vibe-git/SKILL.md)。在本仓库使用 Codex 时可用 `$vibe-git` 调用；Skill 包含源码安装、队长与成员的 CLI 工作流，以及凭据处理约定。若要在其他项目也使用该 Skill，可将整个 `.agents/skills/vibe-git` 文件夹复制到个人 `~/.codex/skills/` 下。
+
+```powershell
+$repoRoot = (git rev-parse --show-toplevel).Trim()
+$skillHome = Join-Path $HOME ".codex\skills"
+New-Item -ItemType Directory -Path $skillHome -Force | Out-Null
+Copy-Item -LiteralPath (Join-Path $repoRoot ".agents\skills\vibe-git") -Destination $skillHome -Recurse
 ```
 
 ## 1. 队长启动
@@ -118,10 +127,14 @@ vibe-git plan submit .\我的方案.md
 ```powershell
 vibe-git align start
 vibe-git align status
+vibe-git align show <alignment-id>          # 查看冲突卡片、选项与任务草稿
+vibe-git align resolve <alignment-id> <issue-id> <option-id>
 vibe-git align export <alignment-id>
 ```
 
 审核池按“活动作业更少 → 额度更高 → 最久未使用”选择节点。对齐输出包括 `alignment.md`、`tasks.md` 和结构化任务。队长可以在发布前改派：
+
+首次对齐只上传队长 Git `HEAD`、受限目录索引及配置**键名**；不会上传全仓源码或配置值。计划较长时按节点与章节分片提炼，冻结提案版本；实质冲突必须由队长用 `align resolve` 选择后才能发布。发布时再次校验队长 `HEAD` 是否仍与对齐快照一致。
 
 ```powershell
 vibe-git task assign <draft-task-id> <node-id>
@@ -158,9 +171,13 @@ vibe-git pr list
 
 ```powershell
 vibe-git review start --force
+vibe-git review status
+vibe-git review cancel <review-id>          # 取证中取消，变更回到待审队列
 ```
 
-审核开始会向全员写入持久消息。主控 Agent 合并分析当前批次，给出冲突、完整需求补丁、受影响节点和替代任务。只有受影响任务会暂停，旧租约立即失效。
+审核开始会向全员写入持久消息。各任务负责人先在自己的工作区生成受限 Git 路径索引；无法明确排除影响的任务再由本机专用审核 Codex 逐任务只读深查，最多两轮。主控 Agent 只接收路径、行号、版本指纹和结论，不接收源码正文或完整 diff。长文档按章节分片摘要，不静默截断。离线或仍缺证据的节点显示为 `NEEDS_EVIDENCE`，在证据齐全前不能应用；代码版本漂移会使旧证据和租约失效。明确无影响的任务继续开发。
+
+主控给出逐份变更结论、受影响任务、替代任务与**增量需求修订**。队长应用后，修订以更高优先级附加到原需求，不会用摘要覆盖长篇旧需求。开发中只暂停真正受影响任务；阶段完成后的获批替代任务累积为下一阶段草稿，仍需队长发布。
 
 结果不会自动应用，必须由队长确认：
 

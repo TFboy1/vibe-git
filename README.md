@@ -1,4 +1,8 @@
-# AgentGit M0 · 去敏源码导出包
+# Vibe-Git 仓库
+
+当前 Vibe-Git CLI 与 Host 位于 [`vibe-git/`](vibe-git/README.md)，安装需在该子目录执行。给 Codex 使用的 [Vibe-Git Skill](.agents/skills/vibe-git/SKILL.md) 包含安装步骤和队长、成员的 CLI 工作流。
+
+## 历史 AgentGit M0 导出说明
 
 这是 Codex 原生协作插件的 M0 开发快照，**不是完整 M0 验收通过版**。
 

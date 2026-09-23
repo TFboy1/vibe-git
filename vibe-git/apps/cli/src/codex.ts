@@ -47,10 +47,17 @@ export async function runAudit(prompt: string, schema: unknown, workspace: strin
         "--output-schema", schemaPath, "--output-last-message", outputPath, "--cd", workspace, "-"
       ], { cwd: workspace, windowsHide: true, env: { ...process.env, CODEX_HOME: codexHome }, stdio: ["pipe", "pipe", "pipe"] });
       let stderr = "";
+      let timedOut = false;
+      const timeout = setTimeout(() => { timedOut = true; child.kill(); }, 25 * 60_000);
       child.stderr.setEncoding("utf8");
       child.stderr.on("data", (chunk: string) => { stderr = (stderr + chunk).slice(-32_000); });
-      child.once("error", fail);
-      child.once("close", (code) => code === 0 ? done() : fail(new Error(stderr.trim().slice(-4_000) || `Codex 审核退出码 ${code ?? "null"}`)));
+      child.once("error", (error) => { clearTimeout(timeout); fail(error); });
+      child.once("close", (code) => {
+        clearTimeout(timeout);
+        if (timedOut) fail(new Error("Codex 审核超过 25 分钟，作业已停止"));
+        else if (code === 0) done();
+        else fail(new Error(stderr.trim().slice(-4_000) || `Codex 审核退出码 ${code ?? "null"}`));
+      });
       child.stdin.end(prompt, "utf8");
     });
     return JSON.parse(await readFile(outputPath, "utf8")) as unknown;
@@ -211,7 +218,8 @@ export async function readRateLimits(codexHome: string): Promise<RateLimitWindow
     for (const [name, snapshot] of entries) {
       for (const [suffix, window] of [["5h", snapshot.primary], ["week", snapshot.secondary]] as const) {
         if (!window) continue;
-        windows.push({ label: `${name}:${suffix}`, usedPercent: window.usedPercent, remainingPercent: Math.max(0, 100 - window.usedPercent), resetsAt: window.resetsAt ?? null });
+        const used = typeof window.usedPercent === "number" && Number.isFinite(window.usedPercent) ? Math.max(0, Math.min(100, window.usedPercent)) : null;
+        windows.push({ label: `${name}:${suffix}`, usedPercent: used, remainingPercent: used === null ? null : 100 - used, resetsAt: window.resetsAt ?? null });
       }
     }
     return windows;

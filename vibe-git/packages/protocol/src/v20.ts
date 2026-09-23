@@ -16,6 +16,15 @@ export interface GitSnapshot {
   headSha: string;
   dirty: boolean;
   observedAt: string;
+  fingerprint?: string;
+}
+
+export interface RepositoryContext {
+  headSha: string;
+  dirty: boolean;
+  summary: string;
+  sha256: string;
+  createdAt: string;
 }
 
 export interface CollaborationNode {
@@ -31,6 +40,7 @@ export interface CollaborationNode {
   activeJobCount: number;
   rateLimits: RateLimitWindow[];
   git: GitSnapshot | null;
+  repositoryContext?: RepositoryContext | null;
   currentTaskId: string | null;
   lastSeenAt: string | null;
   lastAuditJobAt: string | null;
@@ -60,9 +70,20 @@ export interface AlignmentTaskDraft {
   dependencies: string[];
   assigneeNodeId: string;
   sourcePlanNodeIds: string[];
+  assignmentRationale?: string;
+  effort?: "S" | "M" | "L";
 }
 
-export type AlignmentStatus = "QUEUED" | "RUNNING" | "READY" | "PUBLISHED" | "FAILED";
+export interface AlignmentIssue {
+  id: string;
+  title: string;
+  evidence: Array<{ nodeId: string; excerpt: string }>;
+  options: Array<{ id: string; label: string; impact: string }>;
+  recommendedOptionId: string;
+  selectedOptionId: string | null;
+}
+
+export type AlignmentStatus = "QUEUED" | "RUNNING" | "NEEDS_DECISION" | "READY" | "PUBLISHED" | "FAILED";
 export interface AlignmentRun {
   id: string;
   source: "plans" | "change_review";
@@ -78,6 +99,14 @@ export interface AlignmentRun {
   createdAt: string;
   completedAt: string | null;
   publishedStageId: string | null;
+  phase?: "ANALYZE" | "FINALIZE";
+  issues?: AlignmentIssue[];
+  decisionRevision?: number;
+  repositoryContext?: RepositoryContext | null;
+  planBrief?: string | null;
+  summaryJobIds?: string[];
+  summaryParts?: Record<string, string>;
+  summaryRound?: number;
 }
 
 export type StageStatus = "ACTIVE" | "REVIEWING" | "AWAITING_APPLY" | "COMPLETED";
@@ -91,6 +120,31 @@ export interface DevelopmentStage {
   reviewId: string | null;
   createdAt: string;
   completedAt: string | null;
+  baselineSha?: string | null;
+  nextStageDraftTasks?: ReplacementTask[];
+}
+
+export interface ImpactIndex {
+  nodeId: string;
+  headSha: string;
+  fingerprint: string;
+  taskIds: string[];
+  changedPaths: string[];
+  candidatePaths: string[];
+  omittedPaths: number;
+  diffSummary: string;
+  createdAt: string;
+}
+
+export interface ImpactProbe {
+  nodeId: string;
+  headSha: string;
+  fingerprint: string;
+  affectedTaskIds: string[];
+  unaffectedTaskIds: string[];
+  uncertainTaskIds: string[];
+  findings: Array<{ taskId: string; reason: string; paths: string[] }>;
+  createdAt: string;
 }
 
 export type StageTaskStatus =
@@ -155,9 +209,10 @@ export interface ReplacementTask {
   boundary: string;
   acceptance: string[];
   assigneeNodeId: string;
+  dependencies?: string[];
 }
 
-export type ImpactReviewStatus = "QUEUED" | "RUNNING" | "AWAITING_CAPTAIN" | "APPLIED" | "REJECTED" | "FAILED";
+export type ImpactReviewStatus = "QUEUED" | "RUNNING" | "NEEDS_EVIDENCE" | "AWAITING_CAPTAIN" | "APPLIED" | "REJECTED" | "FAILED" | "CANCELLED";
 export interface ImpactReviewBatch {
   id: string;
   stageId: string;
@@ -177,9 +232,23 @@ export interface ImpactReviewBatch {
   createdAt: string;
   completedAt: string | null;
   decidedAt: string | null;
+  requirementRevisionSnapshot?: number;
+  taskRevisionSnapshot?: Record<string, number>;
+  taskFormalSnapshot?: Record<string, string>;
+  indexes?: Record<string, ImpactIndex>;
+  probes?: Record<string, ImpactProbe>;
+  probeParts?: Record<string, Record<string, { status: "affected" | "unaffected" | "uncertain"; reason: string; paths: string[] }>>;
+  pendingNodeIds?: string[];
+  changeBrief?: string | null;
+  summaryJobIds?: string[];
+  summaryParts?: Record<string, string>;
+  summaryRound?: number;
+  summaryPurpose?: "CHANGE" | "AGGREGATE";
+  aggregateBrief?: string | null;
+  clearedNodeIds?: string[];
 }
 
-export type AgentJobKind = "ALIGN_PLANS" | "REVIEW_CHANGES" | "RUN_TASK" | "INTERRUPT_TASK" | "SYNC_NODE";
+export type AgentJobKind = "ALIGN_PLANS" | "ALIGN_FINALIZE" | "SUMMARIZE_PLAN" | "SUMMARIZE_CHANGE" | "IMPACT_INDEX" | "IMPACT_PROBE" | "REVIEW_CHANGES" | "RUN_TASK" | "INTERRUPT_TASK" | "SYNC_NODE";
 export type AgentJobStatus = "QUEUED" | "LEASED" | "RUNNING" | "COMPLETED" | "FAILED" | "CANCELLED";
 export interface AgentJob {
   id: string;
@@ -242,6 +311,7 @@ export interface NodeHeartbeatInput {
   workTransport: WorkTransport;
   rateLimits: RateLimitWindow[];
   git: GitSnapshot | null;
+  repositoryContext?: RepositoryContext | null;
   currentTaskId: string | null;
 }
 

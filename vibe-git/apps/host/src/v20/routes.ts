@@ -123,6 +123,11 @@ export async function registerV20Routes(app: FastifyInstance, service: V20Servic
   });
 
   app.post("/api/v1/alignments", async (request) => service.startAlignment(authenticate(request, service)));
+  app.post<{ Params: { id: string }; Body: { issueId?: string; optionId?: string; expectedRevision?: number } }>("/api/v1/alignments/:id/resolve", async (request) => {
+    const { issueId, optionId, expectedRevision } = request.body ?? {};
+    if (!issueId || !optionId || !Number.isInteger(expectedRevision)) throw badRequest("缺少冲突、选项或裁决版本");
+    return service.resolveAlignmentIssue(authenticate(request, service), request.params.id, issueId, optionId, expectedRevision!);
+  });
   app.post<{ Params: { id: string }; Body: { taskId?: string; assigneeNodeId?: string } }>("/api/v1/alignments/:id/assign", async (request) => {
     if (!request.body?.taskId || !request.body.assigneeNodeId) throw badRequest("缺少 taskId 或 assigneeNodeId");
     return service.assignDraftTask(authenticate(request, service), request.params.id, request.body.taskId, request.body.assigneeNodeId);
@@ -145,6 +150,7 @@ export async function registerV20Routes(app: FastifyInstance, service: V20Servic
   app.post<{ Body: { force?: boolean } }>("/api/v1/reviews", async (request) => service.startReview(authenticate(request, service), Boolean(request.body?.force)));
   app.post<{ Params: { id: string } }>("/api/v1/reviews/:id/apply", async (request) => service.applyReview(authenticate(request, service), request.params.id));
   app.post<{ Params: { id: string } }>("/api/v1/reviews/:id/reject", async (request) => service.rejectReview(authenticate(request, service), request.params.id));
+  app.post<{ Params: { id: string } }>("/api/v1/reviews/:id/cancel", async (request) => service.cancelReview(authenticate(request, service), request.params.id));
 
   app.post("/api/v1/browser-ticket", async (request) => service.createBrowserTicket(authenticate(request, service), publicBase(request)));
   app.get("/api/v1/invite", async (request) => {

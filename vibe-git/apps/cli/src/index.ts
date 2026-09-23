@@ -32,10 +32,10 @@ function usage(): string {
 队长
   vibe-git host start | status | stop
   vibe-git invite show | rotate
-  vibe-git align start | status | export <alignment-id>
+  vibe-git align start | status | show <alignment-id> | resolve <alignment-id> <issue-id> <option-id> | export <alignment-id>
   vibe-git task assign <task-id> <node-id>
   vibe-git tasks publish <alignment-id>
-  vibe-git review start --force | apply <review-id> | reject <review-id>
+  vibe-git review start --force | status | apply <review-id> | reject <review-id> | cancel <review-id>
 
 每位成员
   vibe-git connect <join-url> | status | logs | disconnect | open
@@ -292,7 +292,23 @@ async function main(): Promise<void> {
     const { config, data } = await bootstrap();
     if (action === "start") { const value = await post<AlignmentRun>(config, "/api/v1/alignments"); out(`对齐已排队：${value.id}（执行节点 ${value.executorNodeId}）`); return; }
     if (action === "status") {
-      out(data.alignments.map((item) => ({ id: item.id, source: item.source, status: item.status, executor: item.executorNodeId, createdAt: item.createdAt, error: item.error }))); return;
+      out(data.alignments.map((item) => ({ id: item.id, source: item.source, status: item.status,
+        summaryJobsPending: (item.summaryJobIds ?? []).filter((jobId) => !item.summaryParts?.[jobId]).length,
+        issues: item.issues?.filter((issue) => !issue.selectedOptionId).length ?? 0,
+        executor: item.executorNodeId, createdAt: item.createdAt, error: item.error }))); return;
+    }
+    if (action === "show") {
+      const alignment = data.alignments.find((item) => item.id === third);
+      if (!alignment) throw new Error("对齐记录不存在");
+      out({ id: alignment.id, status: alignment.status, decisionRevision: alignment.decisionRevision ?? 0, issues: alignment.issues ?? [], tasks: alignment.tasks }); return;
+    }
+    if (action === "resolve") {
+      const issueId = fourth, optionId = args[4];
+      if (!third || !issueId || !optionId) throw new Error("用法：vibe-git align resolve <alignment-id> <issue-id> <option-id>");
+      const alignment = data.alignments.find((item) => item.id === third);
+      if (!alignment) throw new Error("对齐记录不存在");
+      const updated = await post<AlignmentRun>(config, `/api/v1/alignments/${encodeURIComponent(third)}/resolve`, { issueId, optionId, expectedRevision: alignment.decisionRevision ?? 0 });
+      out(`已选择 ${optionId}；当前对齐状态 ${updated.status}`); return;
     }
     if (action === "export") {
       if (!third) throw new Error("用法：vibe-git align export <alignment-id>");
@@ -336,8 +352,19 @@ async function main(): Promise<void> {
   if (group === "review") {
     const config = await loadConfig(); if (!config) return;
     if (action === "start") { if (!args.includes("--force")) throw new Error("开发中提前审核必须显式添加 --force"); const value = await post<{ id: string }>(config, "/api/v1/reviews", { force: true }); out(`强制审核已启动：${value.id}`); return; }
+    if (action === "status") { const data = await api<V20BootstrapPayload>(config, "/api/v1/bootstrap"); out(data.reviews.map((item) => ({
+      id: item.id, status: item.status, pendingNodeIds: item.pendingNodeIds ?? [],
+      indexedNodeIds: Object.keys(item.indexes ?? {}), probedNodeIds: Object.keys(item.probes ?? {}),
+      uncertainTaskIds: Object.values(item.probes ?? {}).flatMap((probe) => probe.uncertainTaskIds),
+      uncertainReasons: Object.values(item.probes ?? {}).flatMap((probe) => probe.findings
+        .filter((finding) => probe.uncertainTaskIds.includes(finding.taskId))
+        .map((finding) => ({ taskId: finding.taskId, reason: finding.reason }))),
+      summaryJobsPending: (item.summaryJobIds ?? []).filter((jobId) => !item.summaryParts?.[jobId]).length,
+      error: item.error
+    }))); return; }
     if (action === "apply") { if (!third) throw new Error("缺少 review-id"); await post(config, `/api/v1/reviews/${encodeURIComponent(third)}/apply`); out(`${third} 已应用`); return; }
     if (action === "reject") { if (!third) throw new Error("缺少 review-id"); await post(config, `/api/v1/reviews/${encodeURIComponent(third)}/reject`); out(`${third} 已退回`); return; }
+    if (action === "cancel") { if (!third) throw new Error("缺少 review-id"); await post(config, `/api/v1/reviews/${encodeURIComponent(third)}/cancel`); out(`${third} 已取消，变更返回待审队列`); return; }
   }
   throw new Error(`未知命令：${command(...args)}\n\n${usage()}`);
 }
