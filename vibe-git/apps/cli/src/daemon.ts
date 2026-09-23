@@ -1,12 +1,13 @@
-import { appendFile, mkdir, stat, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, rm, stat } from "node:fs/promises";
 import { execFileSync } from "node:child_process";
-import { createHash } from "node:crypto";
-import { dirname, resolve } from "node:path";
+import { dirname } from "node:path";
 import type { AgentJob, GitSnapshot, NodeHeartbeatInput, RateLimitWindow } from "@vibe-git/protocol";
 import { api, post } from "./api.js";
-import { auditCodexHome, daemonLogPath, loadConfig, saveConfig, vibeHome, type ClientConfig } from "./config.js";
+import { auditCodexHome, daemonLogPath, loadConfig, saveConfig, type ClientConfig } from "./config.js";
 import { probeCodex, readRateLimits, runAudit, startDevelopment, type ActiveRun } from "./codex.js";
 import { impactIndex, repositoryContext, worktreeFingerprint } from "./evidence.js";
+import { integrateWithReal, prepareMock } from "./mock.js";
+import { localPanelPath, startLocalPanel } from "./local-panel.js";
 
 const active = new Map<string, ActiveRun>();
 let stopping = false;
@@ -75,7 +76,7 @@ async function report(config: ClientConfig, job: AgentJob, body: Record<string, 
 async function executeJob(config: ClientConfig, job: AgentJob): Promise<void> {
   try {
     if (!job.leaseToken) throw new Error("Host 返回了无租约作业");
-    if (job.kind === "ALIGN_PLANS" || job.kind === "REVIEW_CHANGES") {
+    if (job.kind === "ALIGN_PLANS" || job.kind === "DESCRIBE_WORKSTREAM" || job.kind === "REVIEW_CHANGES") {
       const runtimeId = `audit-${process.pid}-${Date.now()}`;
       await report(config, job, { phase: "started", runtimeId });
       const result = await runAudit(String(job.payload.prompt ?? ""), job.payload.outputSchema, config.workspace, auditCodexHome());
@@ -146,27 +147,21 @@ async function executeJob(config: ClientConfig, job: AgentJob): Promise<void> {
       return;
     }
     if (job.kind === "PREPARE_MOCK") {
-      if (!/^[A-Za-z0-9_-]+$/.test(job.entityId)) throw new Error("任务 ID 无效，拒绝创建 Mock 目录");
-      const contractHashes = job.payload.contractHashes as Record<string, string>;
-      if (!contractHashes || !Object.keys(contractHashes).length) throw new Error("缺少冻结契约版本");
-      const version = createHash("sha256").update(JSON.stringify(contractHashes)).digest("hex").slice(0, 16);
-      const mockDir = resolve(vibeHome(), "mocks", job.entityId, version);
-      await mkdir(mockDir, { recursive: true, mode: 0o700 });
-      await writeFile(resolve(mockDir, "contract.json"), JSON.stringify({ contracts: job.payload.contracts, taskTitle: job.payload.taskTitle, taskGoal: job.payload.taskGoal, executionSpec: job.payload.executionSpec }, null, 2), { encoding: "utf8", mode: 0o600 });
-      const prompt = ["你在 Vibe-Git 本机专用 Mock 目录工作，使用成员日常 Codex。此目录与共享生产仓库隔离。",
-        "读取 contract.json，生成 mock.mjs 和 contract.test.mjs。测试用 node:test 与 node:assert/strict，不依赖外部包。模拟接口行为和错误样例；不得读取或改写此目录以外的文件，不要把 Mock 当作真实上游结果。",
-        "运行 node --test contract.test.mjs 并修复失败。不要在此目录存放生产代码。"].join("\n\n");
-      const run = await startDevelopment(prompt, mockDir, "app-server", false);
-      await report(config, job, { phase: "started", runtimeId: run.runtimeId });
-      const result = await run.done;
-      if (result.status !== "completed") throw new Error(`Mock 生成失败：${result.detail}`);
-      const output = execFileSync(process.execPath, ["--permission", `--allow-fs-read=${mockDir}`, `--allow-fs-write=${mockDir}`, "--test", "contract.test.mjs"], {
-        cwd: mockDir, encoding: "utf8", windowsHide: true, timeout: 60_000, maxBuffer: 256 * 1024,
-        env: { PATH: process.env.PATH ?? "", SystemRoot: process.env.SystemRoot ?? "", TEMP: process.env.TEMP ?? "", TMP: process.env.TMP ?? "", NODE_OPTIONS: "" }
+      const contracts = Array.isArray(job.payload.contracts) ? job.payload.contracts as Parameters<typeof prepareMock>[2] : [];
+      if (!contracts.length) throw new Error("Mock 作业缺少接口契约");
+      const result = await prepareMock(config, job.entityId, contracts, async (runtimeId) => {
+        await report(config, job, { phase: "started", runtimeId });
       });
-      await report(config, job, { phase: "completed", runtimeId: run.runtimeId, result: {
-        passed: true, contractHashes, summary: `本机独立 Mock 契约测试通过。${output.trim().slice(-600)}`
-      } });
+      await report(config, job, { phase: "completed", result: { verified: true, ...result } });
+      return;
+    }
+    if (job.kind === "INTEGRATE_TASK") {
+      const contracts = Array.isArray(job.payload.contracts) ? job.payload.contracts as Parameters<typeof integrateWithReal>[3] : [];
+      const upstreamShas = Array.isArray(job.payload.upstreamShas) ? job.payload.upstreamShas.map(String) : [];
+      await report(config, job, { phase: "started", runtimeId: `integration-${Date.now()}` });
+      const result = integrateWithReal(config, job.entityId, upstreamShas, contracts);
+      await heartbeat(config, job.entityId);
+      await report(config, job, { phase: "completed", result: { verified: true, ...result } });
       return;
     }
     if (job.kind === "RUN_TASK") {
@@ -206,25 +201,32 @@ export async function runDaemon(): Promise<void> {
   await stat(config.workspace);
   await saveConfig({ ...config, daemonPid: process.pid });
   await log(`节点守护进程启动：${config.nodeId}`);
+  const panel = await startLocalPanel(config);
+  await log(`本机面板已监听 127.0.0.1:${panel.port}`);
   const captain = await api<{ viewer?: { role?: string } }>(config, "/api/v1/bootstrap").then((value) => value.viewer?.role === "captain").catch(() => false);
   const stop = () => { stopping = true; for (const run of active.values()) void run.interrupt(); };
   process.once("SIGINT", stop); process.once("SIGTERM", stop);
 
-  let nextHeartbeat = 0;
-  while (!stopping) {
-    if (Date.now() >= nextHeartbeat) {
-      await heartbeat(config, undefined, captain).catch((error) => log(`心跳失败：${error instanceof Error ? error.message : String(error)}`));
-      nextHeartbeat = Date.now() + 15_000;
+  try {
+    let nextHeartbeat = 0;
+    while (!stopping) {
+      if (Date.now() >= nextHeartbeat) {
+        await heartbeat(config, undefined, captain).catch((error) => log(`心跳失败：${error instanceof Error ? error.message : String(error)}`));
+        nextHeartbeat = Date.now() + 15_000;
+      }
+      try {
+        const job = await api<AgentJob | null>(config, "/api/v1/nodes/jobs/next", { method: "POST", body: "{}", headers: { "content-type": "application/json" } });
+        if (job) void executeJob(config, job);
+      } catch (error) {
+        await log(`获取作业失败：${error instanceof Error ? error.message : String(error)}`);
+        await new Promise((resolve) => setTimeout(resolve, 3_000));
+      }
     }
-    try {
-      const job = await api<AgentJob | null>(config, "/api/v1/nodes/jobs/next", { method: "POST", body: "{}", headers: { "content-type": "application/json" } });
-      if (job) void executeJob(config, job);
-    } catch (error) {
-      await log(`获取作业失败：${error instanceof Error ? error.message : String(error)}`);
-      await new Promise((resolve) => setTimeout(resolve, 3_000));
-    }
+  } finally {
+    const latest = await loadConfig(false);
+    await panel.close();
+    await rm(localPanelPath(), { force: true });
+    if (latest?.daemonPid === process.pid) await saveConfig({ ...latest, daemonPid: null });
+    await log("节点守护进程停止");
   }
-  const latest = await loadConfig(false);
-  if (latest?.daemonPid === process.pid) await saveConfig({ ...latest, daemonPid: null });
-  await log("节点守护进程停止");
 }

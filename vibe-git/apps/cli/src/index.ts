@@ -1,19 +1,20 @@
 #!/usr/bin/env node
-import { execFileSync, spawn } from "node:child_process";
+import { spawn } from "node:child_process";
 import { closeSync, existsSync, openSync } from "node:fs";
 import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { AlignmentRun, BrowserTicketResponse, JoinResponse, MarkdownDocument, V20BootstrapPayload, WorkTransport } from "@vibe-git/protocol";
+import type { AlignmentRun, JoinResponse, MarkdownDocument, V20BootstrapPayload, WorkTransport } from "@vibe-git/protocol";
 import { api, post } from "./api.js";
+import { codexInvocation } from "./codex-command.js";
 import {
   auditCodexHome, configPath, daemonLogPath, hostLogPath, hostProcessPath, loadConfig, readJson,
   saveConfig, vibeHome, writeJson, type ClientConfig
 } from "./config.js";
 import { probeCodex } from "./codex.js";
 import { runDaemon } from "./daemon.js";
-import { panelProcessPath, runLocalPanel, type PanelProcess } from "./local-panel.js";
+import { localPanelPath } from "./local-panel.js";
 
 const args = process.argv.slice(2);
 const ROOT = resolve(fileURLToPath(new URL("../../..", import.meta.url)));
@@ -35,19 +36,20 @@ function usage(): string {
   vibe-git invite show | rotate
   vibe-git align start | status | show <alignment-id> | resolve <alignment-id> <issue-id> <option-id> | export <alignment-id>
   vibe-git task assign <task-id> <node-id>
+  vibe-git align downgrade <alignment-id> <task-id> <upstream-task-id>
+  vibe-git stage replan <stage-id> | stage activate <alignment-id>
+  vibe-git contract list | show <contract-id> | ack <contract-id> | publish <contract-id>
   vibe-git tasks publish <alignment-id>
   vibe-git review start --force | status | apply <review-id> | reject <review-id> | cancel <review-id>
 
 每位成员
-  vibe-git connect <join-url> | status | logs | disconnect | open [room]
+  vibe-git connect <join-url> | status | logs | disconnect | open
   vibe-git codex bind | status | unbind
   vibe-git config set work.transport auto|app-server|cli
   vibe-git plan submit <任意文件.md>
   vibe-git task list | pull <task-id> [output] | push <task-id> <任意文件.md>
-  vibe-git work pull <workstream-id> [output]
-  vibe-git contract ack <alignment-id|stage-id> <contract-id> | publish <alignment-id|stage-id> | downgrade <alignment-id|stage-id> <contract-id>
-  vibe-git task start <task-id> | sync [task-id] | integrate <task-id> <验收.md> | done <task-id>
-  vibe-git stage replan <stage-id>（完成后用 tasks publish <alignment-id>）
+  vibe-git work list | pull <workstream-id> [output]
+  vibe-git task start <task-id> | integrate <task-id> | sync [task-id] | done <task-id>
   vibe-git pr submit <任意文件.md> | list`;
 }
 
@@ -79,35 +81,6 @@ async function stopDaemon(config: ClientConfig | null): Promise<ClientConfig | n
   }
   if (config) { const updated = { ...config, daemonPid: null }; await saveConfig(updated); return updated; }
   return config;
-}
-
-async function stopLocalPanel(): Promise<void> {
-  const panel = await readJson<PanelProcess>(panelProcessPath());
-  if (panel?.pid && isAlive(panel.pid)) { try { process.kill(panel.pid, "SIGTERM"); } catch { /* already gone */ } }
-  await rm(panelProcessPath(), { force: true });
-}
-
-async function openLocalPanel(config: ClientConfig): Promise<void> {
-  let panel = await readJson<PanelProcess>(panelProcessPath());
-  if (panel && (!isAlive(panel.pid) || panel.nodeId !== config.nodeId || !await fetch(`http://127.0.0.1:${panel.port}/health`).then((value) => value.ok).catch(() => false))) {
-    await stopLocalPanel(); panel = null;
-  }
-  if (!panel) {
-    const child = spawn(process.execPath, [CLI_ENTRY, "panel"], { detached: true, windowsHide: true, cwd: config.workspace, stdio: "ignore", env: process.env });
-    let launchError: Error | null = null;
-    child.once("error", (error) => { launchError = error; });
-    child.unref();
-    for (let retry = 0; retry < 40; retry += 1) {
-      await new Promise((resolveDelay) => setTimeout(resolveDelay, 150));
-      if (launchError) throw launchError;
-      panel = await readJson<PanelProcess>(panelProcessPath());
-      if (panel?.pid === child.pid) break;
-      if (child.exitCode !== null) throw new Error("本机工作台未能启动；请检查连接和日常 Codex 环境");
-    }
-  }
-  if (!panel) throw new Error("本机工作台启动超时");
-  openUrl(`http://127.0.0.1:${panel.port}/auth?key=${panel.secret}`);
-  out("已打开本机工作台；可从页面进入房间");
 }
 
 async function spawnDaemon(config: ClientConfig): Promise<ClientConfig> {
@@ -187,7 +160,6 @@ async function hostStop(): Promise<void> {
   const info = await readJson<HostProcess>(hostProcessPath());
   let config = await loadConfig(false);
   if (config) {
-    await stopLocalPanel();
     await post(config, "/api/v1/local/cloudflare/stop").catch(() => undefined);
     config = await stopDaemon(config);
   }
@@ -209,7 +181,6 @@ async function connect(joinUrlRaw: string | undefined): Promise<void> {
   if (old) {
     const reconnect = await fetch(`${hostUrl}/api/v1/bootstrap`, { headers: { authorization: `Bearer ${old.nodeToken}` } }).catch(() => null);
     if (reconnect?.ok) {
-      await stopLocalPanel();
       const stable = { ...old, hostUrl, workspace: process.cwd(), connectedAt: new Date().toISOString() };
       await saveConfig(stable); const running = await spawnDaemon(stable);
       out(`已用原节点重连：${stable.nodeId}\n工作区：${stable.workspace}\n后台进程：${running.daemonPid ?? "启动中"}`);
@@ -222,7 +193,6 @@ async function connect(joinUrlRaw: string | undefined): Promise<void> {
   const value = await response.json() as JoinResponse & { error?: string };
   if (!response.ok) throw new Error(value.error || `Host 返回 ${response.status}`);
   if (old) await stopDaemon(old);
-  if (old) await stopLocalPanel();
   const config: ClientConfig = {
     hostUrl: value.hostUrl || hostUrl, nodeId: value.node.id, nodeToken: value.nodeToken,
     workspace: process.cwd(), workTransport: "auto", daemonPid: null, connectedAt: new Date().toISOString()
@@ -271,7 +241,6 @@ function openUrl(url: string): void {
 async function main(): Promise<void> {
   const [group, action, third, fourth] = args;
   if (group === "daemon") { await runDaemon(); return; }
-  if (group === "panel") { await runLocalPanel(); return; }
   if (!group || group === "help" || group === "--help" || group === "-h") { out(usage()); return; }
 
   if (group === "host") {
@@ -288,19 +257,39 @@ async function main(): Promise<void> {
     out(lines.join("\n")); return;
   }
   if (group === "disconnect") {
-    const config = await loadConfig(false); await stopDaemon(config); await stopLocalPanel(); await rm(configPath(), { force: true }); out("已断开并移除本机节点配置"); return;
+    const config = await loadConfig(false); await stopDaemon(config); await rm(configPath(), { force: true }); out("已断开并移除本机节点配置"); return;
   }
   if (group === "open") {
     const config = await loadConfig(); if (!config) return;
-    if (action === "room") { const ticket = await post<BrowserTicketResponse>(config, "/api/v1/browser-ticket"); openUrl(ticket.url); out("已打开 Vibe-Git 房间"); return; }
-    if (action) throw new Error("用法：vibe-git open [room]");
-    return openLocalPanel(config);
+    let panel = await readJson<{ port: number; pid: number }>(localPanelPath());
+    if (!panel || !isAlive(panel.pid)) { await spawnDaemon(config); panel = null; }
+    let url: string | null = null;
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+      panel = panel ?? await readJson<{ port: number; pid: number }>(localPanelPath());
+      if (panel && isAlive(panel.pid)) {
+        try {
+          const response = await fetch(`http://127.0.0.1:${panel.port}/_local/ticket`,
+            { method: "POST", headers: { "x-vibe-git-control": config.nodeToken } });
+          if (response.ok) { url = (await response.json() as { url: string }).url; break; }
+        } catch { /* daemon has not bound its local panel yet */ }
+      }
+      panel = null;
+      await new Promise((delay) => setTimeout(delay, 250));
+    }
+    if (!url) throw new Error("本机面板尚未就绪，请检查 vibe-git logs");
+    openUrl(url); out("已在本机浏览器中打开 Vibe-Git；Codex 对话只在此电脑可用"); return;
   }
   if (group === "codex") {
     if (action === "bind") {
+      const command = codexInvocation();
       await mkdir(auditCodexHome(), { recursive: true, mode: 0o700 });
-      const result = spawn(process.env.CODEX_BIN?.trim() || "codex", ["login", "--device-auth"], { stdio: "inherit", env: { ...process.env, CODEX_HOME: auditCodexHome() } });
-      const code = await new Promise<number | null>((resolveExit) => result.once("exit", resolveExit));
+      const result = spawn(command.file, [...command.prefixArgs, "login", "--device-auth"], {
+        stdio: "inherit", windowsHide: true, env: { ...process.env, CODEX_HOME: auditCodexHome() }
+      });
+      const code = await new Promise<number | null>((resolveExit, reject) => {
+        result.once("error", (error) => reject(new Error(`无法启动 Codex CLI：${error.message}`)));
+        result.once("exit", resolveExit);
+      });
       if (code !== 0) throw new Error(`Codex device-auth 失败（退出码 ${code ?? "null"}）`);
       out("专用审核 Codex 已绑定；凭据只保存在本机 ~/.vibe-git/audit-codex"); return;
     }
@@ -353,10 +342,50 @@ async function main(): Promise<void> {
       const updated = await post<AlignmentRun>(config, `/api/v1/alignments/${encodeURIComponent(third)}/resolve`, { issueId, optionId, expectedRevision: alignment.decisionRevision ?? 0 });
       out(`已选择 ${optionId}；当前对齐状态 ${updated.status}`); return;
     }
+    if (action === "downgrade") {
+      const taskId = fourth, upstreamTaskId = args[4];
+      if (!third || !taskId || !upstreamTaskId) throw new Error("用法：vibe-git align downgrade <alignment-id> <task-id> <upstream-task-id>");
+      await post(config, `/api/v1/alignments/${encodeURIComponent(third)}/downgrade`, { taskId, upstreamTaskId });
+      out("依赖已降级为等待上游完成"); return;
+    }
     if (action === "export") {
       if (!third) throw new Error("用法：vibe-git align export <alignment-id>");
       const markdown = await api<string>(config, `/api/v1/alignments/${encodeURIComponent(third)}/export`);
       const path = resolve(`alignment-${third}.md`); await writeFile(path, markdown, "utf8"); out(`已导出：${path}`); return;
+    }
+  }
+  if (group === "stage" && action === "replan") {
+    if (!third) throw new Error("缺少 stage-id");
+    const config = await loadConfig(); if (!config) return;
+    const alignment = await post<AlignmentRun>(config, `/api/v1/stages/${encodeURIComponent(third)}/replan`);
+    out(`阶段重编排已排队：${alignment.id}`); return;
+  }
+  if (group === "stage" && action === "activate") {
+    if (!third) throw new Error("缺少重编排 alignment-id");
+    const config = await loadConfig(); if (!config) return;
+    await post(config, `/api/v1/alignments/${encodeURIComponent(third)}/activate-replan`);
+    out("工作主线已原子替换，旧任务保留归档"); return;
+  }
+  if (group === "contract") {
+    const { config, data } = await bootstrap();
+    if (action === "list") { out(data.contracts.map((item) => ({ id: item.id, name: item.name, revision: item.revision,
+      status: item.status, acknowledgedNodeIds: item.acknowledgedNodeIds }))); return; }
+    const contract = data.contracts.find((item) => item.id === third);
+    if (!contract) throw new Error("接口契约不存在");
+    if (action === "show") { out(contract); return; }
+    if (action === "ack") { await post(config, `/api/v1/contracts/${encodeURIComponent(contract.id)}/ack`,
+      { expectedRevision: contract.revision, sha256: contract.sha256 }); out(`已确认契约 ${contract.id} r${contract.revision}`); return; }
+    if (action === "publish") { await post(config, `/api/v1/contracts/${encodeURIComponent(contract.id)}/publish`,
+      { expectedRevision: contract.revision, sha256: contract.sha256 }); out(`已发布修订契约 ${contract.id} r${contract.revision}`); return; }
+  }
+  if (group === "work") {
+    const { config, data } = await bootstrap();
+    const visible = data.workstreams.filter((item) => data.viewer.role === "captain" || item.ownerNodeId === config.nodeId);
+    if (action === "list") { out(visible.map((item) => ({ id: item.id, mission: item.mission, status: item.status, taskIds: item.taskIds }))); return; }
+    if (action === "pull") {
+      if (!third || !visible.some((item) => item.id === third)) throw new Error("工作主线不存在或无权下载");
+      const markdown = await api<string>(config, `/api/v1/workstreams/${encodeURIComponent(third)}/brief`);
+      const path = resolve(fourth || "workstream.md"); await writeFile(path, markdown, "utf8"); out(`已导出：${path}`); return;
     }
   }
   if (group === "tasks" && action === "publish") {
@@ -364,40 +393,10 @@ async function main(): Promise<void> {
     const config = await loadConfig(); if (!config) return; const stage = await post<{ id: string; sequence: number }>(config, `/api/v1/alignments/${encodeURIComponent(third)}/publish`);
     out(`阶段 ${stage.sequence} 已发布：${stage.id}`); return;
   }
-  if (group === "work" && action === "pull") {
-    if (!third) throw new Error("用法：vibe-git work pull <workstream-id> [output]");
-    const config = await loadConfig(); if (!config) return;
-    const value = await api<{ markdown: string }>(config, `/api/v1/workstreams/${encodeURIComponent(third)}`);
-    const path = resolve(fourth || "workstream.md"); await writeFile(path, value.markdown, "utf8"); out(`已导出：${path}`); return;
-  }
-  if (group === "contract") {
-    const { config, data } = await bootstrap();
-    const alignment = data.alignments.find((item) => item.id === third);
-    const stage = data.stages.find((item) => item.id === third);
-    if (!alignment && !stage) throw new Error("对齐稿或阶段不存在");
-    const prefix = alignment ? `/api/v1/alignments/${encodeURIComponent(alignment.id)}` : `/api/v1/stages/${encodeURIComponent(stage!.id)}`;
-    const contracts = alignment?.contracts ?? stage?.contracts ?? [];
-    if (action === "ack") {
-      const contract = contracts.find((item) => item.id === fourth); if (!contract) throw new Error("契约不存在");
-      await post(config, `${prefix}/contracts/${encodeURIComponent(contract.id)}/ack`, { revision: contract.revision, hash: contract.hash });
-      out(`${contract.id} v${contract.revision} 已确认：${contract.hash}`); return;
-    }
-    if (action === "publish") { await post(config, `${prefix}/contracts/publish`); out("双方已确认的契约已由队长冻结发布"); return; }
-    if (action === "downgrade") {
-      const contract = contracts.find((item) => item.id === fourth); if (!contract) throw new Error("契约不存在");
-      await post(config, `${prefix}/contracts/${encodeURIComponent(contract.id)}/downgrade`, { expectedHash: contract.hash });
-      out(`${contract.id} 已降为 HARD 依赖`); return;
-    }
-  }
-  if (group === "stage" && action === "replan") {
-    if (!third) throw new Error("用法：vibe-git stage replan <stage-id>");
-    const config = await loadConfig(); if (!config) return;
-    const value = await post<AlignmentRun>(config, `/api/v1/stages/${encodeURIComponent(third)}/replan`);
-    out(`阶段重编排已排队：${value.id}；需求版本保持不变`); return;
-  }
   if (group === "task") {
     const { config, data } = await bootstrap();
-    if (action === "list") { out(data.tasks.filter((item) => data.viewer.role === "captain" || item.assigneeNodeId === config.nodeId).map((item) => ({ id: item.id, title: item.title, assignee: item.assigneeNodeId, status: item.status }))); return; }
+    if (action === "list") { out(data.tasks.filter((item) => data.viewer.role === "captain" || item.assigneeNodeId === config.nodeId).map((item) => ({ id: item.id, title: item.title, assignee: item.assigneeNodeId, status: item.status,
+      workstreamId: item.workstreamId ?? null, dependencyEdges: item.dependencyEdges ?? [] }))); return; }
     if (action === "assign") {
       if (!third || !fourth) throw new Error("用法：vibe-git task assign <task-id> <node-id>");
       const alignment = [...data.alignments].reverse().find((item) => item.status === "READY" && item.tasks.some((task) => task.id === third));
@@ -415,18 +414,8 @@ async function main(): Promise<void> {
       out(`${doc.filename} 已作为任务细化上传：r${doc.revision}`); return;
     }
     if (action === "start") { if (!third) throw new Error("缺少 task-id"); const job = await post<{ id: string }>(config, `/api/v1/tasks/${encodeURIComponent(third)}/start`); out(`开工作业已发布：${job.id}`); return; }
+    if (action === "integrate") { if (!third) throw new Error("缺少 task-id"); const job = await post<{ id: string }>(config, `/api/v1/tasks/${encodeURIComponent(third)}/integrate`); out(`真实集成验证已排队：${job.id}`); return; }
     if (action === "sync") { const job = await post<{ id: string }>(config, third ? `/api/v1/tasks/${encodeURIComponent(third)}/sync` : "/api/v1/tasks/sync"); out(`同步作业已发布：${job.id}`); return; }
-    if (action === "integrate") {
-      if (!third || !fourth) throw new Error("用法：vibe-git task integrate <task-id> <验收.md>");
-      const task = data.tasks.find((item) => item.id === third); if (!task) throw new Error("任务不存在");
-      const summary = (await readMarkdown(fourth, "真实集成验收")).content;
-      const providerCommits = Object.fromEntries((task.dependencyEdges ?? []).filter((edge) => edge.mode === "CONTRACT").map((edge) => {
-        const upstream = data.tasks.find((item) => item.id === edge.upstreamTaskId);
-        if (!upstream?.lastGit?.headSha) throw new Error(`上游 ${edge.upstreamTaskId} 尚未交接提交 SHA`);
-        return [edge.upstreamTaskId, upstream.lastGit.headSha];
-      }));
-      await post(config, `/api/v1/tasks/${encodeURIComponent(third)}/integrate`, { providerCommits, summary }); out(`${third} 已记录真实集成验收`); return;
-    }
     if (action === "done") { if (!third) throw new Error("缺少 task-id"); await post(config, `/api/v1/tasks/${encodeURIComponent(third)}/done`); out(`${third} 已确认完成`); return; }
   }
   if (group === "pr") {

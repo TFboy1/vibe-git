@@ -1,4 +1,5 @@
-import { copyFileSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { backup, DatabaseSync } from "node:sqlite";
 import { extname, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import Fastify, { type FastifyInstance } from "fastify";
@@ -26,15 +27,17 @@ export interface BuildAppOptions {
   backupDatabase?: boolean;
 }
 
-function backupBeforeV20(dbPath: string, dataDir: string): void {
+async function backupBeforeSchemaUpgrade(dbPath: string, dataDir: string): Promise<void> {
   if (dbPath === ":memory:" || !existsSync(dbPath)) return;
-  const marker = resolve(dataDir, ".v020-database-backed-up");
+  const marker = resolve(dataDir, ".v021-database-backed-up");
   if (existsSync(marker)) return;
   const backupDir = resolve(dataDir, "backups");
   mkdirSync(backupDir, { recursive: true });
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-  const destination = resolve(backupDir, `workspace-pre-v020-${stamp}.db`);
-  copyFileSync(dbPath, destination);
+  const destination = resolve(backupDir, `workspace-pre-v021-${stamp}.db`);
+  const source = new DatabaseSync(dbPath);
+  try { await backup(source, destination); }
+  finally { source.close(); }
   writeFileSync(marker, `${destination}\n`, "utf8");
 }
 
@@ -66,10 +69,10 @@ export async function buildApp(options: BuildAppOptions = {}) {
   const app = Fastify({ logger: options.logger ?? false, trustProxy: true, bodyLimit: 600 * 1024 });
   const dbPath = options.dbPath ?? resolve(ROOT, "data/workspace.db");
   const dataDir = options.dataDir ?? resolve(ROOT, "data/v20");
-  if (options.backupDatabase !== false) backupBeforeV20(dbPath, dataDir);
+  if (options.backupDatabase !== false) await backupBeforeSchemaUpgrade(dbPath, dataDir);
   const db = openDatabase(dbPath);
   const repo = new V20Repository(db);
-  repo.setMeta("schema_version", "20");
+  repo.setMeta("schema_version", "21");
   const runtime = await ensureV20Runtime(repo, dataDir);
   const hub = new EventHub();
   const cloudflareManager = options.cloudflareManager ?? new CloudflareTunnelManager(resolve(ROOT, "data/tools/cloudflared.exe"));

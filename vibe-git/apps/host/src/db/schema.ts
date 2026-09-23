@@ -85,6 +85,10 @@ CREATE TABLE IF NOT EXISTS v20_alignments (
   created_at TEXT NOT NULL,
   data TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS v20_workstreams (id TEXT PRIMARY KEY, alignment_id TEXT NOT NULL, stage_id TEXT, data TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS v20_workstreams_alignment ON v20_workstreams(alignment_id);
+CREATE TABLE IF NOT EXISTS v20_interface_contracts (id TEXT PRIMARY KEY, alignment_id TEXT NOT NULL, stage_id TEXT, data TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS v20_contracts_alignment ON v20_interface_contracts(alignment_id);
 CREATE TABLE IF NOT EXISTS v20_stages (
   id TEXT PRIMARY KEY,
   sequence INTEGER NOT NULL UNIQUE,

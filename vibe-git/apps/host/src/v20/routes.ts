@@ -3,6 +3,7 @@ import type { CollaborationNode, JobResultInput, NodeHeartbeatInput, ProjectModu
 import { badRequest, forbidden, notFound, unavailable } from "../domain/errors.js";
 import type { CloudflareManager } from "../integrations/cloudflare/manager.js";
 import type { V20Service } from "./service.js";
+import { taskMarkdown, workstreamMarkdown } from "./contract-format.js";
 
 type MarkdownBody = { filename?: string; content?: string };
 type PlanUpdateBody = MarkdownBody & { expectedRevision?: number };
@@ -29,6 +30,8 @@ function isLoopback(address: string | undefined): boolean {
 function authenticate(request: FastifyRequest, service: V20Service): CollaborationNode {
   const authorization = firstHeader(request.headers.authorization);
   if (authorization) return service.authenticateBearer(authorization);
+  if (request.method !== "GET" && request.method !== "HEAD")
+    throw forbidden("远端面板仅可查看状态；请在成员自己的电脑运行 vibe-git open 操作");
   return service.authenticateSession(firstHeader(request.headers.cookie));
 }
 
@@ -107,7 +110,7 @@ export async function registerV20Routes(app: FastifyInstance, service: V20Servic
     return {
       task,
       detail,
-      markdown: [
+      markdown: task.brief ? `${taskMarkdown(task, task.dependencyEdges, service.repo.listContracts())}${detail ? `\n\n---\n\n## 成员执行细节（${detail.filename} r${detail.revision}）\n\n${detail.content}` : ""}` : [
         `# ${task.title}`,
         "",
         "## 正式目标（不可由任务细化 Markdown 修改）",
@@ -120,22 +123,7 @@ export async function registerV20Routes(app: FastifyInstance, service: V20Servic
         ...task.acceptance.map((item) => `- ${item}`),
         "",
         "## 依赖",
-        ...(task.dependencyEdges?.length ? task.dependencyEdges.map((edge) => {
-          const upstream = service.repo.getTask(edge.upstreamTaskId);
-          const contract = service.repo.getStage(task.stageId)?.contracts?.find((item) => item.id === edge.contractId);
-          return `- ${edge.upstreamTaskId} · ${edge.mode === "HARD" ? "等待完成" : `契约 ${contract?.id ?? edge.contractId} v${edge.contractRevision} · ${contract?.hash ?? ""}`} · 上游交付 ${contract?.handoffArtifact ?? upstream?.executionSpec?.deliverables.join("、") ?? "待提供"}`;
-        }) : task.dependencies.length ? task.dependencies.map((item) => `- ${item} · 等待完成`) : ["- 无"]),
-        ...(task.executionSpec ? ["", "## 执行契约", "### 交付物", ...task.executionSpec.deliverables.map((item) => `- ${item}`),
-          "### 文件所有权", ...task.executionSpec.ownedPaths.map((item) => `- ${item}`),
-          "### 禁改范围", ...task.executionSpec.forbiddenPaths.map((item) => `- ${item}`),
-          "### 关联需求", ...task.executionSpec.requirementRefs.map((item) => `- ${item}`),
-          "### 接口输入输出", ...task.executionSpec.interfaceInputsOutputs.map((item) => `- ${item}`),
-          "### 异常", ...task.executionSpec.errorCases.map((item) => `- ${item}`),
-          "### 依赖原因", ...(task.executionSpec.dependencyReasons ?? []).map((item) => `- ${item}`),
-          "### 本机 Mock", task.executionSpec.mockStrategy,
-          "### 真实集成", ...task.executionSpec.integrationSteps.map((item) => `- ${item}`),
-          "### 验证命令", ...task.executionSpec.verificationCommands.map((item) => `- \`${item}\``),
-          "### 完成条件", ...task.executionSpec.completionConditions.map((item) => `- ${item}`)] : []),
+        ...(task.dependencies.length ? task.dependencies.map((item) => `- ${item}`) : ["- 无"]),
         detail ? `\n---\n\n## 成员执行细节（${detail.filename} r${detail.revision}）\n\n${detail.content}` : ""
       ].filter(Boolean).join("\n")
     };
@@ -149,24 +137,13 @@ export async function registerV20Routes(app: FastifyInstance, service: V20Servic
     return service.repo.listPullRequests();
   });
   app.get<{ Params: { id: string } }>("/api/v1/documents/:id", async (request) => {
-    const node = authenticate(request, service);
+    authenticate(request, service);
     const document = service.repo.getDocument(request.params.id);
     if (!document) throw notFound("文档不存在");
-    if (document.kind === "task_detail" && node.role !== "captain" && document.ownerNodeId !== node.id) throw forbidden("不能查看其他成员的任务细化");
     return document;
   });
 
   app.post("/api/v1/alignments", async (request) => service.startAlignment(authenticate(request, service)));
-  app.post<{ Params: { id: string } }>("/api/v1/stages/:id/replan", async (request) => service.startStageReplan(authenticate(request, service), request.params.id));
-  app.post<{ Params: { id: string; contractId: string }; Body: { revision?: number; hash?: string } }>("/api/v1/stages/:id/contracts/:contractId/ack", async (request) => {
-    if (!Number.isInteger(request.body?.revision) || typeof request.body.hash !== "string") throw badRequest("缺少契约版本或 hash");
-    return service.acknowledgeStageContract(authenticate(request, service), request.params.id, request.params.contractId, request.body.revision!, request.body.hash);
-  });
-  app.post<{ Params: { id: string } }>("/api/v1/stages/:id/contracts/publish", async (request) => service.publishStageContracts(authenticate(request, service), request.params.id));
-  app.post<{ Params: { id: string; contractId: string }; Body: { expectedHash?: string } }>("/api/v1/stages/:id/contracts/:contractId/downgrade", async (request) => {
-    if (typeof request.body?.expectedHash !== "string") throw badRequest("缺少契约 hash");
-    return service.downgradeStageContract(authenticate(request, service), request.params.id, request.params.contractId, request.body.expectedHash);
-  });
   app.post<{ Params: { id: string }; Body: { issueId?: string; optionId?: string; expectedRevision?: number } }>("/api/v1/alignments/:id/resolve", async (request) => {
     const { issueId, optionId, expectedRevision } = request.body ?? {};
     if (!issueId || !optionId || !Number.isInteger(expectedRevision)) throw badRequest("缺少冲突、选项或裁决版本");
@@ -176,16 +153,32 @@ export async function registerV20Routes(app: FastifyInstance, service: V20Servic
     if (!request.body?.taskId || !request.body.assigneeNodeId) throw badRequest("缺少 taskId 或 assigneeNodeId");
     return service.assignDraftTask(authenticate(request, service), request.params.id, request.body.taskId, request.body.assigneeNodeId);
   });
+  app.post<{ Params: { id: string }; Body: { expectedRevision?: number; sha256?: string } }>("/api/v1/contracts/:id/ack", async (request) => {
+    const { expectedRevision, sha256 } = request.body ?? {};
+    if (!Number.isInteger(expectedRevision) || typeof sha256 !== "string") throw badRequest("缺少契约版本或哈希");
+    return service.acknowledgeContract(authenticate(request, service), request.params.id, expectedRevision!, sha256);
+  });
+  app.post<{ Params: { id: string }; Body: { expectedRevision?: number; sha256?: string } }>("/api/v1/contracts/:id/publish", async (request) => {
+    const { expectedRevision, sha256 } = request.body ?? {};
+    if (!Number.isInteger(expectedRevision) || typeof sha256 !== "string") throw badRequest("缺少契约版本或哈希");
+    return service.publishRevisedContract(authenticate(request, service), request.params.id, expectedRevision!, sha256);
+  });
+  app.post<{ Params: { id: string }; Body: { taskId?: string; upstreamTaskId?: string } }>("/api/v1/alignments/:id/downgrade", async (request) => {
+    if (!request.body?.taskId || !request.body.upstreamTaskId) throw badRequest("缺少任务或上游 ID");
+    return service.downgradeDependency(authenticate(request, service), request.params.id, request.body.taskId, request.body.upstreamTaskId);
+  });
+  app.get<{ Params: { id: string } }>("/api/v1/workstreams/:id/brief", async (request, reply) => {
+    const node = authenticate(request, service);
+    const workstream = service.repo.getWorkstream(request.params.id);
+    if (!workstream) throw notFound("工作主线不存在");
+    if (node.role !== "captain" && node.id !== workstream.ownerNodeId) throw forbidden("只能下载自己的工作主线");
+    reply.type("text/markdown; charset=utf-8");
+    const tasks = workstream.taskIds.flatMap((id) => { const task = service.repo.getTask(id); return task ? [task] : []; });
+    return workstreamMarkdown(workstream, tasks, service.repo.listContracts(workstream.alignmentId));
+  });
   app.post<{ Params: { id: string } }>("/api/v1/alignments/:id/publish", async (request) => service.publishAlignment(authenticate(request, service), request.params.id));
-  app.post<{ Params: { id: string; contractId: string }; Body: { revision?: number; hash?: string } }>("/api/v1/alignments/:id/contracts/:contractId/ack", async (request) => {
-    if (!Number.isInteger(request.body?.revision) || typeof request.body.hash !== "string") throw badRequest("缺少契约版本或 hash");
-    return service.acknowledgeContract(authenticate(request, service), request.params.id, request.params.contractId, request.body.revision!, request.body.hash);
-  });
-  app.post<{ Params: { id: string } }>("/api/v1/alignments/:id/contracts/publish", async (request) => service.publishContracts(authenticate(request, service), request.params.id));
-  app.post<{ Params: { id: string; contractId: string }; Body: { expectedHash?: string } }>("/api/v1/alignments/:id/contracts/:contractId/downgrade", async (request) => {
-    if (typeof request.body?.expectedHash !== "string") throw badRequest("缺少契约 hash");
-    return service.downgradeContract(authenticate(request, service), request.params.id, request.params.contractId, request.body.expectedHash);
-  });
+  app.post<{ Params: { id: string } }>("/api/v1/stages/:id/replan", async (request) => service.startStageReplan(authenticate(request, service), request.params.id));
+  app.post<{ Params: { id: string } }>("/api/v1/alignments/:id/activate-replan", async (request) => service.activateStageReplan(authenticate(request, service), request.params.id));
   app.get<{ Params: { id: string } }>("/api/v1/alignments/:id/export", async (request, reply) => {
     const node = authenticate(request, service); requireCaptain(node);
     const alignment = service.repo.getAlignment(request.params.id);
@@ -196,18 +189,9 @@ export async function registerV20Routes(app: FastifyInstance, service: V20Servic
   });
 
   app.post<{ Params: { id: string } }>("/api/v1/tasks/:id/start", async (request) => service.startTask(authenticate(request, service), request.params.id));
+  app.post<{ Params: { id: string } }>("/api/v1/tasks/:id/integrate", async (request) => service.integrateTask(authenticate(request, service), request.params.id));
   app.post<{ Params: { id: string } }>("/api/v1/tasks/:id/sync", async (request) => service.requestSync(authenticate(request, service), request.params.id));
   app.post<{ Params: { id: string } }>("/api/v1/tasks/:id/done", async (request) => service.doneTask(authenticate(request, service), request.params.id));
-  app.post<{ Params: { id: string }; Body: { providerCommits?: Record<string, string>; summary?: string } }>("/api/v1/tasks/:id/integrate", async (request) =>
-    service.integrateTask(authenticate(request, service), request.params.id, request.body?.providerCommits ?? {}, request.body?.summary ?? ""));
-  app.get<{ Params: { id: string } }>("/api/v1/workstreams/:id", async (request) => {
-    const node = authenticate(request, service);
-    const stage = service.repo.listStages().find((item) => item.workstreams?.some((stream) => stream.id === request.params.id));
-    const stream = stage?.workstreams?.find((item) => item.id === request.params.id);
-    if (!stage || !stream) throw notFound("工作主线不存在");
-    if (node.role !== "captain" && stream.assigneeNodeId !== node.id) throw forbidden("不能查看其他成员的执行主线");
-    return { workstream: stream, markdown: stream.markdown ?? `# ${stream.summary}\n\n${stream.taskIds.map((id) => `- ${id}`).join("\n")}` };
-  });
   app.post("/api/v1/tasks/sync", async (request) => service.requestSync(authenticate(request, service)));
 
   app.post<{ Body: { force?: boolean } }>("/api/v1/reviews", async (request) => service.startReview(authenticate(request, service), Boolean(request.body?.force)));

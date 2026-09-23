@@ -1,4 +1,4 @@
-import type { MarkdownDocument, V20BootstrapPayload, ProjectModule } from "@vibe-git/protocol";
+import type { AlignmentRun, MarkdownDocument, V20BootstrapPayload, ProjectModule, InterfaceContract } from "@vibe-git/protocol";
 
 export class ApiError extends Error {
   constructor(readonly status: number, message: string, readonly code?: string) { super(message); }
@@ -35,22 +35,20 @@ export const api = {
   uploadChange: (filename: string, content: string) => post(`/api/v1/pull-requests`, { filename, content }),
   document: (id: string) => request<MarkdownDocument>(`/api/v1/documents/${encodeURIComponent(id)}`),
   taskDetail: (id: string) => request<{ markdown: string }>(`/api/v1/tasks/${encodeURIComponent(id)}/detail`),
-  startAlignment: () => post(`/api/v1/alignments`),
+  startAlignment: () => post<AlignmentRun>(`/api/v1/alignments`),
   resolveAlignment: (alignmentId: string, issueId: string, optionId: string, expectedRevision: number) => post(`/api/v1/alignments/${encodeURIComponent(alignmentId)}/resolve`, { issueId, optionId, expectedRevision }),
   assign: (alignmentId: string, taskId: string, assigneeNodeId: string) => post(`/api/v1/alignments/${encodeURIComponent(alignmentId)}/assign`, { taskId, assigneeNodeId }),
   publish: (alignmentId: string) => post(`/api/v1/alignments/${encodeURIComponent(alignmentId)}/publish`),
-  contractAck: (alignmentId: string, contractId: string, revision: number, hash: string) => post(`/api/v1/alignments/${encodeURIComponent(alignmentId)}/contracts/${encodeURIComponent(contractId)}/ack`, { revision, hash }),
-  publishContracts: (alignmentId: string) => post(`/api/v1/alignments/${encodeURIComponent(alignmentId)}/contracts/publish`),
-  downgradeContract: (alignmentId: string, contractId: string, expectedHash: string) => post(`/api/v1/alignments/${encodeURIComponent(alignmentId)}/contracts/${encodeURIComponent(contractId)}/downgrade`, { expectedHash }),
-  replanStage: (stageId: string) => post(`/api/v1/stages/${encodeURIComponent(stageId)}/replan`),
-  stageContractAck: (stageId: string, contractId: string, revision: number, hash: string) => post(`/api/v1/stages/${encodeURIComponent(stageId)}/contracts/${encodeURIComponent(contractId)}/ack`, { revision, hash }),
-  publishStageContracts: (stageId: string) => post(`/api/v1/stages/${encodeURIComponent(stageId)}/contracts/publish`),
-  downgradeStageContract: (stageId: string, contractId: string, expectedHash: string) => post(`/api/v1/stages/${encodeURIComponent(stageId)}/contracts/${encodeURIComponent(contractId)}/downgrade`, { expectedHash }),
-  workstream: (id: string) => request<{ markdown: string }>(`/api/v1/workstreams/${encodeURIComponent(id)}`),
+  contractAck: (contract: InterfaceContract) => post(`/api/v1/contracts/${encodeURIComponent(contract.id)}/ack`, { expectedRevision: contract.revision, sha256: contract.sha256 }),
+  contractPublish: (contract: InterfaceContract) => post(`/api/v1/contracts/${encodeURIComponent(contract.id)}/publish`, { expectedRevision: contract.revision, sha256: contract.sha256 }),
+  downgradeDependency: (alignmentId: string, taskId: string, upstreamTaskId: string) => post(`/api/v1/alignments/${encodeURIComponent(alignmentId)}/downgrade`, { taskId, upstreamTaskId }),
+  replanStage: (stageId: string) => post<AlignmentRun>(`/api/v1/stages/${encodeURIComponent(stageId)}/replan`),
+  activateReplan: (alignmentId: string) => post(`/api/v1/alignments/${encodeURIComponent(alignmentId)}/activate-replan`),
+  workstreamBrief: (id: string) => request<string>(`/api/v1/workstreams/${encodeURIComponent(id)}/brief`),
   taskStart: (id: string) => post(`/api/v1/tasks/${encodeURIComponent(id)}/start`),
+  taskIntegrate: (id: string) => post(`/api/v1/tasks/${encodeURIComponent(id)}/integrate`),
   taskSync: (id: string) => post(`/api/v1/tasks/${encodeURIComponent(id)}/sync`),
   taskDone: (id: string) => post(`/api/v1/tasks/${encodeURIComponent(id)}/done`),
-  taskIntegrate: (id: string, providerCommits: Record<string, string>, summary: string) => post(`/api/v1/tasks/${encodeURIComponent(id)}/integrate`, { providerCommits, summary }),
   forceReview: () => post(`/api/v1/reviews`, { force: true }),
   applyReview: (id: string) => post(`/api/v1/reviews/${encodeURIComponent(id)}/apply`),
   rejectReview: (id: string) => post(`/api/v1/reviews/${encodeURIComponent(id)}/reject`),
@@ -62,3 +60,30 @@ export const api = {
   tunnelStart: () => post(`/api/v1/local/cloudflare/start`),
   tunnelStop: () => post(`/api/v1/local/cloudflare/stop`)
 };
+
+export interface ExecutionDetail { steps: string[]; files: string[]; mockUsage: string; validation: string[]; notes: string }
+export async function localCapabilities(): Promise<{ local: boolean; chat: boolean }> {
+  try { return await request<{ local: boolean; chat: boolean }>("/api/local/capabilities"); }
+  catch { return { local: false, chat: false }; }
+}
+export const localFinalize = (taskId: string) => post<ExecutionDetail>(`/api/local/chat/${encodeURIComponent(taskId)}/finalize`);
+export async function localChat(taskId: string, message: string, onDelta: (value: string) => void): Promise<string> {
+  const response = await fetch(`/api/local/chat/${encodeURIComponent(taskId)}`, { method: "POST", credentials: "same-origin",
+    headers: { "content-type": "application/json" }, body: JSON.stringify({ message }) });
+  if (!response.ok || !response.body) throw new Error(`本机 Codex 对话不可用 (${response.status})`);
+  const reader = response.body.getReader(); const decoder = new TextDecoder(); let buffer = "", answer = "";
+  while (true) {
+    const { done, value } = await reader.read(); if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const pieces = buffer.split("\n\n"); buffer = pieces.pop() ?? "";
+    for (const piece of pieces) {
+      const line = piece.split("\n").find((item) => item.startsWith("data: "));
+      if (!line) continue;
+      const event = JSON.parse(line.slice(6)) as { type: string; value: string };
+      if (event.type === "delta") { answer += event.value; onDelta(event.value); }
+      if (event.type === "done") answer = event.value;
+      if (event.type === "error") throw new Error(event.value);
+    }
+  }
+  return answer;
+}
