@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type CSSProperties } from "react";
 import type { MarkdownDocument, PlanImpactPreview, ProjectModule, V20BootstrapPayload } from "@vibe-git/protocol";
 import { api } from "./api";
 
@@ -58,7 +58,7 @@ export function ProposalComposer({ data, current, onClose, onSaved }: {
         </div>}
         {error && <p className="form-error" role="alert">{error}</p>}
       </div>
-      <footer><button onClick={onClose}>取消</button><button className="primary" disabled={!preview || !checked || pending} onClick={() => void submit()}>{pending ? "处理中…" : "提交提案"}</button></footer>
+      <footer><button onClick={onClose}>取消</button><button className="primary" disabled={!preview || !checked || pending} onClick={() => void submit()}>{pending ? "处理中…" : current ? "保存更新" : "提交提案"}</button></footer>
     </section>
   </div>;
 }
@@ -90,16 +90,55 @@ export function ModuleManager({ data, onSaved }: { data: V20BootstrapPayload; on
 }
 
 export function ProjectTimeline({ data }: { data: V20BootstrapPayload }) {
-  const rows = data.modules.flatMap((item) => [{ id: item.id, name: item.name, status: item.status, start: item.plannedStart, end: item.plannedEnd, nested: false },
-    ...item.packages.map((pack) => ({ id: pack.id, name: pack.name, status: pack.status, start: pack.plannedStart, end: pack.plannedEnd, nested: true }))]);
-  const dated = rows.filter((row) => row.start && row.end);
-  const events = [...data.stages.flatMap((stage) => [{ label: `阶段 ${stage.sequence} 创建`, at: stage.createdAt }, ...(stage.completedAt ? [{ label: `阶段 ${stage.sequence} 完成`, at: stage.completedAt }] : [])]),
-    ...data.tasks.flatMap((task) => [{ label: `${task.title} 发布`, at: task.publishedAt }, ...(task.startedAt ? [{ label: `${task.title} 开工`, at: task.startedAt }] : []), ...(task.doneAt ? [{ label: `${task.title} 确认完成`, at: task.doneAt }] : [])])].filter((entry) => entry.at).sort((a, b) => b.at.localeCompare(a.at)).slice(0, 8);
-  const min = dated.length ? Math.min(...dated.map((row) => Date.parse(row.start!))) : 0;
-  const max = dated.length ? Math.max(...dated.map((row) => Date.parse(row.end!) + 86400000)) : 0;
-  const span = Math.max(86400000, max - min);
-  return <div className="timeline-panel"><div className="subsection-head"><h3>项目时间表</h3><span>计划与实际时间分开记录</span></div>
-    {dated.length ? <div className="gantt" role="table" aria-label="模块与工作包甘特图"><div className="gantt-scale"><span>模块 / 工作包</span><span>{new Date(min).toLocaleDateString("zh-CN")}</span><span>{new Date(max - 86400000).toLocaleDateString("zh-CN")}</span></div>{rows.map((row) => <div className="gantt-row" role="row" key={row.id}><div className={row.nested ? "nested" : ""}><b>{row.name}</b><small>{stateLabel[row.status]}</small></div><div className="gantt-track">{row.start && row.end ? <span className={`gantt-bar ${row.status}`} style={{ left: `${((Date.parse(row.start) - min) / span) * 100}%`, width: `${Math.max(2, ((Date.parse(row.end) + 86400000 - Date.parse(row.start)) / span) * 100)}%` }} title={`${row.start} 至 ${row.end}`}/> : <small>未排期</small>}</div></div>)}</div> : <div className="schedule-empty"><b>尚无计划日期</b><p>队长登记模块、工作包及计划起止日后，这里显示真实甘特图。</p></div>}
-    <h4>实际进展</h4>{events.length ? <div className="event-list">{events.map((item, index) => <div key={`${item.label}-${index}`}><time>{new Date(item.at).toLocaleString("zh-CN")}</time><span>{item.label}</span></div>)}</div> : <p className="subtle-note">暂无阶段或任务时间记录。</p>}
-  </div>;
+  const dayNumber = (value: string) => Date.parse(`${value}T00:00:00Z`) / 86400000;
+  const dayString = (value: number) => new Date(value * 86400000).toISOString().slice(0, 10);
+  const today = dayNumber(new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Shanghai" }));
+  const firstPlanned = data.modules.flatMap((item) => [item.plannedStart, ...item.packages.map((pack) => pack.plannedStart)]).filter((value): value is string => !!value).sort()[0];
+  const [weekStart, setWeekStart] = useState(() => firstPlanned ? dayNumber(firstPlanned) : today - 1);
+  const [view, setView] = useState<"gantt" | "list">("gantt");
+  const [collapsed, setCollapsed] = useState<string[]>([]);
+  useEffect(() => { if (firstPlanned) setWeekStart(dayNumber(firstPlanned)); }, [data.moduleRevision, firstPlanned]);
+  const rows = data.modules.flatMap((module) => [
+    { id: module.id, moduleId: module.id, name: module.name, status: module.status, start: module.plannedStart, end: module.plannedEnd, child: false, note: `${module.packages.length} 个任务包` },
+    ...module.packages.map((pack) => {
+      const owners = [...new Set(pack.taskIds.map((id) => data.tasks.find((task) => task.id === id)?.assigneeNodeId).filter((id): id is string => !!id))];
+      const owner = owners.length === 1 ? data.nodes.find((node) => node.id === owners[0])?.label ?? "负责人未连接" : owners.length > 1 ? "多人协作" : "负责人未登记";
+      return { id: pack.id, moduleId: module.id, name: pack.name, status: pack.status, start: pack.plannedStart, end: pack.plannedEnd, child: true, note: `${owner} · 包 ${pack.id}` };
+    })
+  ]);
+  const events = [
+    ...data.stages.flatMap((stage) => [
+      { label: `阶段 ${stage.sequence} 创建`, at: stage.createdAt },
+      ...(stage.completedAt ? [{ label: `阶段 ${stage.sequence} 完成`, at: stage.completedAt }] : [])
+    ]),
+    ...data.tasks.flatMap((task) => [
+      { label: `${task.title} 发布`, at: task.publishedAt },
+      ...(task.startedAt ? [{ label: `${task.title} 开工`, at: task.startedAt }] : []),
+      ...(task.finishedAt ? [{ label: `${task.title} 执行结束`, at: task.finishedAt }] : []),
+      ...(task.doneAt ? [{ label: `${task.title} 确认完成`, at: task.doneAt }] : [])
+    ])
+  ].filter((event) => event.at).sort((a, b) => b.at.localeCompare(a.at)).slice(0, 8);
+  const visibleRows = rows.filter((row) => !row.child || !collapsed.includes(row.moduleId));
+  const days = Array.from({ length: 7 }, (_, index) => weekStart + index);
+  const dayLabel = (value: number) => new Intl.DateTimeFormat("zh-CN", { month: "numeric", day: "numeric", timeZone: "UTC" }).format(new Date(value * 86400000));
+  const weekLabel = new Intl.DateTimeFormat("zh-CN", { weekday: "short", timeZone: "UTC" });
+  const tone = (status: string) => status === "in_progress" ? "blue" : status === "blocked" ? "amber" : status === "done" ? "green" : "";
+  const showBar = (row: typeof rows[number]) => {
+    if (!row.start || !row.end) return <span className="unscheduled">待排期</span>;
+    const start = dayNumber(row.start);
+    const end = dayNumber(row.end);
+    if (end < weekStart || start > weekStart + 6) return <span className="unscheduled">本周无计划</span>;
+    const style = { "--start": Math.max(1, start - weekStart + 1), "--span": Math.min(end, weekStart + 6) - Math.max(start, weekStart) + 1 } as CSSProperties;
+    return <span className={`bar ${tone(row.status)}`} style={style} title={`计划：${row.start} 至 ${row.end}`}/>;
+  };
+  return <section className="approved-timeline" aria-labelledby="timeline-title">
+    <div className="section-head"><div><h2 id="timeline-title">项目时间线</h2><p>按模块查看计划时间。虚线标出今天，房间时区为 Asia/Shanghai。</p></div>
+      <div className="section-actions"><button className="range-button" onClick={() => setWeekStart((value) => value - 7)} aria-label="上一周">‹</button><span className="timezone">{dayLabel(weekStart)} — {dayLabel(weekStart + 6)}</span><button className="range-button" onClick={() => setWeekStart((value) => value + 7)} aria-label="下一周">›</button><div className="seg" role="group" aria-label="时间线视图"><button className={view === "gantt" ? "active" : ""} aria-pressed={view === "gantt"} onClick={() => setView("gantt")}>甘特图</button><button className={view === "list" ? "active" : ""} aria-pressed={view === "list"} onClick={() => setView("list")}>列表</button></div></div>
+    </div>
+    {view === "gantt" ? <div className="panel gantt" role="table" aria-label="模块与任务包甘特图"><div className="gantt-head" role="row"><div className="item-head">模块 / 任务包</div><div className="days">{days.map((day) => <div className={`day ${day === today ? "today" : ""}`} key={day}><span>{day === today ? "今天 · " : ""}{weekLabel.format(new Date(day * 86400000))}</span><b>{dayString(day).slice(-2)}</b></div>)}</div></div>
+      {visibleRows.length ? visibleRows.map((row) => <div className={`gantt-row ${row.child ? "" : "module"}`} role="row" key={row.id}><div className={`item ${row.child ? "child" : ""}`}>{row.child ? <span className="indent"/> : <button className="expand" aria-expanded={!collapsed.includes(row.id)} aria-label={`${collapsed.includes(row.id) ? "展开" : "收起"}${row.name}`} onClick={() => setCollapsed((old) => old.includes(row.id) ? old.filter((id) => id !== row.id) : [...old, row.id])}>⌄</button>}<div className="item-main"><strong>{row.name}</strong><small>{row.note}</small></div><span className={`status ${tone(row.status)}`}>{stateLabel[row.status]}</span></div><div className={`timeline ${today < weekStart || today > weekStart + 6 ? "no-today" : ""}`} style={{ "--today-left": `${((today - weekStart) + .5) * 100 / 7}%` } as CSSProperties}>{showBar(row)}</div></div>) : <div className="schedule-empty"><b>尚未拆分模块</b><p>队长登记真实模块和排期后，这里会显示项目时间线。</p></div>}
+      <div className="gantt-foot"><span className="legend"><i/>计划区间</span><span className="legend today"><i/>今天</span><span>甘特条显示计划时间，不代表完成百分比</span></div></div>
+      : <div className="panel list-view active"><div className="list-row list-head"><span>模块 / 任务包</span><span>负责人</span><span>状态</span><span>计划时间</span></div>{rows.length ? rows.map((row) => <div className="list-row" key={row.id}><span><strong>{row.name}</strong><small>{row.child ? "任务包" : "模块"}</small></span><span>{row.note.split(" · ")[0]}</span><span><span className={`status ${tone(row.status)}`}>{stateLabel[row.status]}</span></span><span>{row.start && row.end ? `${row.start} — ${row.end}` : "待排期"}</span></div>) : <div className="schedule-empty">尚未拆分模块</div>}</div>}
+    <details className="actual-progress panel"><summary>实际进展</summary>{events.length ? <div className="actual-events">{events.map((event, index) => <div key={`${event.label}-${index}`}><time>{new Date(event.at).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai" })}</time><span>{event.label}</span></div>)}</div> : <p className="subtle-note">暂无阶段或任务时间记录。</p>}</details>
+  </section>;
 }

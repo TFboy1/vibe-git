@@ -3,7 +3,6 @@ import {
   useCallback,
   useEffect,
   useState,
-  type CSSProperties,
   type ReactNode
 } from "react";
 import {
@@ -19,15 +18,15 @@ import {
   FileText,
   GitBranch,
   GitCommitHorizontal,
+  LayoutGrid,
+  ListTodo,
   Pause,
   Play,
   Radio,
   RefreshCw,
   RotateCw,
-  ScanLine,
   ShieldCheck,
   Upload,
-  Workflow,
   X
 } from "lucide-react";
 import type {
@@ -136,13 +135,19 @@ function Section({ id, eyebrow, title, aside, children, active }: {
   children: ReactNode;
   active?: boolean;
 }) {
-  const [number = "", label = eyebrow] = eyebrow.split(" · ");
+  const descriptions: Record<string, string> = {
+    plans: "按成员查看已提交的版本。成员可上传、更新或撤回自己的提案。",
+    tasks: "查看模块、任务包和负责人。需要确认的结果单独标记。",
+    alignment: "对齐提案、核对分工，需裁决的问题由队长处理。",
+    changes: "查看需求变更及其影响审核进度。",
+    nodes: "查看房间成员、连接状态和邀请方式。",
+    messages: "查看房间保存的通知与任务消息。"
+  };
   return <section id={id} className={`section section-${id}`} hidden={!active}>
-    <span className="chapter-number" aria-hidden="true">{number}</span>
-    <header className="section-title">
+    <header className="section-title page-titlebar">
       <div className="section-heading">
-        <span className="section-eyebrow"><i/>{label}</span>
-        <h2>{title}</h2>
+        <div className="eyebrow">房间 / {eyebrow}</div>
+        <h1>{title}</h1><p className="lead">{descriptions[id]}</p>
       </div>
       {aside && <div className="section-actions">{aside}</div>}
     </header>
@@ -241,27 +246,18 @@ function PlanCard({ plan, data, download, onEdit, onWithdraw }: {
   onEdit(): void;
   onWithdraw(): void;
 }) {
+  const [expanded, setExpanded] = useState(false);
   const mine = plan.ownerNodeId === data.viewer.id;
   const owner = data.nodes.find((node) => node.id === plan.ownerNodeId);
-  return <article className={`paper compact plan-card ${mine ? "is-mine" : "is-team"}`}>
-    <div className="paper-fold" aria-hidden="true"/>
-    <div className="paper-meta">
-      <div className="plan-owner"><span>{mine ? "我的提案" : "成员提案"}</span><b>{owner?.label ?? short(plan.ownerNodeId)}</b></div>
-      <Pill tone={mine ? "green" : "plain"}>{mine ? "我的提案" : "只读"}</Pill>
-      <Pill>r{plan.revision}</Pill>
-      <code>{short(plan.sha256)}</code>
-    </div>
-    <div className="plan-filename"><FileText size={13}/><b>{plan.filename}</b><span>{Math.ceil(plan.bytes / 1024)} KiB</span></div>
+  const author = owner?.label ?? short(plan.ownerNodeId);
+  const excerpt = plan.content.replace(/[#*>`_\[\]]/g, "").replace(/\s+/g, " ").trim();
+  return <article className="proposal-card">
+    <div className="proposal-top"><span className="avatar">{author.slice(0, 1)}</span><div><strong>{author}</strong><small>最新版本 v{plan.revision} · {time(plan.createdAt)}</small></div><span className="status green">已提交</span></div>
+    <h3>{plan.filename.replace(/\.md$/i, "")}</h3><p>{excerpt.slice(0, 105)}{excerpt.length > 105 ? "…" : ""}</p>
     <div className="plan-impact"><span>受影响模块</span>{plan.impactedModuleIds?.length ? plan.impactedModuleIds.map((id) => <Pill key={id} tone="blue">{data.modules.find((item) => item.id === id)?.name ?? "已移除模块"}</Pill>) : <small>{plan.impactReviewed ? "作者确认暂无已登记模块" : "影响未核实"}</small>}</div>
     {!!plan.impactedModuleIds?.some((id) => data.plans.some((other) => other.id !== plan.id && other.impactedModuleIds?.includes(id))) && <p className="plan-overlap">有其他提案涉及相同模块，待对齐时核对。</p>}
-    <Markdown>{plan.content}</Markdown>
-    <footer className="plan-actions">
-      <span><Eye size={12}/>团队全员可见</span>
-      <div className="button-row">
-        <button onClick={() => download(plan)}><ArrowDownToLine size={13}/>下载</button>
-        {mine && <><button onClick={onEdit}>更新</button><button className="danger" onClick={onWithdraw}>撤回</button></>}
-      </div>
-    </footer>
+    <div className="proposal-foot"><span>版本 {plan.revision} · {Math.ceil(plan.bytes / 1024)} KiB</span><button className="detail-button" aria-expanded={expanded} onClick={() => setExpanded((value) => !value)}>{expanded ? "收起正文" : "查看正文 →"}</button></div>
+    {expanded && <div className="proposal-full"><code>SHA-256 {plan.sha256}</code><Markdown>{plan.content}</Markdown><div className="button-row"><button onClick={() => download(plan)}><ArrowDownToLine size={13}/>下载</button>{mine && <><button onClick={onEdit}>更新</button><button className="danger" onClick={onWithdraw}>撤回</button></>}</div></div>}
   </article>;
 }
 
@@ -373,7 +369,9 @@ export function App() {
   const [notice, setNotice] = useState<string | null>(null);
   const [activeSection, setActiveSection] = useState(() => NAV_ITEMS.some(([id]) => `#${id}` === window.location.hash) ? window.location.hash.slice(1) : "overview");
   const [composerOpen, setComposerOpen] = useState(false);
+  const [planSearch, setPlanSearch] = useState("");
   const [taskFilter, setTaskFilter] = useState<"all" | "mine" | "progress" | "confirm" | "done">("all");
+  const [openPackage, setOpenPackage] = useState<string | null>(null);
 
   const refresh = useCallback(async (quiet = false) => {
     try {
@@ -445,85 +443,76 @@ export function App() {
   const queuedChanges = data.pullRequests.filter((item) => item.status === "QUEUED");
   const captain = data.viewer.role === "captain";
   const myPlan = data.plans.find((plan) => plan.ownerNodeId === data.viewer.id);
+  const filteredPlans = data.plans.filter((plan) => `${plan.filename} ${data.nodes.find((node) => node.id === plan.ownerNodeId)?.label ?? ""}`.toLowerCase().includes(planSearch.trim().toLowerCase()));
+  const latestPlan = [...data.plans].sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
   const doneCount = tasks.filter((task) => task.status === "DONE").length;
   const filteredTasks = tasks.filter((task) => taskFilter === "all" ||
     (taskFilter === "mine" && task.assigneeNodeId === data.viewer.id) ||
     (taskFilter === "progress" && ["STARTING", "IN_PROGRESS"].includes(task.status)) ||
     (taskFilter === "confirm" && task.status === "WAITING_CONFIRMATION") ||
     (taskFilter === "done" && task.status === "DONE"));
-  const activeIndex = Math.max(0, NAV_ITEMS.findIndex(([id]) => id === activeSection));
-  const railStyle = { "--active-step": activeIndex } as CSSProperties;
+  const phaseLabels = ["收集提案", "共同定案", "拆分工作", "并行开发", "集成验收"];
+  const phaseIndex = !data.plans.length ? 0 : !data.alignments.length ? 0 : !data.stages.length ? 1 : !tasks.length ? 2 : tasks.every((task) => task.status === "DONE") ? 4 : 3;
+  const navIcons = [LayoutGrid, FileText, ListTodo, GitBranch, GitCommitHorizontal, Cloud, Activity];
+  const packageCount = data.modules.reduce((total, module) => total + module.packages.length, 0);
+  const attentionCount = tasks.filter((task) => task.status === "WAITING_CONFIRMATION").length;
 
   return <Fragment>
     <a className="skip-link" href="#main-content">跳到主要内容</a>
-    <div className="ambient-grid" aria-hidden="true"/>
-    <div className="ambient-orb ambient-orb-one" aria-hidden="true"/>
-    <div className="ambient-orb ambient-orb-two" aria-hidden="true"/>
-
-    <header className="topbar">
-      <div className="topbar-shell">
-        <a className="brand" href="#overview"><span className="brand-logo"><img src="/vibe-git-logo.png" alt=""/></span><div><b>vibe-git</b><small>项目协作房间</small></div></a>
-        <nav aria-label="工作流导航">{NAV_ITEMS.map(([href, label, number]) => <a href={`#${href}`} className={activeSection === href ? "active" : ""} aria-current={activeSection === href ? "location" : undefined} key={href}><i>{number}</i><span>{label}</span></a>)}</nav>
-        <div className="viewer"><span className="viewer-signal"><i className={data.viewer.connected ? "online" : ""}/><em/></span><div><b>{data.viewer.label}</b><small>{captain ? "队长" : "成员"}</small></div></div>
-      </div>
-    </header>
-
-    <main id="main-content" className="shell" onPointerMove={(event) => {
-      const rect = event.currentTarget.getBoundingClientRect();
-      event.currentTarget.style.setProperty("--pointer-x", `${event.clientX - rect.left}px`);
-      event.currentTarget.style.setProperty("--pointer-y", `${event.clientY - rect.top}px`);
-    }}>
-      <div className="flow-layout">
-        <aside className="flow-rail" style={railStyle} aria-label="协作流程">
-          <div className="rail-title"><Workflow size={14}/><span>工作区</span></div>
-          <div className="rail-track"><i/></div>
-          <ol>{NAV_ITEMS.map(([id, label, number]) => <li className={activeSection === id ? "active" : ""} key={id}><a href={`#${id}`}><b>{number}</b><span>{label}</span></a></li>)}</ol>
-          <div className="rail-foot"><ScanLine size={13}/><span>自动同步</span></div>
-        </aside>
-
-        <div className="workflow-canvas">
-          <section className="overview" id="overview" hidden={activeSection !== "overview"}>
-            <div className="page-intro"><span>房间 / 总览</span><h1>项目总览</h1><p>查看当前阶段、已确认的进度和接下来需要处理的事项。</p></div>
-            <div className="metrics"><article><span>需求版本</span><b>R{data.room.requirementRevision}</b></article><article><span>当前阶段</span><b>{currentStage ? `阶段 ${currentStage.sequence}` : "尚未发布"}</b></article><article><span>已确认工作项</span><b>{doneCount} / {tasks.length}</b></article><article><span>在线成员</span><b>{data.nodes.filter((node) => node.connected).length} / {data.nodes.length}</b></article></div>
+    <div className="approved-ui"><div className="app">
+      <aside className="sidebar" aria-label="房间导航">
+        <a className="brand" href="#overview"><span className="brand-icon"><img src="/vibe-git-logo.png" alt=""/></span><span>vibe-git<small>协作房间</small></span></a>
+        <div className="side-label">工作区</div>
+        <nav className="nav" aria-label="工作区">{NAV_ITEMS.map(([id, label], index) => { const Icon = navIcons[index]!; return <a href={`#${id}`} className={activeSection === id ? "active" : ""} aria-current={activeSection === id ? "page" : undefined} key={id}><Icon size={16}/>{label}</a>; })}</nav>
+        <div className="sidebar-bottom"><strong>{data.viewer.label} · {captain ? "队长" : "成员"}</strong><p>房间状态以 Host 同步为准</p></div>
+      </aside>
+      <div className="main">
+        <header className="topbar"><div className="crumb">协作房间 <span aria-hidden="true">/</span> <b>{NAV_ITEMS.find(([id]) => id === activeSection)?.[1] ?? "房间总览"}</b></div><div className="top-right"><span className="online">Host 在线</span><span className="sync">自动同步</span><button className="refresh" onClick={() => void refresh()}>刷新</button></div></header>
+        <main id="main-content" className="content">
+          <section className="approved-page" id="overview" hidden={activeSection !== "overview"}>
+            <div className="headline"><div><div className="eyebrow">房间 / 项目进度</div><h1>房间总览</h1><p className="lead">查看提案、工作分配和当前进度。需要确认的事项会单独列出。</p></div><span className="phase">{phaseLabels[phaseIndex]}</span></div>
+            <div className="stages" aria-label="项目阶段">{phaseLabels.map((label, index) => <Fragment key={label}>{index > 0 && <i className="stage-line"/>}<div className={`stage ${index === phaseIndex ? "current" : ""}`}><span>{index < phaseIndex ? "✓" : index + 1}</span>{label}</div></Fragment>)}</div>
+            <section className="stats" aria-label="房间摘要"><div className="stat"><label>成员</label><strong>{data.nodes.length}</strong><small>{data.nodes.filter((node) => node.connected).length} 人在线</small></div><div className="stat"><label>已提交提案</label><strong>{data.plans.length} <em>/ {data.nodes.length}</em></strong><small>按成员统计</small></div><div className="stat"><label>已拆分模块</label><strong>{data.modules.length}</strong><small>共 {packageCount} 个任务包</small></div><div className="stat"><label>需要确认</label><strong>{attentionCount}</strong><small>确认前不计入完成</small></div></section>
             <ProjectTimeline data={data}/>
-            {captain && <ModuleManager key={data.moduleRevision} data={data} onSaved={() => refresh(true)}/>}
-            <div className="overview-next"><h3>需要处理</h3><div>{latestAlignment?.status === "NEEDS_DECISION" && <a href="#alignment">对齐稿有待裁决问题 →</a>}{tasks.some((task) => task.status === "WAITING_CONFIRMATION" && task.assigneeNodeId === data.viewer.id) && <a href="#tasks">有工作项等待本人确认 →</a>}{latestReview?.status === "NEEDS_EVIDENCE" && <a href="#changes">影响审核仍需补证 →</a>}{latestReview?.status === "AWAITING_CAPTAIN" && captain && <a href="#changes">影响审核待队长处理 →</a>}{queuedChanges.length > 0 && captain && <a href="#changes">{queuedChanges.length} 项变更待审核 →</a>}{!data.plans.length && <a href="#plans">尚无项目提案 →</a>}</div></div>
+            <section className="work-summary"><div className="section-head"><div><h2>工作概况</h2><p>看模块状态，也能看见正在等待什么。</p></div></div><div className="below"><div className="mini-panel"><h3>模块摘要</h3>{data.modules.length ? data.modules.map((module) => <div className="summary-row" key={module.id}><div><strong>{module.name}</strong><p>{module.packages.length} 个任务包 · {module.packages.filter((pack) => pack.status === "done").length} 个已完成</p></div><span className={`status ${module.status === "in_progress" ? "blue" : module.status === "done" ? "green" : module.status === "blocked" ? "amber" : ""}`}>{module.status === "in_progress" ? "进行中" : module.status === "done" ? "已完成" : module.status === "blocked" ? "受阻" : "待规划"}</span></div>) : <p className="subtle-note">尚未拆分模块。</p>}</div><div className="mini-panel"><h3>需要处理</h3>{latestAlignment?.status === "NEEDS_DECISION" && <a className="action" href="#alignment">对齐稿有待裁决问题 →</a>}{latestReview?.status === "NEEDS_EVIDENCE" && <a className="action" href="#changes">影响审核仍需补证 →</a>}{queuedChanges.length > 0 && captain && <a className="action" href="#changes">{queuedChanges.length} 项变更待审核 →</a>}{attentionCount > 0 && <a className="action" href="#tasks">{attentionCount} 个工作项待确认 →</a>}{latestReview?.status === "AWAITING_CAPTAIN" && captain && <a className="action" href="#changes">影响审核待队长处理 →</a>}{data.modules.some((module) => !module.plannedStart || !module.plannedEnd) && captain && <a className="action" href="#overview-schedule">有模块尚未排期，检查排期文件 →</a>}{!data.plans.length && <a className="action" href="#plans">尚无项目提案 →</a>}{!attentionCount && latestAlignment?.status !== "NEEDS_DECISION" && !(latestReview?.status === "AWAITING_CAPTAIN" && captain) && data.plans.length > 0 && <p className="subtle-note">目前没有待确认的工作项。</p>}</div></div></section>
+            {captain && <div id="overview-schedule"><ModuleManager key={data.moduleRevision} data={data} onSaved={() => refresh(true)}/></div>}
+            <div className="footer">房间显示 Host 已保存的数据。计划日期和实际任务状态分别记录。</div>
           </section>
-          <Section id="nodes" active={activeSection === "nodes"} eyebrow="06 · 成员" title="成员与连接" aside={captain && <><button onClick={() => run(async () => { const invite = await api.invite(); await navigator.clipboard.writeText(invite.command); }, "加入命令已复制")}><Copy size={13}/>复制加入命令</button><button onClick={() => run(() => api.rotateInvite(), "邀请密钥已轮换")}><RotateCw size={13}/>轮换邀请</button></>}>
+          <Section id="nodes" active={activeSection === "nodes"} eyebrow="成员与连接" title="成员与连接" aside={captain && <><button onClick={() => run(async () => { const invite = await api.invite(); await navigator.clipboard.writeText(invite.command); }, "加入命令已复制")}><Copy size={13}/>复制加入命令</button><button onClick={() => run(() => api.rotateInvite(), "邀请密钥已轮换")}><RotateCw size={13}/>轮换邀请</button></>}>
             <div className="node-field"><div className="node-axis" aria-hidden="true"><span>CAPTAIN</span><i/><span>MEMBERS</span></div><div className="node-list">{data.nodes.map((node) => <NodeCard key={node.id} node={node} viewer={data.viewer} onRevoke={(id) => run(() => api.revokeNode(id), "节点已撤销")}/>)}</div></div>
             {captain && data.tunnel && <div className="tunnel"><span className="tunnel-icon"><Cloud size={16}/><i/></span><div><small>公开连接</small><b>Cloudflare Quick Tunnel</b><span>{data.tunnel.url || data.tunnel.phase}</span></div><Pill tone={data.tunnel.running ? "green" : "amber"}>{data.tunnel.running ? "运行中" : data.tunnel.phase}</Pill><div className="button-row">{!data.tunnel.installed && <button onClick={() => run(() => api.tunnelInstall(), "cloudflared 已安装")}>安装</button>}{!data.tunnel.running ? <button onClick={() => run(() => api.tunnelStart(), "Tunnel 已启动")}>启动</button> : <button onClick={() => run(() => api.tunnelStop(), "Tunnel 已停止")}>停止</button>}</div></div>}
           </Section>
 
-          <Section id="plans" active={activeSection === "plans"} eyebrow="02 · 提案" title="项目提案" aside={<div className="plan-toolbar"><span><Eye size={12}/>{data.plans.length} 位成员已提交</span><button className="primary" onClick={() => setComposerOpen(true)}>{myPlan ? "更新我的提案" : "提交我的提案"}</button></div>}>
-            {data.plans.length
-              ? <div className="plan-grid">{data.plans.map((plan) => <PlanCard key={plan.id} plan={plan} data={data} download={downloadPlan} onEdit={() => setComposerOpen(true)} onWithdraw={() => { if (window.confirm("撤回后不再参与下一轮对齐。已冻结的对齐版本仍保留。确定撤回？")) run(() => api.withdrawPlan(plan.id, plan.revision), "提案已撤回"); }}/>)}</div>
-              : <Empty>每位成员都可提交一份任意名称的 .md 提案。提交后全员可见，并且只有提案所有者可以继续更新。</Empty>}
+          <Section id="plans" active={activeSection === "plans"} eyebrow="项目提案" title="项目提案" aside={<div className="plan-toolbar"><span><Eye size={12}/>{data.plans.length} 位成员已提交</span><button className="primary" onClick={() => setComposerOpen(true)}>{myPlan ? "更新我的提案" : "提交我的提案"}</button></div>}>
+            <section className="page-metrics" aria-label="提案摘要"><div className="stat"><label>已提交成员</label><strong>{data.plans.length} <em>/ {data.nodes.length}</em></strong><small>每位成员保留一份当前提案</small></div><div className="stat"><label>已核实影响</label><strong>{data.plans.filter((plan) => plan.impactReviewed).length}</strong><small>未核实的影响需重新检查</small></div><div className="stat"><label>最近提交</label><strong>{latestPlan ? new Date(latestPlan.createdAt).toLocaleDateString("zh-CN", { month: "2-digit", day: "2-digit" }) : "—"}</strong><small>{latestPlan ? time(latestPlan.createdAt) : "尚无提案"}</small></div></section>
+            <section><div className="section-head"><div><h2>各成员的最新提案</h2><p>点开卡片可查看完整正文与内容 hash；涉及相同模块的提案会单独提示。</p></div><input className="search" type="search" value={planSearch} onChange={(event) => setPlanSearch(event.target.value)} placeholder="搜索成员或提案" aria-label="搜索成员或提案"/></div><div className="proposal-layout"><div>{filteredPlans.length ? <div className="proposal-grid">{filteredPlans.map((plan) => <PlanCard key={plan.id} plan={plan} data={data} download={downloadPlan} onEdit={() => setComposerOpen(true)} onWithdraw={() => { if (window.confirm("撤回后不再参与下一轮对齐。已冻结的对齐版本仍保留。确定撤回？")) run(() => api.withdrawPlan(plan.id, plan.revision), "提案已撤回"); }}/>)}</div> : <div className="no-results">{data.plans.length ? "没有找到匹配的提案。" : "尚无成员提案。"}</div>}</div><aside className="guide"><h3>如何提交提案</h3><p>从本机选择 Markdown 文件，选出受影响模块，检查与现有提案的重叠范围后提交。</p><ol><li>准备并选择 .md 文件</li><li>核对受影响模块</li><li>检查提示并确认提交</li></ol><p className="quiet-note">模块重叠只表示可能需要比较，不自动判断正文是否冲突。已提交也不等于全队定案。</p></aside></div></section>
+            {data.plans.length > 0 && <section><div className="section-head"><div><h2>当前版本</h2><p>这里列出房间当前可见的版本；已撤回和旧版本不计入。</p></div></div><div className="history"><div className="history-row history-head"><span>提案</span><span>版本</span><span>提交时间</span><span>内容 hash</span><span>操作</span></div>{[...data.plans].sort((a, b) => b.createdAt.localeCompare(a.createdAt)).map((plan) => <div className="history-row" key={plan.id}><strong>{data.nodes.find((node) => node.id === plan.ownerNodeId)?.label ?? short(plan.ownerNodeId)} · {plan.filename}</strong><span>v{plan.revision}</span><span>{time(plan.createdAt)}</span><code title={plan.sha256}>{short(plan.sha256, 16)}…</code><button className="detail-button" onClick={() => downloadPlan(plan)}>下载</button></div>)}</div></section>}
             {captain && <div className="section-bottom"><span>开始时冻结每个节点的最新版本，后续上传自动进入下一轮。</span><button className="primary" disabled={!data.plans.length || busy} onClick={() => run(() => api.startAlignment(), "需求对齐已进入审核池")}><Bot size={14}/>开始对齐<ChevronRight size={13}/></button></div>}
           </Section>
 
-          <Section id="alignment" active={activeSection === "alignment"} eyebrow="04 · 对齐" title="对齐与裁决" aside={latestAlignment && captain && latestAlignment.status === "READY" && <button className="primary" onClick={() => run(() => api.publish(latestAlignment.id), "任务阶段已发布")}><ChevronRight size={14}/>发布任务</button>}>
+          <Section id="alignment" active={activeSection === "alignment"} eyebrow="对齐与裁决" title="对齐与裁决" aside={latestAlignment && captain && latestAlignment.status === "READY" && <button className="primary" onClick={() => run(() => api.publish(latestAlignment.id), "任务阶段已发布")}><ChevronRight size={14}/>发布任务</button>}>
             {latestAlignment ? <AlignmentView alignment={latestAlignment} data={data} run={run}/> : <Empty>队长开始对齐后，专用 Codex 节点会在这里生成统一需求、任务稿和结构化分配。</Empty>}
           </Section>
 
-          <Section id="tasks" active={activeSection === "tasks"} eyebrow="03 · 交付" title="工作项" aside={currentStage && <div className="stage-label"><Pill tone={currentStage.status === "ACTIVE" ? "green" : currentStage.status === "COMPLETED" ? "plain" : "amber"}>{labelStatus(currentStage.status)}</Pill><b>阶段 {currentStage.sequence}</b><span>需求 R{currentStage.requirementRevision}</span></div>}>
-            {tasks.length ? <><div className="work-filters">{([ ["all", `全部 ${tasks.length}`], ["mine", `我的工作 ${tasks.filter((task) => task.assigneeNodeId === data.viewer.id).length}`], ["progress", `进行中 ${tasks.filter((task) => ["STARTING", "IN_PROGRESS"].includes(task.status)).length}`], ["confirm", `待确认 ${tasks.filter((task) => task.status === "WAITING_CONFIRMATION").length}`], ["done", `已完成 ${doneCount}`] ] as const).map(([key, title]) => <button key={key} className={taskFilter === key ? "selected" : ""} onClick={() => setTaskFilter(key)}>{title}</button>)}</div>{filteredTasks.length ? <div className="task-grid">{filteredTasks.map((task) => <TaskCard key={task.id} task={task} data={data} run={run} download={downloadTask}/>)}</div> : <Empty>当前筛选下没有工作项。</Empty>}</> : <Empty>尚未发布正式任务。对齐结果必须由队长确认后发布。</Empty>}
+          <Section id="tasks" active={activeSection === "tasks"} eyebrow="工作项" title="工作项" aside={currentStage && <div className="stage-label"><Pill tone={currentStage.status === "ACTIVE" ? "green" : currentStage.status === "COMPLETED" ? "plain" : "amber"}>{labelStatus(currentStage.status)}</Pill><b>阶段 {currentStage.sequence}</b><span>需求 R{currentStage.requirementRevision}</span></div>}>
+            <section className="page-metrics" aria-label="工作项摘要"><div className="stat"><label>模块</label><strong>{data.modules.length}</strong><small>{data.modules.filter((module) => module.status === "in_progress").length} 个进行中</small></div><div className="stat"><label>任务包</label><strong>{packageCount}</strong><small>按房间排期统计</small></div><div className="stat"><label>待确认</label><strong>{attentionCount}</strong><small>人工确认前不计完成</small></div></section>
+            <section><div className="section-head"><div><h2>模块与任务包</h2><p>按模块分组。打开任务包可查看关联的工作项。</p></div></div>{data.modules.length ? data.modules.map((module) => <div className="work-group" key={module.id}><div className="work-group-header"><div><strong>{module.name}</strong><p>{module.plannedStart && module.plannedEnd ? `计划 ${module.plannedStart} — ${module.plannedEnd}` : "模块时间待排"} · {module.packages.length} 个任务包</p></div><span className={`status ${module.status === "in_progress" ? "blue" : module.status === "done" ? "green" : module.status === "blocked" ? "amber" : ""}`}>{module.status === "in_progress" ? "进行中" : module.status === "done" ? "已完成" : module.status === "blocked" ? "受阻" : "待规划"}</span></div><div className="work-head"><span>任务包</span><span>负责人</span><span>状态</span><span>计划时间</span><span>关联任务</span><span>详情</span></div>{module.packages.length ? module.packages.map((pack) => { const linked = tasks.filter((task) => pack.taskIds.includes(task.id)); const owners = [...new Set(linked.map((task) => data.nodes.find((node) => node.id === task.assigneeNodeId)?.label ?? short(task.assigneeNodeId)))]; return <Fragment key={pack.id}><div className="work-row"><div><strong>{pack.name}</strong><small className="work-id">{pack.id}</small></div><span>{owners.length ? owners.join("、") : "未登记"}</span><span className={`status ${pack.status === "in_progress" ? "blue" : pack.status === "done" ? "green" : pack.status === "blocked" ? "amber" : ""}`}>{pack.status === "in_progress" ? "进行中" : pack.status === "done" ? "已完成" : pack.status === "blocked" ? "受阻" : "待开工"}</span><span>{pack.plannedStart && pack.plannedEnd ? `${pack.plannedStart} — ${pack.plannedEnd}` : "待排期"}</span><span>{linked.length} 项</span><button className="detail-button" aria-expanded={openPackage === pack.id} onClick={() => setOpenPackage((old) => old === pack.id ? null : pack.id)}>{openPackage === pack.id ? "收起" : "查看"}</button></div>{openPackage === pack.id && <div className="work-package-detail">{linked.length ? <div className="task-grid">{linked.map((task) => <TaskCard key={task.id} task={task} data={data} run={run} download={downloadTask}/>)}</div> : <p className="subtle-note">此任务包尚未关联本阶段工作项。</p>}</div>}</Fragment>; }) : <div className="work-empty">此模块尚无任务包。</div>}</div>) : <div className="work-empty panel">房间尚未登记模块和任务包。队长可在总览上传排期文件。</div>}</section>
+            <section className="work-task-actions"><div className="section-head"><div><h2>正式工作项</h2><p>状态来自 Host；确认完成前不会计入已完成数量。</p></div></div><div className="work-filters">{([ ["all", `全部 ${tasks.length}`], ["mine", `我的工作 ${tasks.filter((task) => task.assigneeNodeId === data.viewer.id).length}`], ["progress", `进行中 ${tasks.filter((task) => ["STARTING", "IN_PROGRESS"].includes(task.status)).length}`], ["confirm", `待确认 ${attentionCount}`], ["done", `已完成 ${doneCount}`] ] as const).map(([key, title]) => <button key={key} className={taskFilter === key ? "selected" : ""} onClick={() => setTaskFilter(key)}>{title}</button>)}</div>{filteredTasks.length ? <div className="task-grid">{filteredTasks.map((task) => <TaskCard key={task.id} task={task} data={data} run={run} download={downloadTask}/>)}</div> : <Empty>{tasks.length ? "当前筛选下没有工作项。" : "尚未发布正式任务。对齐结果须由队长确认后发布。"}</Empty>}</section>
           </Section>
 
-          <Section id="changes" active={activeSection === "changes"} eyebrow="05 · 变更" title="变更审核" aside={<FileButton label="上传变更 MD" disabled={!currentStage || currentStage.status === "COMPLETED"} onFile={(filename, content) => run(() => api.uploadChange(filename, content), `${filename} 已作为需求变更提交`)}/>}>
+          <Section id="changes" active={activeSection === "changes"} eyebrow="变更审核" title="变更审核" aside={<FileButton label="上传变更 MD" disabled={!currentStage || currentStage.status === "COMPLETED"} onFile={(filename, content) => run(() => api.uploadChange(filename, content), `${filename} 已作为需求变更提交`)}/>}>
             <div className="change-layout">
               <div className="change-list">{data.pullRequests.length ? [...data.pullRequests].reverse().map((change, index) => <button className="change-row" key={change.id} onClick={() => run(async () => { const doc = await api.document(change.documentId); const blob = new Blob([doc.content], { type: "text/markdown;charset=utf-8" }); const url = URL.createObjectURL(blob); window.open(url, "_blank", "noopener"); setTimeout(() => URL.revokeObjectURL(url), 30_000); }, "已打开变更文档")}><i>{String(index + 1).padStart(2, "0")}</i><span><code>{change.id}</code><b>{data.nodes.find((node) => node.id === change.submitterNodeId)?.label}</b></span><Pill tone={change.status === "APPLIED" ? "green" : change.status === "REJECTED" ? "red" : "amber"}>{labelStatus(change.status)}</Pill><small>{time(change.createdAt)}</small></button>) : <Empty>开发期间可以持续提交需求变更，普通成员不能开启审核。</Empty>}</div>
               <article className="review-card"><div className="review-scan" aria-hidden="true"/><div className="review-title"><span className="agent-mark"><Bot size={18}/><i/></span><div><span>审核节点</span><h3>影响审核</h3></div>{latestReview && <Pill tone={latestReview.status === "AWAITING_CAPTAIN" ? "amber" : latestReview.status === "APPLIED" ? "green" : "plain"}>{labelStatus(latestReview.status)}</Pill>}</div>{latestReview?.summaryMarkdown ? <Markdown>{latestReview.summaryMarkdown}</Markdown> : <p>{latestReview?.status === "NEEDS_EVIDENCE" ? "正在分布式取证；离线节点重连后自动补查。" : "变更按阶段合并分析。开发结束后自动审核；队长也可提前强制审核，只暂停受影响任务。"}</p>}{latestReview?.status === "NEEDS_EVIDENCE" && <div className="affected"><span>待补证节点</span>{(latestReview.pendingNodeIds ?? []).map((id) => <Pill key={id}>{data.nodes.find((node) => node.id === id)?.label ?? short(id)}{latestReview.probes?.[id]?.uncertainTaskIds.length ? ` · ${latestReview.probes[id]!.uncertainTaskIds.length} 项待确认` : ""}</Pill>)}{latestReview.error && <small>{latestReview.error}</small>}{(latestReview.pendingNodeIds ?? []).flatMap((id) => (latestReview.probes?.[id]?.findings ?? []).filter((finding) => latestReview.probes?.[id]?.uncertainTaskIds.includes(finding.taskId)).map((finding) => <small key={`${id}-${finding.taskId}`}>{short(finding.taskId)}：{finding.reason}</small>))}</div>}{latestReview?.affectedNodeIds.length ? <div className="affected"><span>受影响节点</span>{latestReview.affectedNodeIds.map((id) => <Pill key={id}>{data.nodes.find((node) => node.id === id)?.label ?? short(id)}</Pill>)}</div> : null}<div className="button-row">{captain && queuedChanges.length > 0 && currentStage?.status === "ACTIVE" && <button onClick={() => run(() => api.forceReview(), "已强制开始影响审核")}><Pause size={13}/>立即审核</button>}{captain && latestReview && ["NEEDS_EVIDENCE", "QUEUED", "RUNNING"].includes(latestReview.status) && <button className="danger" onClick={() => run(() => api.cancelReview(latestReview.id), "审核已取消，变更返回待审队列")}><X size={13}/>取消审核</button>}{captain && latestReview?.status === "AWAITING_CAPTAIN" && <><button className="primary" onClick={() => run(() => api.applyReview(latestReview.id), "审核结果已应用")}><Check size={13}/>应用</button><button className="danger" onClick={() => run(() => api.rejectReview(latestReview.id), "审核结果已退回")}><X size={13}/>退回</button></>}</div></article>
             </div>
           </Section>
 
-          <Section id="messages" active={activeSection === "messages"} eyebrow="07 · 消息" title="消息" aside={<button onClick={() => void refresh()}><RefreshCw size={13}/>刷新</button>}>
+          <Section id="messages" active={activeSection === "messages"} eyebrow="消息" title="消息" aside={<button onClick={() => void refresh()}><RefreshCw size={13}/>刷新</button>}>
             {data.notifications.length ? <div className="messages">{data.notifications.map((item, index) => <article key={item.id}><span className="message-index">{String(index + 1).padStart(2, "0")}</span><span className={`message-icon ${item.type.toLowerCase()}`}>{item.type === "TASK" ? <GitBranch size={14}/> : item.type === "REVIEW" ? <Bot size={14}/> : <Activity size={14}/>}</span><div><div><b>{item.title}</b><Pill>{item.type}</Pill></div><p>{item.body}</p></div><time>{time(item.createdAt)}</time></article>)}</div> : <Empty>暂无消息。通知持久保存，离线节点重连后也能看到。</Empty>}
           </Section>
-        </div>
+        </main>
       </div>
-
-      <footer className="footer"><span><BrandGlyph/>VIBE—GIT</span><p>Local credentials · distributed audit · explicit delivery</p><code>CONTROL SURFACE / 0.20</code></footer>
-    </main>
+    </div></div>
 
     {notice && <button className={`toast ${busy ? "is-busy" : ""}`} aria-live="polite" onClick={() => setNotice(null)}>{busy ? <span className="spinner"/> : <Check size={14}/>}<span>{notice}</span><X size={13}/></button>}
     {composerOpen && <ProposalComposer data={data} current={myPlan} onClose={() => setComposerOpen(false)} onSaved={() => refresh(true)}/>}
