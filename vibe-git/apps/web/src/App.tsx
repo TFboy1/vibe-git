@@ -38,14 +38,16 @@ import type {
   V20BootstrapPayload
 } from "@vibe-git/protocol";
 import { api, ApiError } from "./api";
+import { ModuleManager, ProjectTimeline, ProposalComposer } from "./WorkspacePanels";
 
 const NAV_ITEMS = [
-  ["nodes", "节点", "01"],
-  ["plans", "Plans", "02"],
-  ["alignment", "对齐稿", "03"],
-  ["tasks", "任务", "04"],
-  ["changes", "变更", "05"],
-  ["messages", "消息", "06"]
+  ["overview", "房间总览", "01"],
+  ["plans", "项目提案", "02"],
+  ["tasks", "工作项", "03"],
+  ["alignment", "对齐与裁决", "04"],
+  ["changes", "变更审核", "05"],
+  ["nodes", "成员与连接", "06"],
+  ["messages", "消息", "07"]
 ] as const;
 
 const SATELLITE_POSITIONS = [
@@ -61,6 +63,14 @@ const time = (value: string | null) => value
   ? new Intl.DateTimeFormat("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }).format(new Date(value))
   : "—";
 const short = (value: string | null | undefined, size = 8) => value ? value.slice(0, size) : "—";
+const statusText: Record<string, string> = {
+  DRAFT: "草稿", PUBLISHED: "已发布", REFINING: "细化中", READY: "待发布", STARTING: "准备开工",
+  IN_PROGRESS: "进行中", WAITING_CONFIRMATION: "待本人确认", PAUSED: "已暂停", BLOCKED: "受阻", DONE: "已确认完成", FAILED: "失败",
+  QUEUED: "排队中", RUNNING: "处理中", NEEDS_DECISION: "待裁决", ACTIVE: "进行中", COMPLETED: "已完成",
+  REVIEWING: "审核中", AWAITING_APPLY: "待应用", AWAITING_CAPTAIN: "待队长处理", NEEDS_EVIDENCE: "待补证",
+  APPLIED: "已应用", REJECTED: "已退回", IN_REVIEW: "审核中", CANCELLED: "已取消"
+};
+const labelStatus = (value: string) => statusText[value] ?? value;
 
 function BrandGlyph() {
   return <svg viewBox="0 0 36 36" aria-hidden="true">
@@ -118,15 +128,16 @@ function Markdown({ children }: { children: string }) {
   return <div className="markdown">{result}</div>;
 }
 
-function Section({ id, eyebrow, title, aside, children }: {
+function Section({ id, eyebrow, title, aside, children, active }: {
   id: string;
   eyebrow: string;
   title: string;
   aside?: ReactNode;
   children: ReactNode;
+  active?: boolean;
 }) {
   const [number = "", label = eyebrow] = eyebrow.split(" · ");
-  return <section id={id} className={`section section-${id}`} data-reveal>
+  return <section id={id} className={`section section-${id}`} hidden={!active}>
     <span className="chapter-number" aria-hidden="true">{number}</span>
     <header className="section-title">
       <div className="section-heading">
@@ -164,7 +175,7 @@ function FileButton({ label, onFile, disabled }: {
 function Empty({ children }: { children: ReactNode }) {
   return <div className="empty">
     <div className="empty-radar"><i/><i/><FileText size={19}/></div>
-    <div><b>等待输入</b><p>{children}</p></div>
+    <div><b>暂无内容</b><p>{children}</p></div>
   </div>;
 }
 
@@ -184,7 +195,7 @@ function Welcome({ error }: { error: string | null }) {
     <div className="welcome-shell is-visible" data-reveal>
       <div className="welcome-mark"><BrandGlyph/></div>
       <span className="kicker">VIBE—GIT / LOCAL ACCESS</span>
-      <h1>面板在等你的<br/><em>CLI 身份。</em></h1>
+      <h1>连接房间</h1>
       <p>这里不输入项目名称或成员名字。队长启动 Host，成员在自己的工作区运行加入命令，节点会自动注册。</p>
       <div className="terminal">
         <span className="terminal-lights"><i/><i/><i/></span>
@@ -208,7 +219,7 @@ function NodeCard({ node, viewer, onRevoke }: {
       <div className={`node-orb ${node.connected ? "online" : ""}`}>
         {node.role === "captain" ? <ShieldCheck size={17}/> : <Circle size={12}/>}<i/>
       </div>
-      <div><span>{node.role === "captain" ? "CONTROL NODE" : "MEMBER NODE"}</span><b>{node.label}</b><code>{short(node.id, 18)}</code></div>
+      <div><span>{node.role === "captain" ? "队长" : "成员"}</span><b>{node.label}</b><code>{short(node.id, 18)}</code></div>
       <Pill tone={node.connected ? "green" : "plain"}>{node.connected ? "在线" : "离线"}</Pill>
     </div>
     <div className="node-grid">
@@ -223,29 +234,32 @@ function NodeCard({ node, viewer, onRevoke }: {
   </article>;
 }
 
-function PlanCard({ plan, data, run, download }: {
+function PlanCard({ plan, data, download, onEdit, onWithdraw }: {
   plan: MarkdownDocument;
   data: V20BootstrapPayload;
-  run(work: () => Promise<unknown>, message: string): void;
   download(plan: MarkdownDocument): void;
+  onEdit(): void;
+  onWithdraw(): void;
 }) {
   const mine = plan.ownerNodeId === data.viewer.id;
   const owner = data.nodes.find((node) => node.id === plan.ownerNodeId);
   return <article className={`paper compact plan-card ${mine ? "is-mine" : "is-team"}`}>
     <div className="paper-fold" aria-hidden="true"/>
     <div className="paper-meta">
-      <div className="plan-owner"><span>{mine ? "MY PROPOSAL" : "TEAM PROPOSAL"}</span><b>{owner?.label ?? short(plan.ownerNodeId)}</b></div>
+      <div className="plan-owner"><span>{mine ? "我的提案" : "成员提案"}</span><b>{owner?.label ?? short(plan.ownerNodeId)}</b></div>
       <Pill tone={mine ? "green" : "plain"}>{mine ? "我的提案" : "只读"}</Pill>
       <Pill>r{plan.revision}</Pill>
       <code>{short(plan.sha256)}</code>
     </div>
     <div className="plan-filename"><FileText size={13}/><b>{plan.filename}</b><span>{Math.ceil(plan.bytes / 1024)} KiB</span></div>
+    <div className="plan-impact"><span>受影响模块</span>{plan.impactedModuleIds?.length ? plan.impactedModuleIds.map((id) => <Pill key={id} tone="blue">{data.modules.find((item) => item.id === id)?.name ?? "已移除模块"}</Pill>) : <small>{plan.impactReviewed ? "作者确认暂无已登记模块" : "影响未核实"}</small>}</div>
+    {!!plan.impactedModuleIds?.some((id) => data.plans.some((other) => other.id !== plan.id && other.impactedModuleIds?.includes(id))) && <p className="plan-overlap">有其他提案涉及相同模块，待对齐时核对。</p>}
     <Markdown>{plan.content}</Markdown>
     <footer className="plan-actions">
       <span><Eye size={12}/>团队全员可见</span>
       <div className="button-row">
         <button onClick={() => download(plan)}><ArrowDownToLine size={13}/>下载</button>
-        {mine && <FileButton label="更新我的提案" onFile={(filename, content) => run(() => api.updatePlan(plan.id, plan.revision, filename, content), `${filename} 已更新为 r${plan.revision + 1}`)}/>}
+        {mine && <><button onClick={onEdit}>更新</button><button className="danger" onClick={onWithdraw}>撤回</button></>}
       </div>
     </footer>
   </article>;
@@ -284,22 +298,22 @@ function AlignmentView({ alignment, data, run }: {
   const captain = data.viewer.role === "captain";
   return <div className="alignment-layout">
     <article className="paper alignment-paper">
-      <div className="paper-meta"><Pill tone={alignment.status === "READY" ? "green" : alignment.status === "FAILED" ? "red" : "amber"}>{alignment.status}</Pill><code>{alignment.id}</code><span>{time(alignment.createdAt)}</span></div>
+      <div className="paper-meta"><Pill tone={alignment.status === "READY" ? "green" : alignment.status === "FAILED" ? "red" : "amber"}>{labelStatus(alignment.status)}</Pill><code>{alignment.id}</code><span>{time(alignment.createdAt)}</span></div>
       {alignment.alignmentMarkdown
         ? <Markdown>{alignment.alignmentMarkdown}</Markdown>
-        : <div className="processing"><span className="processing-orbit"><Bot size={19}/><i/></span><span>{alignment.error || "专用 Codex 正在对齐需求与验收边界…"}</span></div>}
+        : <div className="processing"><span className="processing-orbit"><Bot size={19}/><i/></span><span>{alignment.error || "正在整理提案与任务草稿…"}</span></div>}
       {!!alignment.issues?.length && <div className="decision-list"><h3>队长裁决 · {alignment.issues.filter((issue) => !issue.selectedOptionId).length} 项待选择</h3>
         {alignment.issues.map((issue) => <section className="decision-card" key={issue.id}>
           <div><code>{issue.id}</code><h4>{issue.title}</h4></div>
           <div className="decision-evidence">{issue.evidence.map((item, index) => <blockquote key={`${item.nodeId}-${index}`}><b>{data.nodes.find((node) => node.id === item.nodeId)?.label ?? short(item.nodeId)}</b> · {item.excerpt}</blockquote>)}</div>
           <div className="decision-options">{issue.options.map((option) => <button key={option.id} className={issue.selectedOptionId === option.id ? "primary" : ""}
             disabled={!captain || alignment.status !== "NEEDS_DECISION"}
-            onClick={() => run(() => api.resolveAlignment(alignment.id, issue.id, option.id, alignment.decisionRevision ?? 0), "裁决已记录")}>{option.label}{issue.recommendedOptionId === option.id ? " · Agent 推荐" : ""}<small>{option.impact}</small></button>)}</div>
+            onClick={() => run(() => api.resolveAlignment(alignment.id, issue.id, option.id, alignment.decisionRevision ?? 0), "裁决已记录")}>{option.label}{issue.recommendedOptionId === option.id ? " · 建议" : ""}<small>{option.impact}</small></button>)}</div>
         </section>)}
       </div>}
     </article>
     <aside className="drafts">
-      <div className="drafts-heading"><div><span>STRUCTURED OUTPUT</span><h3>任务草稿</h3></div><b>{String(alignment.tasks.length).padStart(2, "0")}</b></div>
+      <div className="drafts-heading"><div><span>对齐结果</span><h3>任务草稿</h3></div><b>{String(alignment.tasks.length).padStart(2, "0")}</b></div>
       {alignment.tasks.map((task, index) => <article key={task.id} className="draft-card">
         <div><code>{String(index + 1).padStart(2, "0")} / {short(task.id)}</code><Pill>{task.dependencies.length ? `${task.dependencies.length} 依赖` : "可独立"}</Pill></div>
         <h4>{task.title}</h4><p>{task.goal}</p><small>{task.boundary}</small>{task.assignmentRationale && <small>分工依据：{task.assignmentRationale} · {task.effort ?? "M"}</small>}
@@ -322,10 +336,11 @@ function TaskCard({ task, data, run, download }: {
   const canStart = mine && ["PUBLISHED", "READY", "FAILED"].includes(task.status);
   return <article className={`task-card status-${task.status.toLowerCase()} ${task.status === "PAUSED" ? "paused" : ""}`}>
     <div className="task-progress" aria-hidden="true"><i/></div>
-    <div className="task-header"><div><code>{task.id}</code><h3>{task.title}</h3></div><Pill tone={task.status === "DONE" ? "green" : task.status === "FAILED" || task.status === "BLOCKED" ? "red" : task.status === "IN_PROGRESS" ? "blue" : "amber"}>{task.status}</Pill></div>
+    <div className="task-header"><div><code>{task.id}</code><h3>{task.title}</h3></div><Pill tone={task.status === "DONE" ? "green" : task.status === "FAILED" || task.status === "BLOCKED" ? "red" : task.status === "IN_PROGRESS" ? "blue" : "amber"}>{labelStatus(task.status)}</Pill></div>
     <p className="goal">{task.goal}</p>
-    <div className="boundary"><span>BOUNDARY</span>{task.boundary}</div>
+    <div className="boundary"><span>工作边界</span>{task.boundary}</div>
     <ul className="acceptance">{task.acceptance.map((item) => <li key={item}><Check size={12}/>{item}</li>)}</ul>
+    <div className="task-times"><span>发布 {time(task.publishedAt)}</span>{task.startedAt && <span>开工 {time(task.startedAt)}</span>}{task.finishedAt && <span>执行结束 {time(task.finishedAt)}</span>}{task.doneAt && <span>确认 {time(task.doneAt)}</span>}</div>
     <div className="task-foot"><span>{owner?.label ?? short(task.assigneeNodeId)}</span><span>r{task.revision}</span>{task.lastGit && <code>{short(task.lastGit.headSha)}</code>}</div>
     {(mine || data.viewer.role === "captain") && <div className="button-row">
       <button onClick={() => download(task)}><ArrowDownToLine size={13}/>下载</button>
@@ -356,7 +371,9 @@ export function App() {
   const [booting, setBooting] = useState(true);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
-  const [activeSection, setActiveSection] = useState("nodes");
+  const [activeSection, setActiveSection] = useState(() => NAV_ITEMS.some(([id]) => `#${id}` === window.location.hash) ? window.location.hash.slice(1) : "overview");
+  const [composerOpen, setComposerOpen] = useState(false);
+  const [taskFilter, setTaskFilter] = useState<"all" | "mine" | "progress" | "confirm" | "done">("all");
 
   const refresh = useCallback(async (quiet = false) => {
     try {
@@ -379,29 +396,11 @@ export function App() {
   }, [refresh]);
 
   useEffect(() => {
-    if (!data?.viewer.id) return;
-    const revealElements = document.querySelectorAll<HTMLElement>("[data-reveal]");
-    const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    const revealObserver = new IntersectionObserver((entries) => {
-      entries.forEach((entry) => {
-        if (entry.isIntersecting) {
-          entry.target.classList.add("is-visible");
-          revealObserver.unobserve(entry.target);
-        }
-      });
-    }, { threshold: 0.08, rootMargin: "0px 0px -8%" });
-    revealElements.forEach((element) => reduceMotion ? element.classList.add("is-visible") : revealObserver.observe(element));
-
-    const sectionObserver = new IntersectionObserver((entries) => {
-      const visible = entries.filter((entry) => entry.isIntersecting).sort((a, b) => b.intersectionRatio - a.intersectionRatio)[0];
-      if (visible?.target.id) setActiveSection(visible.target.id);
-    }, { threshold: [0.12, 0.35, 0.6], rootMargin: "-18% 0px -58%" });
-    NAV_ITEMS.forEach(([id]) => {
-      const section = document.getElementById(id);
-      if (section) sectionObserver.observe(section);
-    });
-    return () => { revealObserver.disconnect(); sectionObserver.disconnect(); };
-  }, [data?.viewer.id]);
+    const syncHash = () => setActiveSection(NAV_ITEMS.some(([id]) => `#${id}` === window.location.hash) ? window.location.hash.slice(1) : "overview");
+    window.addEventListener("hashchange", syncHash);
+    return () => window.removeEventListener("hashchange", syncHash);
+  }, []);
+  useEffect(() => { window.scrollTo({ top: 0, behavior: "instant" }); }, [activeSection]);
 
   const run = useCallback((work: () => Promise<unknown>, message: string) => {
     if (busy) return;
@@ -447,6 +446,11 @@ export function App() {
   const captain = data.viewer.role === "captain";
   const myPlan = data.plans.find((plan) => plan.ownerNodeId === data.viewer.id);
   const doneCount = tasks.filter((task) => task.status === "DONE").length;
+  const filteredTasks = tasks.filter((task) => taskFilter === "all" ||
+    (taskFilter === "mine" && task.assigneeNodeId === data.viewer.id) ||
+    (taskFilter === "progress" && ["STARTING", "IN_PROGRESS"].includes(task.status)) ||
+    (taskFilter === "confirm" && task.status === "WAITING_CONFIRMATION") ||
+    (taskFilter === "done" && task.status === "DONE"));
   const activeIndex = Math.max(0, NAV_ITEMS.findIndex(([id]) => id === activeSection));
   const railStyle = { "--active-step": activeIndex } as CSSProperties;
 
@@ -458,9 +462,9 @@ export function App() {
 
     <header className="topbar">
       <div className="topbar-shell">
-        <a className="brand" href="#nodes"><span><BrandGlyph/></span><div><b>VIBE—GIT</b><small>CONTROL SURFACE / 0.20</small></div></a>
+        <a className="brand" href="#overview"><span className="brand-logo"><img src="/vibe-git-logo.png" alt=""/></span><div><b>vibe-git</b><small>项目协作房间</small></div></a>
         <nav aria-label="工作流导航">{NAV_ITEMS.map(([href, label, number]) => <a href={`#${href}`} className={activeSection === href ? "active" : ""} aria-current={activeSection === href ? "location" : undefined} key={href}><i>{number}</i><span>{label}</span></a>)}</nav>
-        <div className="viewer"><span className="viewer-signal"><i className={data.viewer.connected ? "online" : ""}/><em/></span><div><b>{data.viewer.label}</b><small>{captain ? "Captain / control" : "Member / connected"}</small></div></div>
+        <div className="viewer"><span className="viewer-signal"><i className={data.viewer.connected ? "online" : ""}/><em/></span><div><b>{data.viewer.label}</b><small>{captain ? "队长" : "成员"}</small></div></div>
       </div>
     </header>
 
@@ -469,56 +473,50 @@ export function App() {
       event.currentTarget.style.setProperty("--pointer-x", `${event.clientX - rect.left}px`);
       event.currentTarget.style.setProperty("--pointer-y", `${event.clientY - rect.top}px`);
     }}>
-      <section className="overview" data-reveal>
-        <div className="overview-copy">
-          <div className="hero-coordinate"><span>CLI-FIRST COLLABORATION</span><code>{short(data.room.id, 13)}</code></div>
-          <h1>协作不是列表，<br/>是一张<em>正在生长</em>的图。</h1>
-          <p>计划留在 Markdown，身份留在本机，网页只把节点、任务与审核路径组织成一张实时控制面。</p>
-          <div className="hero-meta"><span><i className="live-dot"/>HOST LIVE</span><span>ROLE / <b>{captain ? "CAPTAIN" : "MEMBER"}</b></span><span>SYNC / <b>08 SEC</b></span></div>
-        </div>
-        <CollaborationMap data={data} taskCount={tasks.length} doneCount={doneCount}/>
-        <div className="hero-watermark" aria-hidden="true">VG<br/><span>20</span></div>
-      </section>
-
-      <SignalStrip data={data} taskCount={tasks.length}/>
-
       <div className="flow-layout">
         <aside className="flow-rail" style={railStyle} aria-label="协作流程">
-          <div className="rail-title"><Workflow size={14}/><span>FLOW MAP</span></div>
+          <div className="rail-title"><Workflow size={14}/><span>工作区</span></div>
           <div className="rail-track"><i/></div>
           <ol>{NAV_ITEMS.map(([id, label, number]) => <li className={activeSection === id ? "active" : ""} key={id}><a href={`#${id}`}><b>{number}</b><span>{label}</span></a></li>)}</ol>
-          <div className="rail-foot"><ScanLine size={13}/><span>AUTO SYNC</span></div>
+          <div className="rail-foot"><ScanLine size={13}/><span>自动同步</span></div>
         </aside>
 
         <div className="workflow-canvas">
-          <Section id="nodes" eyebrow="01 · CONNECTIONS" title="节点星图" aside={captain && <><button onClick={() => run(async () => { const invite = await api.invite(); await navigator.clipboard.writeText(invite.command); }, "加入命令已复制")}><Copy size={13}/>复制加入命令</button><button onClick={() => run(() => api.rotateInvite(), "邀请密钥已轮换")}><RotateCw size={13}/>轮换邀请</button></>}>
+          <section className="overview" id="overview" hidden={activeSection !== "overview"}>
+            <div className="page-intro"><span>房间 / 总览</span><h1>项目总览</h1><p>查看当前阶段、已确认的进度和接下来需要处理的事项。</p></div>
+            <div className="metrics"><article><span>需求版本</span><b>R{data.room.requirementRevision}</b></article><article><span>当前阶段</span><b>{currentStage ? `阶段 ${currentStage.sequence}` : "尚未发布"}</b></article><article><span>已确认工作项</span><b>{doneCount} / {tasks.length}</b></article><article><span>在线成员</span><b>{data.nodes.filter((node) => node.connected).length} / {data.nodes.length}</b></article></div>
+            <ProjectTimeline data={data}/>
+            {captain && <ModuleManager key={data.moduleRevision} data={data} onSaved={() => refresh(true)}/>}
+            <div className="overview-next"><h3>需要处理</h3><div>{latestAlignment?.status === "NEEDS_DECISION" && <a href="#alignment">对齐稿有待裁决问题 →</a>}{tasks.some((task) => task.status === "WAITING_CONFIRMATION" && task.assigneeNodeId === data.viewer.id) && <a href="#tasks">有工作项等待本人确认 →</a>}{latestReview?.status === "NEEDS_EVIDENCE" && <a href="#changes">影响审核仍需补证 →</a>}{latestReview?.status === "AWAITING_CAPTAIN" && captain && <a href="#changes">影响审核待队长处理 →</a>}{queuedChanges.length > 0 && captain && <a href="#changes">{queuedChanges.length} 项变更待审核 →</a>}{!data.plans.length && <a href="#plans">尚无项目提案 →</a>}</div></div>
+          </section>
+          <Section id="nodes" active={activeSection === "nodes"} eyebrow="06 · 成员" title="成员与连接" aside={captain && <><button onClick={() => run(async () => { const invite = await api.invite(); await navigator.clipboard.writeText(invite.command); }, "加入命令已复制")}><Copy size={13}/>复制加入命令</button><button onClick={() => run(() => api.rotateInvite(), "邀请密钥已轮换")}><RotateCw size={13}/>轮换邀请</button></>}>
             <div className="node-field"><div className="node-axis" aria-hidden="true"><span>CAPTAIN</span><i/><span>MEMBERS</span></div><div className="node-list">{data.nodes.map((node) => <NodeCard key={node.id} node={node} viewer={data.viewer} onRevoke={(id) => run(() => api.revokeNode(id), "节点已撤销")}/>)}</div></div>
-            {captain && data.tunnel && <div className="tunnel"><span className="tunnel-icon"><Cloud size={16}/><i/></span><div><small>PUBLIC EDGE</small><b>Cloudflare Quick Tunnel</b><span>{data.tunnel.url || data.tunnel.phase}</span></div><Pill tone={data.tunnel.running ? "green" : "amber"}>{data.tunnel.running ? "运行中" : data.tunnel.phase}</Pill><div className="button-row">{!data.tunnel.installed && <button onClick={() => run(() => api.tunnelInstall(), "cloudflared 已安装")}>安装</button>}{!data.tunnel.running ? <button onClick={() => run(() => api.tunnelStart(), "Tunnel 已启动")}>启动</button> : <button onClick={() => run(() => api.tunnelStop(), "Tunnel 已停止")}>停止</button>}</div></div>}
+            {captain && data.tunnel && <div className="tunnel"><span className="tunnel-icon"><Cloud size={16}/><i/></span><div><small>公开连接</small><b>Cloudflare Quick Tunnel</b><span>{data.tunnel.url || data.tunnel.phase}</span></div><Pill tone={data.tunnel.running ? "green" : "amber"}>{data.tunnel.running ? "运行中" : data.tunnel.phase}</Pill><div className="button-row">{!data.tunnel.installed && <button onClick={() => run(() => api.tunnelInstall(), "cloudflared 已安装")}>安装</button>}{!data.tunnel.running ? <button onClick={() => run(() => api.tunnelStart(), "Tunnel 已启动")}>启动</button> : <button onClick={() => run(() => api.tunnelStop(), "Tunnel 已停止")}>停止</button>}</div></div>}
           </Section>
 
-          <Section id="plans" eyebrow="02 · INPUT" title="团队提案桌面" aside={<div className="plan-toolbar"><span><Eye size={12}/>{data.plans.length} 份提案 · 全员可见</span><FileButton label={myPlan ? "更新我的提案" : "提交我的提案"} onFile={(filename, content) => run(() => myPlan ? api.updatePlan(myPlan.id, myPlan.revision, filename, content) : api.uploadPlan(filename, content), myPlan ? `${filename} 已更新为 r${myPlan.revision + 1}` : `${filename} 已作为提案提交`)}/></div>}>
+          <Section id="plans" active={activeSection === "plans"} eyebrow="02 · 提案" title="项目提案" aside={<div className="plan-toolbar"><span><Eye size={12}/>{data.plans.length} 位成员已提交</span><button className="primary" onClick={() => setComposerOpen(true)}>{myPlan ? "更新我的提案" : "提交我的提案"}</button></div>}>
             {data.plans.length
-              ? <div className="plan-grid">{data.plans.map((plan) => <PlanCard key={plan.id} plan={plan} data={data} run={run} download={downloadPlan}/>)}</div>
+              ? <div className="plan-grid">{data.plans.map((plan) => <PlanCard key={plan.id} plan={plan} data={data} download={downloadPlan} onEdit={() => setComposerOpen(true)} onWithdraw={() => { if (window.confirm("撤回后不再参与下一轮对齐。已冻结的对齐版本仍保留。确定撤回？")) run(() => api.withdrawPlan(plan.id, plan.revision), "提案已撤回"); }}/>)}</div>
               : <Empty>每位成员都可提交一份任意名称的 .md 提案。提交后全员可见，并且只有提案所有者可以继续更新。</Empty>}
             {captain && <div className="section-bottom"><span>开始时冻结每个节点的最新版本，后续上传自动进入下一轮。</span><button className="primary" disabled={!data.plans.length || busy} onClick={() => run(() => api.startAlignment(), "需求对齐已进入审核池")}><Bot size={14}/>开始对齐<ChevronRight size={13}/></button></div>}
           </Section>
 
-          <Section id="alignment" eyebrow="03 · ALIGNMENT" title="对齐工作台" aside={latestAlignment && captain && latestAlignment.status === "READY" && <button className="primary" onClick={() => run(() => api.publish(latestAlignment.id), "任务阶段已发布")}><ChevronRight size={14}/>发布任务</button>}>
+          <Section id="alignment" active={activeSection === "alignment"} eyebrow="04 · 对齐" title="对齐与裁决" aside={latestAlignment && captain && latestAlignment.status === "READY" && <button className="primary" onClick={() => run(() => api.publish(latestAlignment.id), "任务阶段已发布")}><ChevronRight size={14}/>发布任务</button>}>
             {latestAlignment ? <AlignmentView alignment={latestAlignment} data={data} run={run}/> : <Empty>队长开始对齐后，专用 Codex 节点会在这里生成统一需求、任务稿和结构化分配。</Empty>}
           </Section>
 
-          <Section id="tasks" eyebrow="04 · DELIVERY" title="任务航线" aside={currentStage && <div className="stage-label"><Pill tone={currentStage.status === "ACTIVE" ? "green" : currentStage.status === "COMPLETED" ? "plain" : "amber"}>{currentStage.status}</Pill><b>阶段 {currentStage.sequence}</b><span>需求 R{currentStage.requirementRevision}</span></div>}>
-            {tasks.length ? <div className="task-grid">{tasks.map((task) => <TaskCard key={task.id} task={task} data={data} run={run} download={downloadTask}/>)}</div> : <Empty>尚未发布正式任务。对齐结果必须由队长确认后发布。</Empty>}
+          <Section id="tasks" active={activeSection === "tasks"} eyebrow="03 · 交付" title="工作项" aside={currentStage && <div className="stage-label"><Pill tone={currentStage.status === "ACTIVE" ? "green" : currentStage.status === "COMPLETED" ? "plain" : "amber"}>{labelStatus(currentStage.status)}</Pill><b>阶段 {currentStage.sequence}</b><span>需求 R{currentStage.requirementRevision}</span></div>}>
+            {tasks.length ? <><div className="work-filters">{([ ["all", `全部 ${tasks.length}`], ["mine", `我的工作 ${tasks.filter((task) => task.assigneeNodeId === data.viewer.id).length}`], ["progress", `进行中 ${tasks.filter((task) => ["STARTING", "IN_PROGRESS"].includes(task.status)).length}`], ["confirm", `待确认 ${tasks.filter((task) => task.status === "WAITING_CONFIRMATION").length}`], ["done", `已完成 ${doneCount}`] ] as const).map(([key, title]) => <button key={key} className={taskFilter === key ? "selected" : ""} onClick={() => setTaskFilter(key)}>{title}</button>)}</div>{filteredTasks.length ? <div className="task-grid">{filteredTasks.map((task) => <TaskCard key={task.id} task={task} data={data} run={run} download={downloadTask}/>)}</div> : <Empty>当前筛选下没有工作项。</Empty>}</> : <Empty>尚未发布正式任务。对齐结果必须由队长确认后发布。</Empty>}
           </Section>
 
-          <Section id="changes" eyebrow="05 · CHANGE CONTROL" title="变更雷达" aside={<FileButton label="上传变更 MD" disabled={!currentStage || currentStage.status === "COMPLETED"} onFile={(filename, content) => run(() => api.uploadChange(filename, content), `${filename} 已作为需求变更提交`)}/>}>
+          <Section id="changes" active={activeSection === "changes"} eyebrow="05 · 变更" title="变更审核" aside={<FileButton label="上传变更 MD" disabled={!currentStage || currentStage.status === "COMPLETED"} onFile={(filename, content) => run(() => api.uploadChange(filename, content), `${filename} 已作为需求变更提交`)}/>}>
             <div className="change-layout">
-              <div className="change-list">{data.pullRequests.length ? [...data.pullRequests].reverse().map((change, index) => <button className="change-row" key={change.id} onClick={() => run(async () => { const doc = await api.document(change.documentId); const blob = new Blob([doc.content], { type: "text/markdown;charset=utf-8" }); const url = URL.createObjectURL(blob); window.open(url, "_blank", "noopener"); setTimeout(() => URL.revokeObjectURL(url), 30_000); }, "已打开变更文档")}><i>{String(index + 1).padStart(2, "0")}</i><span><code>{change.id}</code><b>{data.nodes.find((node) => node.id === change.submitterNodeId)?.label}</b></span><Pill tone={change.status === "APPLIED" ? "green" : change.status === "REJECTED" ? "red" : "amber"}>{change.status}</Pill><small>{time(change.createdAt)}</small></button>) : <Empty>开发期间可以持续提交需求变更，普通成员不能开启审核。</Empty>}</div>
-              <article className="review-card"><div className="review-scan" aria-hidden="true"/><div className="review-title"><span className="agent-mark"><Bot size={18}/><i/></span><div><span>MASTER AGENT</span><h3>影响审核</h3></div>{latestReview && <Pill tone={latestReview.status === "AWAITING_CAPTAIN" ? "amber" : latestReview.status === "APPLIED" ? "green" : "plain"}>{latestReview.status}</Pill>}</div>{latestReview?.summaryMarkdown ? <Markdown>{latestReview.summaryMarkdown}</Markdown> : <p>{latestReview?.status === "NEEDS_EVIDENCE" ? "正在分布式取证；离线节点重连后自动补查。" : "变更按阶段合并分析。开发结束后自动审核；队长也可提前强制审核，只暂停受影响任务。"}</p>}{latestReview?.status === "NEEDS_EVIDENCE" && <div className="affected"><span>待补证节点</span>{(latestReview.pendingNodeIds ?? []).map((id) => <Pill key={id}>{data.nodes.find((node) => node.id === id)?.label ?? short(id)}{latestReview.probes?.[id]?.uncertainTaskIds.length ? ` · ${latestReview.probes[id]!.uncertainTaskIds.length} 项待确认` : ""}</Pill>)}{latestReview.error && <small>{latestReview.error}</small>}{(latestReview.pendingNodeIds ?? []).flatMap((id) => (latestReview.probes?.[id]?.findings ?? []).filter((finding) => latestReview.probes?.[id]?.uncertainTaskIds.includes(finding.taskId)).map((finding) => <small key={`${id}-${finding.taskId}`}>{short(finding.taskId)}：{finding.reason}</small>))}</div>}{latestReview?.affectedNodeIds.length ? <div className="affected"><span>受影响节点</span>{latestReview.affectedNodeIds.map((id) => <Pill key={id}>{data.nodes.find((node) => node.id === id)?.label ?? short(id)}</Pill>)}</div> : null}<div className="button-row">{captain && queuedChanges.length > 0 && currentStage?.status === "ACTIVE" && <button onClick={() => run(() => api.forceReview(), "已强制开始影响审核")}><Pause size={13}/>立即审核</button>}{captain && latestReview && ["NEEDS_EVIDENCE", "QUEUED", "RUNNING"].includes(latestReview.status) && <button className="danger" onClick={() => run(() => api.cancelReview(latestReview.id), "审核已取消，变更返回待审队列")}><X size={13}/>取消审核</button>}{captain && latestReview?.status === "AWAITING_CAPTAIN" && <><button className="primary" onClick={() => run(() => api.applyReview(latestReview.id), "审核结果已应用")}><Check size={13}/>应用</button><button className="danger" onClick={() => run(() => api.rejectReview(latestReview.id), "审核结果已退回")}><X size={13}/>退回</button></>}</div></article>
+              <div className="change-list">{data.pullRequests.length ? [...data.pullRequests].reverse().map((change, index) => <button className="change-row" key={change.id} onClick={() => run(async () => { const doc = await api.document(change.documentId); const blob = new Blob([doc.content], { type: "text/markdown;charset=utf-8" }); const url = URL.createObjectURL(blob); window.open(url, "_blank", "noopener"); setTimeout(() => URL.revokeObjectURL(url), 30_000); }, "已打开变更文档")}><i>{String(index + 1).padStart(2, "0")}</i><span><code>{change.id}</code><b>{data.nodes.find((node) => node.id === change.submitterNodeId)?.label}</b></span><Pill tone={change.status === "APPLIED" ? "green" : change.status === "REJECTED" ? "red" : "amber"}>{labelStatus(change.status)}</Pill><small>{time(change.createdAt)}</small></button>) : <Empty>开发期间可以持续提交需求变更，普通成员不能开启审核。</Empty>}</div>
+              <article className="review-card"><div className="review-scan" aria-hidden="true"/><div className="review-title"><span className="agent-mark"><Bot size={18}/><i/></span><div><span>审核节点</span><h3>影响审核</h3></div>{latestReview && <Pill tone={latestReview.status === "AWAITING_CAPTAIN" ? "amber" : latestReview.status === "APPLIED" ? "green" : "plain"}>{labelStatus(latestReview.status)}</Pill>}</div>{latestReview?.summaryMarkdown ? <Markdown>{latestReview.summaryMarkdown}</Markdown> : <p>{latestReview?.status === "NEEDS_EVIDENCE" ? "正在分布式取证；离线节点重连后自动补查。" : "变更按阶段合并分析。开发结束后自动审核；队长也可提前强制审核，只暂停受影响任务。"}</p>}{latestReview?.status === "NEEDS_EVIDENCE" && <div className="affected"><span>待补证节点</span>{(latestReview.pendingNodeIds ?? []).map((id) => <Pill key={id}>{data.nodes.find((node) => node.id === id)?.label ?? short(id)}{latestReview.probes?.[id]?.uncertainTaskIds.length ? ` · ${latestReview.probes[id]!.uncertainTaskIds.length} 项待确认` : ""}</Pill>)}{latestReview.error && <small>{latestReview.error}</small>}{(latestReview.pendingNodeIds ?? []).flatMap((id) => (latestReview.probes?.[id]?.findings ?? []).filter((finding) => latestReview.probes?.[id]?.uncertainTaskIds.includes(finding.taskId)).map((finding) => <small key={`${id}-${finding.taskId}`}>{short(finding.taskId)}：{finding.reason}</small>))}</div>}{latestReview?.affectedNodeIds.length ? <div className="affected"><span>受影响节点</span>{latestReview.affectedNodeIds.map((id) => <Pill key={id}>{data.nodes.find((node) => node.id === id)?.label ?? short(id)}</Pill>)}</div> : null}<div className="button-row">{captain && queuedChanges.length > 0 && currentStage?.status === "ACTIVE" && <button onClick={() => run(() => api.forceReview(), "已强制开始影响审核")}><Pause size={13}/>立即审核</button>}{captain && latestReview && ["NEEDS_EVIDENCE", "QUEUED", "RUNNING"].includes(latestReview.status) && <button className="danger" onClick={() => run(() => api.cancelReview(latestReview.id), "审核已取消，变更返回待审队列")}><X size={13}/>取消审核</button>}{captain && latestReview?.status === "AWAITING_CAPTAIN" && <><button className="primary" onClick={() => run(() => api.applyReview(latestReview.id), "审核结果已应用")}><Check size={13}/>应用</button><button className="danger" onClick={() => run(() => api.rejectReview(latestReview.id), "审核结果已退回")}><X size={13}/>退回</button></>}</div></article>
             </div>
           </Section>
 
-          <Section id="messages" eyebrow="06 · INBOX" title="信号收件箱" aside={<button onClick={() => void refresh()}><RefreshCw size={13}/>刷新</button>}>
+          <Section id="messages" active={activeSection === "messages"} eyebrow="07 · 消息" title="消息" aside={<button onClick={() => void refresh()}><RefreshCw size={13}/>刷新</button>}>
             {data.notifications.length ? <div className="messages">{data.notifications.map((item, index) => <article key={item.id}><span className="message-index">{String(index + 1).padStart(2, "0")}</span><span className={`message-icon ${item.type.toLowerCase()}`}>{item.type === "TASK" ? <GitBranch size={14}/> : item.type === "REVIEW" ? <Bot size={14}/> : <Activity size={14}/>}</span><div><div><b>{item.title}</b><Pill>{item.type}</Pill></div><p>{item.body}</p></div><time>{time(item.createdAt)}</time></article>)}</div> : <Empty>暂无消息。通知持久保存，离线节点重连后也能看到。</Empty>}
           </Section>
         </div>
@@ -528,5 +526,6 @@ export function App() {
     </main>
 
     {notice && <button className={`toast ${busy ? "is-busy" : ""}`} aria-live="polite" onClick={() => setNotice(null)}>{busy ? <span className="spinner"/> : <Check size={14}/>}<span>{notice}</span><X size={13}/></button>}
+    {composerOpen && <ProposalComposer data={data} current={myPlan} onClose={() => setComposerOpen(false)} onSaved={() => refresh(true)}/>}
   </Fragment>;
 }

@@ -3,7 +3,8 @@ import type {
   AgentJob, AlignmentIssue, AlignmentRun, AlignmentTaskDraft, BrowserTicketResponse, CollaborationNode,
   DevelopmentStage, GitSnapshot, ImpactDecision, ImpactReviewBatch, JobResultInput,
   ImpactIndex, ImpactProbe, JoinResponse, MarkdownDocument, NodeHeartbeatInput, Notification, RateLimitWindow,
-  ReplacementTask, RepositoryContext, RoomEvent, StageTask, StageTaskStatus, V20BootstrapPayload, VibePullRequest
+  ReplacementTask, RepositoryContext, RoomEvent, StageTask, StageTaskStatus, V20BootstrapPayload, VibePullRequest,
+  ProjectModule, PlanImpactPreview
 } from "@vibe-git/protocol";
 import type { CloudflareManager } from "../integrations/cloudflare/manager.js";
 import { EventHub } from "../events/hub.js";
@@ -173,6 +174,7 @@ export class V20Service {
         seq: this.repo.lastSeq()
       },
       viewer: this.withConnection(this.repo.getNode(viewer.id) ?? viewer), nodes, plans,
+      modules: this.modules().items, moduleRevision: this.modules().revision,
       alignments: this.repo.listAlignments(), stages: this.repo.listStages(), tasks: this.repo.listTasks(),
       pullRequests: this.repo.listPullRequests(), reviews: this.repo.listReviews(),
       notifications: this.repo.listNotifications(viewer.id),
@@ -225,20 +227,85 @@ export class V20Service {
     return updated;
   }
 
-  submitPlan(node: CollaborationNode, filename: string, content: string): MarkdownDocument {
+  modules(): { revision: number; items: ProjectModule[] } {
+    const raw = this.repo.getMeta("v20_project_modules");
+    return raw ? JSON.parse(raw) as { revision: number; items: ProjectModule[] } : { revision: 0, items: [] };
+  }
+
+  setModules(node: CollaborationNode, expectedRevision: number, items: ProjectModule[]): { revision: number; items: ProjectModule[] } {
+    this.captain(node);
+    const current = this.modules();
+    if (current.revision !== expectedRevision) throw revisionConflict("模块已更新，请刷新后重试");
+    if (!Array.isArray(items) || items.length > 100) throw badRequest("模块列表无效");
+    const ids = new Set<string>();
+    const validDate = (value: unknown) => value === null || (typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value) && !Number.isNaN(Date.parse(value)));
+    const validItem = (item: { id: string; name: string; status: string; plannedStart: string | null; plannedEnd: string | null }) =>
+      item && typeof item.id === "string" && /^[a-zA-Z0-9_-]{1,64}$/.test(item.id) &&
+      typeof item.name === "string" && item.name.trim().length > 0 && item.name.length <= 100 &&
+      ["planned", "in_progress", "blocked", "done"].includes(item.status) &&
+      validDate(item.plannedStart) && validDate(item.plannedEnd) &&
+      (!item.plannedStart || !item.plannedEnd || item.plannedStart <= item.plannedEnd);
+    for (const item of items) {
+      if (!validItem(item) || ids.has(item.id) || !Array.isArray(item.packages) || item.packages.length > 100) throw badRequest("模块数据无效或 ID 重复");
+      ids.add(item.id);
+      for (const pack of item.packages) {
+        if (!validItem(pack) || ids.has(pack.id) || !Array.isArray(pack.taskIds) || pack.taskIds.some((id) => typeof id !== "string" || !this.repo.getTask(id))) throw badRequest("工作包数据无效或任务不存在");
+        ids.add(pack.id);
+      }
+    }
+    const next = { revision: current.revision + 1, items };
+    this.repo.tx(() => { this.repo.setMeta("v20_project_modules", JSON.stringify(next)); this.event("modules.updated", node.id, "room", this.repo.room()!.id, { revision: next.revision }); });
+    return next;
+  }
+
+  previewPlanImpact(node: CollaborationNode, filename: string, content: string, confirmedModuleIds: string[], expectedRevision?: number): PlanImpactPreview {
+    const validated = this.validateMarkdown(filename, content);
+    if (!Array.isArray(confirmedModuleIds) || confirmedModuleIds.length > 100 || new Set(confirmedModuleIds).size !== confirmedModuleIds.length) throw badRequest("受影响模块列表无效");
+    const modules = this.modules();
+    const known = new Set(modules.items.map((item) => item.id));
+    if (confirmedModuleIds.some((id) => !known.has(id))) throw badRequest("存在未登记的模块，请刷新后重新检查");
+    const latest = this.repo.latestDocument(node.id, "plan", null);
+    const current = this.repo.getMeta(`v20_plan_withdrawn_${node.id}`) ? undefined : latest;
+    if (expectedRevision !== undefined && (current?.revision ?? 0) !== expectedRevision) throw revisionConflict("提案已经更新，请刷新后重试");
+    const relatedPlans = this.latestPlans().filter((plan) => plan.ownerNodeId !== node.id &&
+      (plan.impactedModuleIds ?? []).some((id) => confirmedModuleIds.includes(id)))
+      .map((plan) => ({ documentId: plan.id, ownerNodeId: plan.ownerNodeId, filename: plan.filename,
+        moduleIds: (plan.impactedModuleIds ?? []).filter((id) => confirmedModuleIds.includes(id)) }));
+    const suggestedModuleIds = modules.items.filter((item) => validated.content.includes(item.name)).map((item) => item.id);
+    const basis = { nodeId: node.id, sha256: validated.sha256, filename: validated.filename,
+      confirmedModuleIds, moduleRevision: modules.revision, expectedRevision: current?.revision ?? 0,
+      planIds: this.latestPlans().map((plan) => plan.id).sort() };
+    return { assessmentId: sha256(JSON.stringify(basis)), suggestedModuleIds, confirmedModuleIds, relatedPlans,
+      moduleRevision: modules.revision, unverified: modules.items.length === 0 };
+  }
+
+  private checkedImpact(node: CollaborationNode, filename: string, content: string,
+    impact?: { assessmentId: string; confirmedModuleIds: string[]; expectedRevision?: number }, expectedRevision?: number): Pick<MarkdownDocument, "impactedModuleIds" | "impactReviewed"> {
+    if (!impact) return { impactedModuleIds: [], impactReviewed: false }; // 兼容现有 CLI；网页必须先检查。
+    if (!Number.isInteger(impact.expectedRevision) || (expectedRevision !== undefined && impact.expectedRevision !== expectedRevision)) throw badRequest("缺少有效的提案修订");
+    const preview = this.previewPlanImpact(node, filename, content, impact.confirmedModuleIds, impact.expectedRevision);
+    if (preview.assessmentId !== impact.assessmentId) throw revisionConflict("影响检查已过期，请重新检查后提交");
+    return { impactedModuleIds: preview.confirmedModuleIds, impactReviewed: !preview.unverified };
+  }
+
+  submitPlan(node: CollaborationNode, filename: string, content: string, impact?: { assessmentId: string; confirmedModuleIds: string[]; expectedRevision?: number }): MarkdownDocument {
     const validated = this.validateMarkdown(filename, content);
     const current = this.repo.latestDocument(node.id, "plan", null);
-    if (current?.sha256 === validated.sha256) return current;
+    const checked = this.checkedImpact(node, filename, content, impact);
+    if (current?.sha256 === validated.sha256 && !this.repo.getMeta(`v20_plan_withdrawn_${node.id}`) &&
+      JSON.stringify(current.impactedModuleIds ?? []) === JSON.stringify(checked.impactedModuleIds) &&
+      Boolean(current.impactReviewed) === Boolean(checked.impactReviewed)) return current;
     const document: MarkdownDocument = {
       id: id("DOC"), kind: "plan", ownerNodeId: node.id, entityId: null, filename: validated.filename,
       revision: (current?.revision ?? 0) + 1, sha256: validated.sha256, bytes: validated.bytes,
-      content: validated.content, createdAt: now()
+      content: validated.content, createdAt: now(), ...checked
     };
-    this.repo.tx(() => { this.repo.putDocument(document); this.event("plan.submitted", node.id, "document", document.id, { revision: document.revision, sha256: document.sha256 }); });
+    this.repo.tx(() => { this.repo.putDocument(document); this.repo.setMeta(`v20_plan_withdrawn_${node.id}`, ""); this.event("plan.submitted", node.id, "document", document.id, { revision: document.revision, sha256: document.sha256 }); });
     return document;
   }
 
-  updatePlan(node: CollaborationNode, documentId: string, expectedRevision: number, filename: string, content: string): MarkdownDocument {
+  updatePlan(node: CollaborationNode, documentId: string, expectedRevision: number, filename: string, content: string,
+    impact?: { assessmentId: string; confirmedModuleIds: string[]; expectedRevision?: number }): MarkdownDocument {
     const target = this.repo.getDocument(documentId);
     if (!target || target.kind !== "plan") throw notFound("提案不存在");
     if (target.ownerNodeId !== node.id) throw forbidden("只能修改自己的提案");
@@ -246,18 +313,32 @@ export class V20Service {
     if (!current || current.id !== target.id || current.revision !== expectedRevision) {
       throw revisionConflict("提案已经更新，请刷新后重试", current ? { documentId: current.id, revision: current.revision } : undefined);
     }
+    if (this.repo.getMeta(`v20_plan_withdrawn_${node.id}`)) throw revisionConflict("提案已撤回，请重新提交");
     const validated = this.validateMarkdown(filename, content);
-    if (current.sha256 === validated.sha256) return current;
+    const checked = this.checkedImpact(node, filename, content, impact, expectedRevision);
+    if (current.sha256 === validated.sha256 && JSON.stringify(current.impactedModuleIds ?? []) === JSON.stringify(checked.impactedModuleIds) &&
+      Boolean(current.impactReviewed) === Boolean(checked.impactReviewed)) return current;
     const document: MarkdownDocument = {
       id: id("DOC"), kind: "plan", ownerNodeId: node.id, entityId: null, filename: validated.filename,
       revision: current.revision + 1, sha256: validated.sha256, bytes: validated.bytes,
-      content: validated.content, createdAt: now()
+      content: validated.content, createdAt: now(), ...checked
     };
     this.repo.tx(() => {
       this.repo.putDocument(document);
       this.event("plan.updated", node.id, "document", document.id, { previousDocumentId: current.id, revision: document.revision, sha256: document.sha256 });
     });
     return document;
+  }
+
+  withdrawPlan(node: CollaborationNode, documentId: string, expectedRevision: number): { withdrawn: true; documentId: string } {
+    const target = this.repo.getDocument(documentId);
+    if (!target || target.kind !== "plan") throw notFound("提案不存在");
+    if (target.ownerNodeId !== node.id) throw forbidden("只能撤回自己的提案");
+    const current = this.repo.latestDocument(node.id, "plan", null);
+    if (!current || current.id !== target.id || current.revision !== expectedRevision || this.repo.getMeta(`v20_plan_withdrawn_${node.id}`))
+      throw revisionConflict("提案已经变化，请刷新后重试");
+    this.repo.tx(() => { this.repo.setMeta(`v20_plan_withdrawn_${node.id}`, documentId); this.event("plan.withdrawn", node.id, "document", documentId, { revision: expectedRevision }); });
+    return { withdrawn: true, documentId };
   }
 
   submitTaskDetail(node: CollaborationNode, taskId: string, filename: string, content: string): MarkdownDocument {
@@ -1271,7 +1352,7 @@ export class V20Service {
   private latestPlans(): MarkdownDocument[] {
     const latest = new Map<string, MarkdownDocument>();
     for (const plan of this.repo.listDocuments("plan")) if (!latest.has(plan.ownerNodeId)) latest.set(plan.ownerNodeId, plan);
-    return [...latest.values()].filter((plan) => !this.repo.getNode(plan.ownerNodeId)?.revoked);
+    return [...latest.values()].filter((plan) => !this.repo.getNode(plan.ownerNodeId)?.revoked && !this.repo.getMeta(`v20_plan_withdrawn_${plan.ownerNodeId}`));
   }
 
   private validateMarkdown(filename: string, content: string) {

@@ -59,6 +59,35 @@ export interface MarkdownDocument {
   bytes: number;
   content: string;
   createdAt: string;
+  impactedModuleIds?: string[];
+  impactReviewed?: boolean;
+}
+
+export interface ProjectWorkPackage {
+  id: string;
+  name: string;
+  status: "planned" | "in_progress" | "blocked" | "done";
+  plannedStart: string | null;
+  plannedEnd: string | null;
+  taskIds: string[];
+}
+
+export interface ProjectModule {
+  id: string;
+  name: string;
+  status: "planned" | "in_progress" | "blocked" | "done";
+  plannedStart: string | null;
+  plannedEnd: string | null;
+  packages: ProjectWorkPackage[];
+}
+
+export interface PlanImpactPreview {
+  assessmentId: string;
+  suggestedModuleIds: string[];
+  confirmedModuleIds: string[];
+  relatedPlans: Array<{ documentId: string; ownerNodeId: string; filename: string; moduleIds: string[] }>;
+  moduleRevision: number;
+  unverified: boolean;
 }
 
 export interface AlignmentTaskDraft {
@@ -294,6 +323,8 @@ export interface V20BootstrapPayload {
   viewer: CollaborationNode;
   nodes: CollaborationNode[];
   plans: MarkdownDocument[];
+  modules: ProjectModule[];
+  moduleRevision: number;
   alignments: AlignmentRun[];
   stages: DevelopmentStage[];
   tasks: StageTask[];

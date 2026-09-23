@@ -1,11 +1,12 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
-import type { CollaborationNode, JobResultInput, NodeHeartbeatInput } from "@vibe-git/protocol";
+import type { CollaborationNode, JobResultInput, NodeHeartbeatInput, ProjectModule } from "@vibe-git/protocol";
 import { badRequest, forbidden, notFound, unavailable } from "../domain/errors.js";
 import type { CloudflareManager } from "../integrations/cloudflare/manager.js";
 import type { V20Service } from "./service.js";
 
 type MarkdownBody = { filename?: string; content?: string };
-type PlanUpdateBody = MarkdownBody & { expectedRevision?: number };
+type PlanImpactBody = MarkdownBody & { confirmedModuleIds?: string[]; expectedRevision?: number; impact?: { assessmentId: string; confirmedModuleIds: string[]; expectedRevision?: number } };
+type PlanUpdateBody = PlanImpactBody;
 
 function firstHeader(value: string | string[] | undefined): string | undefined {
   return Array.isArray(value) ? value[0] : value;
@@ -66,15 +67,30 @@ export async function registerV20Routes(app: FastifyInstance, service: V20Servic
   app.get("/api/v1/bootstrap", async (request) => service.bootstrap(authenticate(request, service)));
   app.post<{ Body: NodeHeartbeatInput }>("/api/v1/nodes/heartbeat", async (request) => service.heartbeat(authenticate(request, service), request.body));
 
-  app.post<{ Body: MarkdownBody }>("/api/v1/plans", async (request) => {
+  app.get("/api/v1/modules", async (request) => { authenticate(request, service); return service.modules(); });
+  app.put<{ Body: { expectedRevision?: number; items?: ProjectModule[] } }>("/api/v1/modules", async (request) => {
+    const node = authenticate(request, service);
+    if (!Number.isInteger(request.body?.expectedRevision) || !Array.isArray(request.body?.items)) throw badRequest("模块修订或内容无效");
+    return service.setModules(node, Number(request.body.expectedRevision), request.body.items);
+  });
+  app.post<{ Body: PlanImpactBody }>("/api/v1/plans/impact-preview", async (request) => {
+    const node = authenticate(request, service);
+    const body = markdownBody(request.body, "提案影响检查");
+    return service.previewPlanImpact(node, body.filename, body.content, request.body?.confirmedModuleIds ?? [], request.body?.expectedRevision);
+  });
+  app.post<{ Body: PlanImpactBody }>("/api/v1/plans", async (request) => {
     const body = markdownBody(request.body, "计划");
-    return service.submitPlan(authenticate(request, service), body.filename, body.content);
+    return service.submitPlan(authenticate(request, service), body.filename, body.content, request.body.impact);
   });
   app.put<{ Params: { id: string }; Body: PlanUpdateBody }>("/api/v1/plans/:id", async (request) => {
     const body = markdownBody(request.body, "计划更新");
     const expectedRevision = request.body?.expectedRevision;
     if (!Number.isInteger(expectedRevision) || Number(expectedRevision) < 1) throw badRequest("缺少有效的 expectedRevision");
-    return service.updatePlan(authenticate(request, service), request.params.id, Number(expectedRevision), body.filename, body.content);
+    return service.updatePlan(authenticate(request, service), request.params.id, Number(expectedRevision), body.filename, body.content, request.body.impact);
+  });
+  app.delete<{ Params: { id: string }; Body: { expectedRevision?: number } }>("/api/v1/plans/:id", async (request) => {
+    if (!Number.isInteger(request.body?.expectedRevision)) throw badRequest("缺少有效的 expectedRevision");
+    return service.withdrawPlan(authenticate(request, service), request.params.id, Number(request.body.expectedRevision));
   });
   app.post<{ Params: { id: string }; Body: MarkdownBody }>("/api/v1/tasks/:id/detail", async (request) => {
     const body = markdownBody(request.body, "任务细化");

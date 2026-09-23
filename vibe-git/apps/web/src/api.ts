@@ -1,4 +1,4 @@
-import type { MarkdownDocument, V20BootstrapPayload } from "@vibe-git/protocol";
+import type { MarkdownDocument, V20BootstrapPayload, PlanImpactPreview, ProjectModule } from "@vibe-git/protocol";
 
 export class ApiError extends Error {
   constructor(readonly status: number, message: string, readonly code?: string) { super(message); }
@@ -24,8 +24,14 @@ const put = <T>(path: string, body: unknown = {}) => request<T>(path, { method: 
 
 export const api = {
   bootstrap: () => request<V20BootstrapPayload>("/api/v1/bootstrap"),
-  uploadPlan: (filename: string, content: string) => post<MarkdownDocument>("/api/v1/plans", { filename, content }),
-  updatePlan: (id: string, expectedRevision: number, filename: string, content: string) => put<MarkdownDocument>(`/api/v1/plans/${encodeURIComponent(id)}`, { expectedRevision, filename, content }),
+  previewPlanImpact: (filename: string, content: string, confirmedModuleIds: string[], expectedRevision?: number) =>
+    post<PlanImpactPreview>("/api/v1/plans/impact-preview", { filename, content, confirmedModuleIds, expectedRevision }),
+  uploadPlan: (filename: string, content: string, impact?: { assessmentId: string; confirmedModuleIds: string[]; expectedRevision: number }) =>
+    post<MarkdownDocument>("/api/v1/plans", { filename, content, impact }),
+  updatePlan: (id: string, expectedRevision: number, filename: string, content: string, impact?: { assessmentId: string; confirmedModuleIds: string[]; expectedRevision: number }) =>
+    put<MarkdownDocument>(`/api/v1/plans/${encodeURIComponent(id)}`, { expectedRevision, filename, content, impact }),
+  withdrawPlan: (id: string, expectedRevision: number) => request<{ withdrawn: true }>(`/api/v1/plans/${encodeURIComponent(id)}`, { method: "DELETE", body: JSON.stringify({ expectedRevision }) }),
+  setModules: (expectedRevision: number, items: ProjectModule[]) => put<{ revision: number; items: ProjectModule[] }>("/api/v1/modules", { expectedRevision, items }),
   uploadTask: (taskId: string, filename: string, content: string) => post<MarkdownDocument>(`/api/v1/tasks/${encodeURIComponent(taskId)}/detail`, { filename, content }),
   uploadChange: (filename: string, content: string) => post(`/api/v1/pull-requests`, { filename, content }),
   document: (id: string) => request<MarkdownDocument>(`/api/v1/documents/${encodeURIComponent(id)}`),
