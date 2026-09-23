@@ -1,5 +1,5 @@
 import { useEffect, useState, type CSSProperties } from "react";
-import type { MarkdownDocument, PlanImpactPreview, ProjectModule, V20BootstrapPayload } from "@vibe-git/protocol";
+import type { MarkdownDocument, ProjectModule, V20BootstrapPayload } from "@vibe-git/protocol";
 import { api } from "./api";
 
 const stateLabel: Record<string, string> = { planned: "待开始", in_progress: "进行中", blocked: "受阻", done: "已完成" };
@@ -9,56 +9,34 @@ export function ProposalComposer({ data, current, onClose, onSaved }: {
 }) {
   const [file, setFile] = useState<{ filename: string; content: string } | null>(null);
   const [base] = useState(() => current ? { id: current.id, revision: current.revision } : null);
-  const [selected, setSelected] = useState<string[]>(current?.impactedModuleIds ?? []);
-  const [preview, setPreview] = useState<PlanImpactPreview | null>(null);
-  const [checked, setChecked] = useState(false);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState("");
   useEffect(() => { const onKey = (event: KeyboardEvent) => { if (event.key === "Escape") onClose(); }; window.addEventListener("keydown", onKey); return () => window.removeEventListener("keydown", onKey); }, [onClose]);
-  const check = async () => {
-    if (!file) { setError("请先选择 .md 文件"); return; }
-    setPending(true); setError("");
-    try { setPreview(await api.previewPlanImpact(file.filename, file.content, selected, base?.revision ?? 0)); setChecked(false); }
-    catch (cause) { setPreview(null); setError(cause instanceof Error ? cause.message : String(cause)); }
-    finally { setPending(false); }
-  };
   const submit = async () => {
-    if (!file || !preview || !checked) return;
+    if (!file) return;
     setPending(true); setError("");
     try {
-      const impact = { assessmentId: preview.assessmentId, confirmedModuleIds: selected, expectedRevision: base?.revision ?? 0 };
-      if (base) await api.updatePlan(base.id, base.revision, file.filename, file.content, impact);
-      else await api.uploadPlan(file.filename, file.content, impact);
+      if (base) await api.updatePlan(base.id, base.revision, file.filename, file.content);
+      else await api.uploadPlan(file.filename, file.content);
       await onSaved(); onClose();
-    } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); setPreview(null); setChecked(false); }
+    } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
     finally { setPending(false); }
   };
   return <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
     <section className="modal-card" role="dialog" aria-modal="true" aria-label={current ? "更新我的提案" : "提交我的提案"}>
-      <header><div><small>项目提案</small><h2>{current ? "更新我的提案" : "提交我的提案"}</h2><p>从本机选择 Markdown 文件。每位成员在房间里保留一份最新提案。</p></div><button onClick={onClose} aria-label="关闭">×</button></header>
+      <header><div><small>项目提案</small><h2>{current ? "更新我的提案" : "提交我的提案"}</h2><p>从本机选择 Markdown 文件。旧版本会保留，模块影响由队长发起的 Agent 对齐审核分析。</p></div><button onClick={onClose} aria-label="关闭">×</button></header>
       <div className="modal-body">
-        <label className="file-pick">选择 .md 文件<input type="file" accept=".md,text/markdown" onChange={async (event) => {
+        <label className="file-pick"><span className="file-pick-icon" aria-hidden="true">↑</span><strong>选择 .md 文件</strong><small>UTF-8 · 最大 256 KiB</small><input type="file" accept=".md,text/markdown" aria-label="选择提案 Markdown 文件" onChange={async (event) => {
           const picked = event.currentTarget.files?.[0]; if (!picked) return;
-          setPreview(null); setChecked(false);
           if (!/\.md$/i.test(picked.name) || picked.size > 256 * 1024) { setError("请选择不超过 256 KiB 的 .md 文件"); return; }
           try { setFile({ filename: picked.name, content: new TextDecoder("utf-8", { fatal: true }).decode(await picked.arrayBuffer()) }); setError(""); }
           catch { setError("文件必须为 UTF-8 Markdown"); }
         }}/></label>
         {file && <div className="selected-file"><b>{file.filename}</b><span>{Math.ceil(new TextEncoder().encode(file.content).length / 1024)} KiB · 本地待提交</span></div>}
-        <h3>受影响模块</h3>
-        {data.modules.length ? <div className="module-choices">{data.modules.map((module) => <label key={module.id}><input type="checkbox" checked={selected.includes(module.id)} onChange={(event) => {
-          setSelected((old) => event.target.checked ? [...old, module.id] : old.filter((id) => id !== module.id)); setPreview(null); setChecked(false);
-        }}/>{module.name}</label>)}</div> : <p className="subtle-note">房间尚未登记模块。可以提交提案，但影响范围会标为“未核实”；队长登记模块后可重新检查。</p>}
-        <button disabled={!file || pending} onClick={() => void check()}>检查影响</button>
-        {preview && <div className="impact-preview">
-          <b>{preview.unverified ? "模块尚未拆分，影响未核实" : `已核对 ${preview.confirmedModuleIds.length} 个模块`}</b>
-          {preview.suggestedModuleIds.length > 0 && <p>正文明确提到：{preview.suggestedModuleIds.map((id) => data.modules.find((item) => item.id === id)?.name ?? id).join("、")}。请检查选择是否完整。</p>}
-          {preview.relatedPlans.length > 0 ? <p>另有 {preview.relatedPlans.length} 位成员的提案涉及相同模块，可能需要在对齐时比较。这里不判断两份内容是否矛盾。</p> : <p>当前未发现其他提案登记了相同模块；这不代表内容已经核对无冲突。</p>}
-          <label><input type="checkbox" checked={checked} onChange={(event) => setChecked(event.target.checked)}/>我已核对所选模块及上述提示</label>
-        </div>}
+        <div className="impact-preview"><b>模块影响交给队长端审核</b><p>提交时无需指定模块。{data.modules.length ? `队长端 Agent 会对照房间登记的 ${data.modules.length} 个模块分析正文，结果附在冻结的提案版本上。` : "房间尚未登记模块，审核前需先登记模块。"}审核完成前显示“待分析”。</p></div>
         {error && <p className="form-error" role="alert">{error}</p>}
       </div>
-      <footer><button onClick={onClose}>取消</button><button className="primary" disabled={!preview || !checked || pending} onClick={() => void submit()}>{pending ? "处理中…" : current ? "保存更新" : "提交提案"}</button></footer>
+      <footer><button onClick={onClose}>取消</button><button className="primary" disabled={!file || pending} onClick={() => void submit()}>{pending ? "处理中…" : current ? "保存更新" : "提交提案"}</button></footer>
     </section>
   </div>;
 }

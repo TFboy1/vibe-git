@@ -92,8 +92,8 @@ export class V20Repository {
 
   listTasks(stageId?: string): StageTask[] {
     const rows = stageId
-      ? this.db.prepare("SELECT data FROM v20_stage_tasks WHERE stage_id = ? ORDER BY id").all(stageId)
-      : this.db.prepare("SELECT data FROM v20_stage_tasks ORDER BY stage_id, id").all();
+      ? this.db.prepare("SELECT data FROM v20_stage_tasks WHERE stage_id = ? AND json_extract(data, '$.archivedAt') IS NULL ORDER BY id").all(stageId)
+      : this.db.prepare("SELECT data FROM v20_stage_tasks WHERE json_extract(data, '$.archivedAt') IS NULL ORDER BY stage_id, id").all();
     return (rows as { data: string }[]).map((row) => JSON.parse(row.data) as StageTask);
   }
   getTask(id: string): StageTask | undefined { return parse<StageTask>(this.db.prepare("SELECT data FROM v20_stage_tasks WHERE id = ?").get(id) as { data: string } | undefined); }

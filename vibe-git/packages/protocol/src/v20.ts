@@ -61,6 +61,7 @@ export interface MarkdownDocument {
   createdAt: string;
   impactedModuleIds?: string[];
   impactReviewed?: boolean;
+  restoredFromDocumentId?: string;
 }
 
 export interface ProjectWorkPackage {
@@ -101,6 +102,8 @@ export interface AlignmentTaskDraft {
   sourcePlanNodeIds: string[];
   assignmentRationale?: string;
   effort?: "S" | "M" | "L";
+  dependencyEdges?: DependencyEdge[] | undefined;
+  executionSpec?: TaskExecutionSpec | undefined;
 }
 
 export interface AlignmentIssue {
@@ -112,10 +115,62 @@ export interface AlignmentIssue {
   selectedOptionId: string | null;
 }
 
+export interface PlanImpactFinding {
+  documentId: string;
+  moduleIds: string[];
+  rationale: string;
+}
+
+export interface DependencyEdge {
+  upstreamTaskId: string;
+  mode: "HARD" | "CONTRACT";
+  contractId: string | null;
+  contractRevision: number | null;
+}
+
+export interface TaskExecutionSpec {
+  deliverables: string[];
+  ownedPaths: string[];
+  forbiddenPaths: string[];
+  requirementRefs: string[];
+  interfaceInputsOutputs: string[];
+  errorCases: string[];
+  mockStrategy: string;
+  integrationSteps: string[];
+  verificationCommands: string[];
+  completionConditions: string[];
+  dependencyReasons: string[];
+}
+
+export interface Workstream {
+  id: string;
+  assigneeNodeId: string;
+  taskIds: string[];
+  summary: string;
+  markdown?: string;
+}
+
+export interface InterfaceContract {
+  id: string;
+  providerTaskId: string;
+  consumerTaskId: string;
+  providerNodeId: string;
+  consumerNodeId: string;
+  signature: string;
+  behavior: string;
+  errorExamples: string[];
+  testCommand: string;
+  handoffArtifact: string;
+  revision: number;
+  hash: string;
+  acknowledgements: Record<string, string>;
+  publishedAt: string | null;
+}
+
 export type AlignmentStatus = "QUEUED" | "RUNNING" | "NEEDS_DECISION" | "READY" | "PUBLISHED" | "FAILED";
 export interface AlignmentRun {
   id: string;
-  source: "plans" | "change_review";
+  source: "plans" | "change_review" | "replan";
   status: AlignmentStatus;
   planSnapshot: Array<{ nodeId: string; documentId: string; revision: number; sha256: string }>;
   requirementBaseRevision: number;
@@ -128,7 +183,7 @@ export interface AlignmentRun {
   createdAt: string;
   completedAt: string | null;
   publishedStageId: string | null;
-  phase?: "ANALYZE" | "FINALIZE";
+  phase?: "ANALYZE" | "FINALIZE" | "DETAIL";
   issues?: AlignmentIssue[];
   decisionRevision?: number;
   repositoryContext?: RepositoryContext | null;
@@ -136,6 +191,14 @@ export interface AlignmentRun {
   summaryJobIds?: string[];
   summaryParts?: Record<string, string>;
   summaryRound?: number;
+  planImpacts?: PlanImpactFinding[];
+  moduleRevisionSnapshot?: number;
+  workstreams?: Workstream[] | undefined;
+  contracts?: InterfaceContract[] | undefined;
+  detailJobIds?: string[];
+  detailParts?: Record<string, string>;
+  replanStageId?: string;
+  replanTaskSnapshot?: Record<string, number>;
 }
 
 export type StageStatus = "ACTIVE" | "REVIEWING" | "AWAITING_APPLY" | "COMPLETED";
@@ -151,6 +214,8 @@ export interface DevelopmentStage {
   completedAt: string | null;
   baselineSha?: string | null;
   nextStageDraftTasks?: ReplacementTask[];
+  workstreams?: Workstream[] | undefined;
+  contracts?: InterfaceContract[] | undefined;
 }
 
 export interface ImpactIndex {
@@ -181,9 +246,11 @@ export type StageTaskStatus =
   | "PUBLISHED"
   | "REFINING"
   | "READY"
+  | "MOCK_PREPARING"
   | "STARTING"
   | "IN_PROGRESS"
   | "WAITING_CONFIRMATION"
+  | "WAITING_INTEGRATION"
   | "PAUSED"
   | "BLOCKED"
   | "DONE"
@@ -198,6 +265,12 @@ export interface StageTask {
   boundary: string;
   acceptance: string[];
   dependencies: string[];
+  dependencyEdges?: DependencyEdge[] | undefined;
+  executionSpec?: TaskExecutionSpec | undefined;
+  workstreamId?: string | undefined;
+  mockReadiness?: { contractHashes: Record<string, string>; passed: boolean; summary: string; recordedAt: string } | null;
+  integration?: { providerCommits: Record<string, string>; passed: boolean; summary: string; recordedAt: string } | null;
+  archivedAt?: string | null;
   sourcePlanNodeIds: string[];
   status: StageTaskStatus;
   revision: number;
@@ -233,12 +306,14 @@ export interface ImpactDecision {
 
 export interface ReplacementTask {
   sourceTaskId: string | null;
+  changeIds?: string[];
   title: string;
   goal: string;
   boundary: string;
   acceptance: string[];
   assigneeNodeId: string;
   dependencies?: string[];
+  executionSpec?: TaskExecutionSpec;
 }
 
 export type ImpactReviewStatus = "QUEUED" | "RUNNING" | "NEEDS_EVIDENCE" | "AWAITING_CAPTAIN" | "APPLIED" | "REJECTED" | "FAILED" | "CANCELLED";
@@ -254,6 +329,7 @@ export interface ImpactReviewBatch {
   affectedTaskIds: string[];
   affectedNodeIds: string[];
   replacementTasks: ReplacementTask[];
+  contractUpdates?: Array<{ contractId: string; changeIds: string[]; signature: string; behavior: string; errorExamples: string[]; testCommand: string; handoffArtifact: string }>;
   pausedTaskStates: Record<string, StageTaskStatus>;
   executorNodeId: string | null;
   agentJobId: string | null;
@@ -277,7 +353,7 @@ export interface ImpactReviewBatch {
   clearedNodeIds?: string[];
 }
 
-export type AgentJobKind = "ALIGN_PLANS" | "ALIGN_FINALIZE" | "SUMMARIZE_PLAN" | "SUMMARIZE_CHANGE" | "IMPACT_INDEX" | "IMPACT_PROBE" | "REVIEW_CHANGES" | "RUN_TASK" | "INTERRUPT_TASK" | "SYNC_NODE";
+export type AgentJobKind = "ALIGN_PLANS" | "ALIGN_FINALIZE" | "DETAIL_WORKSTREAM" | "SUMMARIZE_PLAN" | "SUMMARIZE_CHANGE" | "IMPACT_INDEX" | "IMPACT_PROBE" | "REVIEW_CHANGES" | "PREPARE_MOCK" | "RUN_TASK" | "INTERRUPT_TASK" | "SYNC_NODE";
 export type AgentJobStatus = "QUEUED" | "LEASED" | "RUNNING" | "COMPLETED" | "FAILED" | "CANCELLED";
 export interface AgentJob {
   id: string;

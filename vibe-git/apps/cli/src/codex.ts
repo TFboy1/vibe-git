@@ -64,14 +64,14 @@ export async function runAudit(prompt: string, schema: unknown, workspace: strin
   } finally { await rm(temp, { recursive: true, force: true }).catch(() => undefined); }
 }
 
-export async function startDevelopment(prompt: string, workspaceRaw: string, requested: WorkTransport): Promise<ActiveRun> {
+export async function startDevelopment(prompt: string, workspaceRaw: string, requested: WorkTransport, networkAccess = true): Promise<ActiveRun> {
   const workspace = resolve(workspaceRaw);
   const probe = probeCodex();
   if (probe.state !== "available") throw new Error("日常 Codex CLI 未登录或不可用");
   const transport = requested === "cli" ? "cli" : requested === "app-server" ? "app-server" : probe.appServer ? "app-server" : "cli";
   if (transport === "app-server" && !probe.appServer) throw new Error("本机 Codex App Server 不可用");
   if (transport === "app-server") {
-    try { return await startAppServer(prompt, workspace); }
+    try { return await startAppServer(prompt, workspace, networkAccess); }
     catch (error) {
       if (requested !== "auto") throw error;
       return startCli(prompt, workspace);
@@ -125,7 +125,7 @@ async function startCli(prompt: string, workspace: string): Promise<ActiveRun> {
   };
 }
 
-async function startAppServer(prompt: string, workspace: string): Promise<ActiveRun> {
+async function startAppServer(prompt: string, workspace: string, networkAccess: boolean): Promise<ActiveRun> {
   const child = spawn(executable(), ["app-server", "--stdio"], { cwd: workspace, windowsHide: true, stdio: ["pipe", "pipe", "pipe"] });
   const client = new AppServerClient(child);
   try {
@@ -136,7 +136,7 @@ async function startAppServer(prompt: string, workspace: string): Promise<Active
     }, 20_000);
     const turn = await client.request<{ turn: { id: string } }>("turn/start", {
       threadId: thread.thread.id, input: [{ type: "text", text: prompt }], cwd: workspace,
-      approvalPolicy: "never", sandboxPolicy: { type: "workspaceWrite", writableRoots: [workspace], networkAccess: true }, summary: "concise"
+      approvalPolicy: "never", sandboxPolicy: { type: "workspaceWrite", writableRoots: [workspace], networkAccess }, summary: "concise"
     }, 30_000);
     const runtimeId = `${thread.thread.id}:${turn.turn.id}`;
     return {

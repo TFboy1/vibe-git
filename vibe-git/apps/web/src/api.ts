@@ -1,4 +1,4 @@
-import type { MarkdownDocument, V20BootstrapPayload, PlanImpactPreview, ProjectModule } from "@vibe-git/protocol";
+import type { MarkdownDocument, V20BootstrapPayload, ProjectModule } from "@vibe-git/protocol";
 
 export class ApiError extends Error {
   constructor(readonly status: number, message: string, readonly code?: string) { super(message); }
@@ -24,12 +24,11 @@ const put = <T>(path: string, body: unknown = {}) => request<T>(path, { method: 
 
 export const api = {
   bootstrap: () => request<V20BootstrapPayload>("/api/v1/bootstrap"),
-  previewPlanImpact: (filename: string, content: string, confirmedModuleIds: string[], expectedRevision?: number) =>
-    post<PlanImpactPreview>("/api/v1/plans/impact-preview", { filename, content, confirmedModuleIds, expectedRevision }),
-  uploadPlan: (filename: string, content: string, impact?: { assessmentId: string; confirmedModuleIds: string[]; expectedRevision: number }) =>
-    post<MarkdownDocument>("/api/v1/plans", { filename, content, impact }),
-  updatePlan: (id: string, expectedRevision: number, filename: string, content: string, impact?: { assessmentId: string; confirmedModuleIds: string[]; expectedRevision: number }) =>
-    put<MarkdownDocument>(`/api/v1/plans/${encodeURIComponent(id)}`, { expectedRevision, filename, content, impact }),
+  planHistory: (limit = 100, offset = 0) => request<{ total: number; items: Array<Omit<MarkdownDocument, "content"> & { current: boolean; withdrawn: boolean }> }>(`/api/v1/plans/history?limit=${limit}&offset=${offset}`),
+  uploadPlan: (filename: string, content: string) => post<MarkdownDocument>("/api/v1/plans", { filename, content }),
+  updatePlan: (id: string, expectedRevision: number, filename: string, content: string) =>
+    put<MarkdownDocument>(`/api/v1/plans/${encodeURIComponent(id)}`, { expectedRevision, filename, content }),
+  restorePlan: (id: string, expectedRevision: number) => post<MarkdownDocument>(`/api/v1/plans/${encodeURIComponent(id)}/restore`, { expectedRevision }),
   withdrawPlan: (id: string, expectedRevision: number) => request<{ withdrawn: true }>(`/api/v1/plans/${encodeURIComponent(id)}`, { method: "DELETE", body: JSON.stringify({ expectedRevision }) }),
   setModules: (expectedRevision: number, items: ProjectModule[]) => put<{ revision: number; items: ProjectModule[] }>("/api/v1/modules", { expectedRevision, items }),
   uploadTask: (taskId: string, filename: string, content: string) => post<MarkdownDocument>(`/api/v1/tasks/${encodeURIComponent(taskId)}/detail`, { filename, content }),
@@ -40,9 +39,18 @@ export const api = {
   resolveAlignment: (alignmentId: string, issueId: string, optionId: string, expectedRevision: number) => post(`/api/v1/alignments/${encodeURIComponent(alignmentId)}/resolve`, { issueId, optionId, expectedRevision }),
   assign: (alignmentId: string, taskId: string, assigneeNodeId: string) => post(`/api/v1/alignments/${encodeURIComponent(alignmentId)}/assign`, { taskId, assigneeNodeId }),
   publish: (alignmentId: string) => post(`/api/v1/alignments/${encodeURIComponent(alignmentId)}/publish`),
+  contractAck: (alignmentId: string, contractId: string, revision: number, hash: string) => post(`/api/v1/alignments/${encodeURIComponent(alignmentId)}/contracts/${encodeURIComponent(contractId)}/ack`, { revision, hash }),
+  publishContracts: (alignmentId: string) => post(`/api/v1/alignments/${encodeURIComponent(alignmentId)}/contracts/publish`),
+  downgradeContract: (alignmentId: string, contractId: string, expectedHash: string) => post(`/api/v1/alignments/${encodeURIComponent(alignmentId)}/contracts/${encodeURIComponent(contractId)}/downgrade`, { expectedHash }),
+  replanStage: (stageId: string) => post(`/api/v1/stages/${encodeURIComponent(stageId)}/replan`),
+  stageContractAck: (stageId: string, contractId: string, revision: number, hash: string) => post(`/api/v1/stages/${encodeURIComponent(stageId)}/contracts/${encodeURIComponent(contractId)}/ack`, { revision, hash }),
+  publishStageContracts: (stageId: string) => post(`/api/v1/stages/${encodeURIComponent(stageId)}/contracts/publish`),
+  downgradeStageContract: (stageId: string, contractId: string, expectedHash: string) => post(`/api/v1/stages/${encodeURIComponent(stageId)}/contracts/${encodeURIComponent(contractId)}/downgrade`, { expectedHash }),
+  workstream: (id: string) => request<{ markdown: string }>(`/api/v1/workstreams/${encodeURIComponent(id)}`),
   taskStart: (id: string) => post(`/api/v1/tasks/${encodeURIComponent(id)}/start`),
   taskSync: (id: string) => post(`/api/v1/tasks/${encodeURIComponent(id)}/sync`),
   taskDone: (id: string) => post(`/api/v1/tasks/${encodeURIComponent(id)}/done`),
+  taskIntegrate: (id: string, providerCommits: Record<string, string>, summary: string) => post(`/api/v1/tasks/${encodeURIComponent(id)}/integrate`, { providerCommits, summary }),
   forceReview: () => post(`/api/v1/reviews`, { force: true }),
   applyReview: (id: string) => post(`/api/v1/reviews/${encodeURIComponent(id)}/apply`),
   rejectReview: (id: string) => post(`/api/v1/reviews/${encodeURIComponent(id)}/reject`),
