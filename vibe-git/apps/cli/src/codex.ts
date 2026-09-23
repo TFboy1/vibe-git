@@ -137,7 +137,7 @@ async function startAppServer(prompt: string, workspace: string): Promise<Active
     await client.request("initialize", { clientInfo: { name: "vibe_git", title: "Vibe-Git", version: "0.20.0" } }, 20_000);
     client.notify("initialized", {});
     const thread = await client.request<{ thread: { id: string } }>("thread/start", {
-      cwd: workspace, approvalPolicy: "never", sandbox: "workspaceWrite", serviceName: "vibe_git"
+      cwd: workspace, approvalPolicy: "never", sandbox: "workspace-write", serviceName: "vibe_git"
     }, 20_000);
     const turn = await client.request<{ turn: { id: string } }>("turn/start", {
       threadId: thread.thread.id, input: [{ type: "text", text: prompt }], cwd: workspace,

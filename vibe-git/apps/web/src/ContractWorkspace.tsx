@@ -2,7 +2,7 @@ import { Markdown } from "./Markdown";
 import { useState } from "react";
 import type { AlignmentRun, StageTask, V20BootstrapPayload } from "@vibe-git/protocol";
 import { api, localCapabilities, localChat, localFinalize, type ExecutionDetail } from "./api";
-import "./contract-workspace.css";
+
 
 const label = (data: V20BootstrapPayload, id: string) => data.nodes.find((node) => node.id === id)?.label ?? id.slice(0, 14);
 const download = (filename: string, markdown: string) => {
@@ -15,38 +15,39 @@ export function ContractBoard({ alignment, data, run }: { alignment: AlignmentRu
   run(work: () => Promise<unknown>, message: string): void }) {
   const contracts = data.contracts.filter((item) => item.alignmentId === alignment.id);
   const captain = data.viewer.role === "captain";
-  return <section className="contract-board"><div className="contract-head"><div><small>INTERFACE CONTRACTS</small><h3>并行工作的交接面</h3><p>双方确认同一版本后，消费方才能用本机 Codex 生成 Mock。</p></div><strong>{contracts.length}</strong></div>
+  return <section className="contract-board"><div className="contract-head"><div><small>接口契约</small><h3>并行工作的交接面</h3><p>双方确认同一版本后，消费方才能用本机 Codex 生成接口替身。</p></div><strong>{contracts.length}</strong></div>
     {contracts.length ? contracts.map((contract) => {
-      const participants = [...new Set(alignment.tasks.filter((task) => task.id === contract.providerTaskId || contract.consumerTaskIds.includes(task.id)).map((task) => task.assigneeNodeId))];
+      const participants = [...new Set((contract.stageId ? data.tasks : alignment.tasks).filter((task) => task.id === contract.providerTaskId || contract.consumerTaskIds.includes(task.id)).map((task) => task.assigneeNodeId))];
       const mine = participants.includes(data.viewer.id);
-      return <article className="contract-entry" key={contract.id}><div className="contract-title"><div><code>{contract.id} · r{contract.revision}</code><h4>{contract.name}</h4></div><span>{participants.every((id) => contract.acknowledgedNodeIds.includes(id)) ? "双方已确认" : "等待确认"}</span></div>
+      return <article className="contract-entry" key={contract.id}><div className="contract-title"><div><code>{contract.id} · r{contract.revision}</code><h4>{contract.name}</h4></div><span>{participants.length > 0 && participants.every((id) => contract.acknowledgedNodeIds.includes(id)) ? "双方已确认" : "等待确认"}</span></div>
         <p>{contract.signature}</p><div className="contract-grid"><div><b>行为</b>{contract.behavior.map((item, index) => <small key={index}>{item}</small>)}</div><div><b>样例与错误</b>{[...contract.examples, ...contract.errors].map((item, index) => <small key={index}>{item}</small>)}</div></div>
         <p className="contract-meta">验证：{contract.testCommand} · 交接：{contract.handoff}</p>
         <div className="contract-actions"><span>{participants.map((id) => `${label(data, id)} ${contract.acknowledgedNodeIds.includes(id) ? "✓" : "待确认"}`).join(" · ")}</span>
-          {mine && contract.status === "DRAFT" && !contract.acknowledgedNodeIds.includes(data.viewer.id) && <button onClick={() => run(() => api.contractAck(contract), "接口契约已确认")}>确认此版本</button>}</div>
+          {mine && contract.status === "DRAFT" && !contract.acknowledgedNodeIds.includes(data.viewer.id) && <button onClick={() => run(() => api.contractAck(contract), "接口契约已确认")}>确认此版本</button>}{captain && contract.stageId && contract.status === "DRAFT" && <button disabled={!participants.length || participants.some(id => !contract.acknowledgedNodeIds.includes(id))} onClick={()=>run(()=>api.contractPublish(contract),"接口新版本已发布")}>发布新版本</button>}</div>
         {captain && alignment.status === "READY" && alignment.tasks.flatMap((task) => (task.dependencyEdges ?? []).filter((edge) => edge.contractId === contract.id).map((edge) =>
           <button className="contract-downgrade" key={`${task.id}-${edge.upstreamTaskId}`} onClick={() => run(() => api.downgradeDependency(alignment.id, task.id, edge.upstreamTaskId), "依赖已降级为硬等待")}>
             {task.title} ← {alignment.tasks.find((item) => item.id === edge.upstreamTaskId)?.title ?? edge.upstreamTaskId} · 改为等待上游完成
           </button>))}
       </article>;
-    }) : <p className="contract-empty">本轮没有可 Mock 的跨成员接口；硬依赖仍等待上游交付。</p>}
+    }) : <p className="contract-empty">本轮没有需要接口替身的跨成员接口；硬依赖仍等待上游交付。</p>}
   </section>;
 }
 
 export function WorkstreamBoard({ stageId, data }: { stageId: string | undefined; data: V20BootstrapPayload }) {
+  const [error, setError] = useState("");
   const workstreams = data.workstreams.filter((item) => item.stageId === stageId && item.status === "PUBLISHED");
   if (!workstreams.length) return null;
-  return <section className="workstream-board"><div className="contract-head"><div><small>WORKSTREAMS</small><h3>成员工作主线</h3><p>一人一条完整主线；切片分别开工、同步和验收。</p></div></div><div className="workstream-grid">{workstreams.map((item) => {
+  return <section className="workstream-board">{error && <p role="alert" className="form-error">{error}</p>}<div className="contract-head"><div><small>工作主线</small><h3>成员工作主线</h3><p>一人一条完整主线；切片分别开工、同步和验收。</p></div></div><div className="workstream-grid">{workstreams.map((item) => {
     const tasks = item.taskIds.map((id) => data.tasks.find((task) => task.id === id)).filter((task): task is StageTask => Boolean(task));
     return <article className="workstream-entry" key={item.id}><div><code>{item.id}</code><span>{label(data, item.ownerNodeId)}</span></div><h4>{item.mission}</h4><p>{item.boundary}</p><ol>{tasks.map((task) => <li key={task.id}><b>{task.title}</b><small>{task.status} · {task.dependencyEdges?.length ?? task.dependencies.length} 条依赖</small></li>)}</ol>
-      {(data.viewer.role === "captain" || data.viewer.id === item.ownerNodeId) && <button onClick={() => void api.workstreamBrief(item.id).then((markdown) => download("workstream.md", markdown))}>下载完整工作主线</button>}
+      {(data.viewer.role === "captain" || data.viewer.id === item.ownerNodeId) && <button onClick={() => void api.workstreamBrief(item.id).then((markdown) => download("workstream.md", markdown)).catch(e => setError(e instanceof Error ? e.message : String(e)))}>下载完整工作主线</button>}
     </article>;
   })}</div></section>;
 }
 
 function detailMarkdown(detail: ExecutionDetail): string {
   return ["# 切片执行细化", "", "## 实施步骤", ...detail.steps.map((item) => `- ${item}`), "", "## 文件范围",
-    ...detail.files.map((item) => `- ${item}`), "", "## Mock 使用", detail.mockUsage, "", "## 验证",
+    ...detail.files.map((item) => `- ${item}`), "", "## 接口替身使用", detail.mockUsage, "", "## 验证",
     ...detail.validation.map((item) => `- ${item}`), "", "## 备注", detail.notes].join("\n");
 }
 export function TaskChat({ task, onSaved }: { task: StageTask; onSaved(): void }) {

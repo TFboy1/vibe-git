@@ -1,8 +1,22 @@
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
-    "module": "ESNext", "moduleResolution": "Bundler", "jsx": "react-jsx", "noEmit": true,
-    "types": ["vite/client"], "allowImportingTsExtensions": true
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "jsx": "react-jsx",
+    "noEmit": true,
+    "types": [
+      "vite/client"
+    ],
+    "allowImportingTsExtensions": true
   },
-  "include": ["src/**/*.ts", "src/**/*.tsx", "vite.config.ts"]
+  "include": [
+    "src/**/*.ts",
+    "src/**/*.tsx",
+    "vite.config.ts"
+  ],
+  "exclude": [
+    "src/review*.ts",
+    "src/review*.tsx"
+  ]
 }

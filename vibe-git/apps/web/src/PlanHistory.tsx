@@ -14,7 +14,7 @@ async function ownerVersion(ownerNodeId: string, revision?: number): Promise<Ver
   }
 }
 
-export function PlanHistory({ data, active, onChanged }: { data: V20BootstrapPayload; active: boolean; onChanged(): Promise<void> }) {
+export function PlanHistory({ data, active, onChanged, ownerId, writable = true }: { data: V20BootstrapPayload; active: boolean; ownerId?: string; writable?: boolean; onChanged(): Promise<void> }) {
   const [versions, setVersions] = useState<Version[]>([]);
   const [total, setTotal] = useState(0);
   const [offset, setOffset] = useState(0);
@@ -57,7 +57,7 @@ export function PlanHistory({ data, active, onChanged }: { data: V20BootstrapPay
   return <section className="plan-history-section"><div className="section-head"><div><h2>提案版本</h2><p>旧版本和撤回记录保留。恢复时会生成新版本，不会覆盖历史，也不会改动已冻结的对齐稿。</p></div></div>
     {error && <p className="form-error" role="alert">{error}</p>}
     <div className="history"><div className="history-row history-head"><span>提案</span><span>版本</span><span>提交时间</span><span>内容 hash</span><span>操作</span></div>
-      {versions.map((version) => <div className="history-row" key={version.id}><strong>{data.nodes.find((node) => node.id === version.ownerNodeId)?.label ?? version.ownerNodeId.slice(0, 8)} · {version.filename}{version.current ? " · 当前" : version.withdrawn ? " · 已撤回" : ""}</strong><span>v{version.revision}</span><span>{new Date(version.createdAt).toLocaleString("zh-CN")}</span><code title={version.sha256}>{version.sha256.slice(0, 12)}…</code><span className="history-actions"><button className="detail-button" disabled={pending} onClick={() => void show(version)}>查看</button><button className="detail-button" disabled={pending || version.revision === 1} onClick={() => void show(version, true)}>对比</button>{version.ownerNodeId === data.viewer.id && !version.current && <button className="detail-button" disabled={pending} onClick={() => void restore(version)}>恢复</button>}</span></div>)}
+      {versions.filter(version => !ownerId || version.ownerNodeId === ownerId).map((version) => <div className="history-row" key={version.id}><strong>{data.nodes.find((node) => node.id === version.ownerNodeId)?.label ?? version.ownerNodeId.slice(0, 8)} · {version.filename}{version.current ? " · 当前" : version.withdrawn ? " · 已撤回" : ""}</strong><span>v{version.revision}</span><span>{new Date(version.createdAt).toLocaleString("zh-CN")}</span><code title={version.sha256}>{version.sha256.slice(0, 12)}…</code><span className="history-actions"><button className="detail-button" disabled={pending} onClick={() => void show(version)}>查看</button><button className="detail-button" disabled={pending || version.revision === 1} onClick={() => void show(version, true)}>对比</button>{version.ownerNodeId === data.viewer.id && !version.current && <button className="detail-button" disabled={pending || !writable} onClick={() => void restore(version)}>恢复</button>}</span></div>)}
       {!versions.length && <div className="no-results">尚无提案版本。</div>}
     </div>
     {total > 50 && <div className="history-pages"><button disabled={offset === 0 || pending} onClick={() => setOffset(Math.max(0, offset - 50))}>上一页</button><span>{offset + 1}–{Math.min(offset + 50, total)} / {total}</span><button disabled={offset + 50 >= total || pending} onClick={() => setOffset(offset + 50)}>下一页</button></div>}

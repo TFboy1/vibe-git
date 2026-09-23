@@ -34,8 +34,10 @@ export interface CollaborationNode {
   revoked: boolean;
   connected: boolean;
   workspaceReady: boolean;
-  auditCodex: CapabilityStateV20;
-  workCodex: CapabilityStateV20;
+  codex?: CapabilityStateV20;
+  /** Legacy node input, read until the next unified heartbeat. */
+  auditCodex?: CapabilityStateV20;
+  workCodex?: CapabilityStateV20;
   workTransport: WorkTransport;
   activeJobCount: number;
   rateLimits: RateLimitWindow[];
@@ -429,8 +431,10 @@ export interface V20BootstrapPayload {
 
 export interface NodeHeartbeatInput {
   workspaceReady: boolean;
-  auditCodex: CapabilityStateV20;
-  workCodex: CapabilityStateV20;
+  codex?: CapabilityStateV20;
+  /** Legacy node input, read until the next unified heartbeat. */
+  auditCodex?: CapabilityStateV20;
+  workCodex?: CapabilityStateV20;
   workTransport: WorkTransport;
   rateLimits: RateLimitWindow[];
   git: GitSnapshot | null;

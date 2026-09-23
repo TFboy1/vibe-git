@@ -122,7 +122,7 @@ export async function chatWithCodex(config: ClientConfig, taskId: string, messag
     }
     if (!threadId) {
       const started = await app.request<{ thread: { id: string } }>("thread/start", { cwd: config.workspace,
-        approvalPolicy: "never", sandbox: "readOnly", serviceName: "vibe_git_local" });
+        approvalPolicy: "never", sandbox: "read-only", serviceName: "vibe_git_local" });
       threadId = started.thread.id;
       map[mapKey] = { threadId, taskRevision: context.task.revision, workspace: config.workspace };
       await writeJson(THREADS_PATH(), map);

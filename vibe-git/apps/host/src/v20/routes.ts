@@ -128,18 +128,21 @@ export async function registerV20Routes(app: FastifyInstance, service: V20Servic
       ].filter(Boolean).join("\n")
     };
   });
+  app.post<{ Params: { id: string } }>("/api/v1/notifications/:id/read", async (request) => service.readNotification(authenticate(request, service), request.params.id));
+
   app.post<{ Body: MarkdownBody }>("/api/v1/pull-requests", async (request) => {
     const body = markdownBody(request.body, "需求变更");
     return service.submitPullRequest(authenticate(request, service), body.filename, body.content);
   });
   app.get("/api/v1/pull-requests", async (request) => {
-    authenticate(request, service);
-    return service.repo.listPullRequests();
+    const viewer = authenticate(request, service);
+    return service.repo.listPullRequests().filter(change => viewer.role === "captain" || change.submitterNodeId === viewer.id);
   });
   app.get<{ Params: { id: string } }>("/api/v1/documents/:id", async (request) => {
-    authenticate(request, service);
+    const viewer = authenticate(request, service);
     const document = service.repo.getDocument(request.params.id);
     if (!document) throw notFound("文档不存在");
+    if (document.kind !== "plan" && viewer.role !== "captain" && document.ownerNodeId !== viewer.id) throw forbidden("只能查看自己的需求变更和执行细化");
     return document;
   });
 
@@ -236,10 +239,11 @@ export async function registerV20Routes(app: FastifyInstance, service: V20Servic
       "Content-Type": "text/event-stream; charset=utf-8", "Cache-Control": "no-cache, no-transform",
       Connection: "keep-alive", "X-Accel-Buffering": "no"
     });
+    reply.raw.flushHeaders();
     for (const event of service.repo.eventsSince(Number.isFinite(since) ? since : 0)) reply.raw.write(`id: ${event.seq}\ndata: ${JSON.stringify(event)}\n\n`);
     const unsubscribe = service.hub.subscribe((event) => reply.raw.write(`id: ${event.seq}\ndata: ${JSON.stringify(event)}\n\n`));
     const heartbeat = setInterval(() => reply.raw.write(`: ${node.id}\n\n`), 15_000);
-    request.raw.on("close", () => { clearInterval(heartbeat); unsubscribe(); });
+    reply.raw.once("close", () => { clearInterval(heartbeat); unsubscribe(); });
   });
 
   const localCaptain = (request: FastifyRequest): CollaborationNode => {

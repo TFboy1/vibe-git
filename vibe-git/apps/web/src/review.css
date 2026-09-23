@@ -1,0 +1,19 @@
+.view-switcher{position:fixed;z-index:100;right:18px;bottom:18px;display:flex;align-items:center;gap:5px;padding:7px;background:var(--panel);border:1px solid var(--line);border-radius:12px;box-shadow:0 8px 28px #2021231c;font:13px/1.4 "Segoe UI","Microsoft YaHei UI","Microsoft YaHei","PingFang SC",sans-serif;color:var(--text)}
+.view-switcher span{padding:0 9px;font-weight:600}
+.view-switcher button{border:0;border-radius:7px;background:transparent;color:var(--muted);padding:8px 10px;cursor:pointer;font:inherit}
+.view-switcher button:hover{background:var(--hover)}
+.view-switcher button.selected{background:var(--text);color:var(--bg)}
+.view-switcher button:focus-visible{outline:2px solid #5e8196;outline-offset:2px}
+.view-switcher .view-switcher-minimize{margin-left:4px;border-left:1px solid var(--line);border-radius:0 7px 7px 0;font-size:20px;line-height:20px;padding:8px 12px}
+.view-switcher-launcher{position:fixed;z-index:100;right:8px;bottom:8px;border:1px solid var(--line);border-radius:8px;background:var(--panel);color:var(--text);padding:7px 9px;font:12px/1.4 "Segoe UI","Microsoft YaHei UI","Microsoft YaHei","PingFang SC",sans-serif;cursor:pointer;box-shadow:0 2px 8px #20212312}
+.view-switcher-launcher:hover{background:var(--hover)}
+.view-switcher-launcher:focus-visible{outline:2px solid #5e8196;outline-offset:2px}
+@media print{.view-switcher,.view-switcher-launcher{display:none!important}}
+@media(max-width:680px){.view-switcher{left:8px;right:8px;bottom:8px;justify-content:center;flex-wrap:wrap}.view-switcher span{width:100%;text-align:center}.view-switcher button{padding:7px}}
+
+.review-room { --identity-dock-height:64px; }
+.review-room.identity-collapsed { --identity-dock-height:40px; }
+.review-room::after { content:""; position:fixed; bottom:0; left:0; right:0; height:var(--identity-dock-height); background:var(--bg); border-top:1px solid var(--line); z-index:80; pointer-events:none; }
+.view-switcher { bottom:8px; right:16px; box-shadow:none; padding:4px 6px; }
+.view-switcher-launcher { bottom:5px; right:16px; padding:4px 9px; box-shadow:none; }
+@media(max-width:680px) { .review-room { --identity-dock-height:88px; } .review-room.identity-collapsed { --identity-dock-height:40px; } .view-switcher { bottom:6px; } }
