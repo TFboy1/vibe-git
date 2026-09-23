@@ -113,3 +113,10 @@
 .approved-ui .actual-events time{min-width:150px;color:var(--muted)}
 .approved-ui .actual-progress>.subtle-note{margin:0;padding:0 0 14px}
 @media(max-width:680px){.approved-ui .actual-events>div{display:block}.approved-ui .actual-events time{display:block;margin-bottom:3px}}
+.approved-ui .alignment-runs{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:10px;margin:0 0 16px}
+.approved-ui .alignment-runs button{display:grid;gap:6px;justify-items:start;min-width:0;padding:12px 14px;text-align:left;background:#fff;border:1px solid var(--line);border-radius:9px}
+.approved-ui .alignment-runs button.selected{border-color:#4b86b7;background:#f4f9fd}
+.approved-ui .alignment-runs button>span{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.approved-ui .alignment-runs strong{font-size:12px;font-weight:600}
+.approved-ui .alignment-runs small{color:var(--muted);font-size:12px}
+.approved-ui .alignment-runs code{max-width:100%;overflow:hidden;text-overflow:ellipsis;color:var(--muted);font-size:10px}

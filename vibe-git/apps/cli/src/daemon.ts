@@ -1,4 +1,4 @@
-import { appendFile, mkdir, stat } from "node:fs/promises";
+import { appendFile, mkdir, rm, stat } from "node:fs/promises";
 import { execFileSync } from "node:child_process";
 import { dirname } from "node:path";
 import type { AgentJob, GitSnapshot, NodeHeartbeatInput, RateLimitWindow } from "@vibe-git/protocol";
@@ -6,6 +6,8 @@ import { api, post } from "./api.js";
 import { auditCodexHome, daemonLogPath, loadConfig, saveConfig, type ClientConfig } from "./config.js";
 import { probeCodex, readRateLimits, runAudit, startDevelopment, type ActiveRun } from "./codex.js";
 import { impactIndex, repositoryContext, worktreeFingerprint } from "./evidence.js";
+import { integrateWithReal, prepareMock } from "./mock.js";
+import { localPanelPath, startLocalPanel } from "./local-panel.js";
 
 const active = new Map<string, ActiveRun>();
 let stopping = false;
@@ -74,7 +76,7 @@ async function report(config: ClientConfig, job: AgentJob, body: Record<string, 
 async function executeJob(config: ClientConfig, job: AgentJob): Promise<void> {
   try {
     if (!job.leaseToken) throw new Error("Host 返回了无租约作业");
-    if (job.kind === "ALIGN_PLANS" || job.kind === "REVIEW_CHANGES") {
+    if (job.kind === "ALIGN_PLANS" || job.kind === "DESCRIBE_WORKSTREAM" || job.kind === "REVIEW_CHANGES") {
       const runtimeId = `audit-${process.pid}-${Date.now()}`;
       await report(config, job, { phase: "started", runtimeId });
       const result = await runAudit(String(job.payload.prompt ?? ""), job.payload.outputSchema, config.workspace, auditCodexHome());
@@ -144,6 +146,24 @@ async function executeJob(config: ClientConfig, job: AgentJob): Promise<void> {
         affectedTaskIds, unaffectedTaskIds, uncertainTaskIds, findings, createdAt: new Date().toISOString() } });
       return;
     }
+    if (job.kind === "PREPARE_MOCK") {
+      const contracts = Array.isArray(job.payload.contracts) ? job.payload.contracts as Parameters<typeof prepareMock>[2] : [];
+      if (!contracts.length) throw new Error("Mock 作业缺少接口契约");
+      const result = await prepareMock(config, job.entityId, contracts, async (runtimeId) => {
+        await report(config, job, { phase: "started", runtimeId });
+      });
+      await report(config, job, { phase: "completed", result: { verified: true, ...result } });
+      return;
+    }
+    if (job.kind === "INTEGRATE_TASK") {
+      const contracts = Array.isArray(job.payload.contracts) ? job.payload.contracts as Parameters<typeof integrateWithReal>[3] : [];
+      const upstreamShas = Array.isArray(job.payload.upstreamShas) ? job.payload.upstreamShas.map(String) : [];
+      await report(config, job, { phase: "started", runtimeId: `integration-${Date.now()}` });
+      const result = integrateWithReal(config, job.entityId, upstreamShas, contracts);
+      await heartbeat(config, job.entityId);
+      await report(config, job, { phase: "completed", result: { verified: true, ...result } });
+      return;
+    }
     if (job.kind === "RUN_TASK") {
       const requested = ["auto", "app-server", "cli"].includes(String(job.payload.transport)) ? String(job.payload.transport) as ClientConfig["workTransport"] : config.workTransport;
       const run = await startDevelopment(String(job.payload.prompt ?? ""), config.workspace, requested);
@@ -181,25 +201,32 @@ export async function runDaemon(): Promise<void> {
   await stat(config.workspace);
   await saveConfig({ ...config, daemonPid: process.pid });
   await log(`节点守护进程启动：${config.nodeId}`);
+  const panel = await startLocalPanel(config);
+  await log(`本机面板已监听 127.0.0.1:${panel.port}`);
   const captain = await api<{ viewer?: { role?: string } }>(config, "/api/v1/bootstrap").then((value) => value.viewer?.role === "captain").catch(() => false);
   const stop = () => { stopping = true; for (const run of active.values()) void run.interrupt(); };
   process.once("SIGINT", stop); process.once("SIGTERM", stop);
 
-  let nextHeartbeat = 0;
-  while (!stopping) {
-    if (Date.now() >= nextHeartbeat) {
-      await heartbeat(config, undefined, captain).catch((error) => log(`心跳失败：${error instanceof Error ? error.message : String(error)}`));
-      nextHeartbeat = Date.now() + 15_000;
+  try {
+    let nextHeartbeat = 0;
+    while (!stopping) {
+      if (Date.now() >= nextHeartbeat) {
+        await heartbeat(config, undefined, captain).catch((error) => log(`心跳失败：${error instanceof Error ? error.message : String(error)}`));
+        nextHeartbeat = Date.now() + 15_000;
+      }
+      try {
+        const job = await api<AgentJob | null>(config, "/api/v1/nodes/jobs/next", { method: "POST", body: "{}", headers: { "content-type": "application/json" } });
+        if (job) void executeJob(config, job);
+      } catch (error) {
+        await log(`获取作业失败：${error instanceof Error ? error.message : String(error)}`);
+        await new Promise((resolve) => setTimeout(resolve, 3_000));
+      }
     }
-    try {
-      const job = await api<AgentJob | null>(config, "/api/v1/nodes/jobs/next", { method: "POST", body: "{}", headers: { "content-type": "application/json" } });
-      if (job) void executeJob(config, job);
-    } catch (error) {
-      await log(`获取作业失败：${error instanceof Error ? error.message : String(error)}`);
-      await new Promise((resolve) => setTimeout(resolve, 3_000));
-    }
+  } finally {
+    const latest = await loadConfig(false);
+    await panel.close();
+    await rm(localPanelPath(), { force: true });
+    if (latest?.daemonPid === process.pid) await saveConfig({ ...latest, daemonPid: null });
+    await log("节点守护进程停止");
   }
-  const latest = await loadConfig(false);
-  if (latest?.daemonPid === process.pid) await saveConfig({ ...latest, daemonPid: null });
-  await log("节点守护进程停止");
 }
