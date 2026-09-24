@@ -1,13 +1,13 @@
 <p align="center"><img src="docs/assets/vibe-git-logo-readme.svg" alt="Vibe-Git logo" width="180" /></p>
 
 <h1 align="center">Vibe-Git</h1>
-当前 Vibe-Git CLI 与 Host 位于 [`vibe-git/`](vibe-git/README.md)，安装需在该子目录执行。给 Codex 使用的 [Vibe-Git Skill](https://github.com/TFboy1/vibe-git-skill) 独立发布，包含安装步骤和队长、成员的 CLI 工作流；本项目通过 Git submodule 绑定它。
+Vibe-Git CLI 已发布为 [@vibe-git/vibe-git](https://www.npmjs.com/package/@vibe-git/vibe-git)。给 Codex 使用的 [Vibe-Git Skill](https://github.com/TFboy1/vibe-git-skill) 独立发布；本项目通过 Git submodule 绑定它。
 
 <p align="center"><strong>One repo. Many agents. One intent.</strong><br />给多人 Codex 开发一条可追踪的协作协议。</p>
 
 <p align="center"><code>CLI-first</code> · <code>Captain-hosted</code> · <code>Git + Codex</code> · <code>v0.20</code></p>
 
-<p align="center"><a href="#快速开始">快速开始</a> · <a href="vibe-git/README.md">使用手册</a> · <a href="vibe-git/CHANGELOG.md">更新日志</a> · <a href="https://github.com/TFboy1/vibe-git/issues">Issues</a></p>
+<p align="center"><a href="https://tfboy1.github.io/vibe-git/">文档站</a> · <a href="#快速开始">快速开始</a> · <a href="vibe-git/README.md">使用手册</a> · <a href="vibe-git/CHANGELOG.md">更新日志</a> · <a href="https://github.com/TFboy1/vibe-git/issues">Issues</a></p>
 
 ---
 
@@ -26,7 +26,15 @@ Vibe-Git 在现有 Git 工作区之上管理**提案 → 对齐 → 任务 → �
 
 ## 快速开始
 
-需要 **Node.js 24+、Git、Codex CLI**。当前从源码安装，构建入口在仓库的 `vibe-git/` 子目录：
+需要 **Node.js 24+、Git、Codex CLI**。先安装 Skill，再手动安装 CLI：
+
+```powershell
+npx skills add TFboy1/vibe-git-skill --skill vibe-git
+npm install -g @vibe-git/vibe-git
+vibe-git --help
+```
+
+也可以从源码构建 CLI，构建入口在仓库的 `vibe-git/` 子目录：
 
 ```powershell
 git clone --recurse-submodules https://github.com/TFboy1/vibe-git.git
