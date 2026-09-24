@@ -1,0 +1,4 @@
+[submodule ".agents/skills/vibe-git"]
+	path = .agents/skills/vibe-git
+	url = https://github.com/TFboy1/vibe-git-skill.git
+	branch = main
