@@ -23,7 +23,14 @@ const post = <T>(path: string, body: unknown = {}) => request<T>(path, { method:
 const put = <T>(path: string, body: unknown = {}) => request<T>(path, { method: "PUT", body: JSON.stringify(body) });
 
 export const api = {
-  bootstrap: () => request<V20BootstrapPayload>("/api/v1/bootstrap"),
+  bootstrap: async (): Promise<V20BootstrapPayload> => {
+    const data = await request<V20BootstrapPayload>("/api/v1/bootstrap");
+    return {
+      ...data,
+      workstreams: Array.isArray(data.workstreams) ? data.workstreams : [],
+      contracts: Array.isArray(data.contracts) ? data.contracts : [],
+    };
+  },
   planHistory: (limit = 100, offset = 0) => request<{ total: number; items: Array<Omit<MarkdownDocument, "content"> & { current: boolean; withdrawn: boolean }> }>(`/api/v1/plans/history?limit=${limit}&offset=${offset}`),
   uploadPlan: (filename: string, content: string) => post<MarkdownDocument>("/api/v1/plans", { filename, content }),
   updatePlan: (id: string, expectedRevision: number, filename: string, content: string) =>
