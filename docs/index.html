@@ -61,54 +61,45 @@
 
     <section id="install" class="section wrap" aria-labelledby="install-title">
       <div class="section-heading">
-        <div><p class="index">01 / INSTALL</p><h2 id="install-title">先装两个东西，再选择身份。</h2></div>
-        <p>Skill 是给 Codex 的协作说明书，CLI 是真正创建房间、上传提案和读取任务的工具。两者都装好后，网页会教你下一步该做什么。</p>
+        <div><p class="index">INSTALL</p><h2 id="install-title">两种安装方式，选你习惯的。</h2></div>
+        <p>推荐只先安装 Skill，再让 Agent 自动检查并安装 CLI。你不需要自己记住 npm 命令，只要给 Agent 一句话。</p>
       </div>
-      <div class="install-grid three-col">
+      <div class="install-grid">
         <article class="install-card skill-card">
-          <div class="card-top"><span>01</span><span>CODEX SKILL</span></div>
+          <div class="card-top"><span>RECOMMENDED</span><span>AGENT AUTO INSTALL</span></div>
           <div class="card-content">
-            <h3>给你的 Agent 安装 Skill</h3>
-            <p>让 Codex 知道如何区分队长和队员，并在你确认后协助连接房间、整理提案、提交需求变更和绑定审核 Codex。</p>
+            <h3>只安装 Skill，让 Agent 代你安装</h3>
+            <p>Skill 会检查 Node.js、Git、Codex CLI 和 Vibe-Git CLI。发现 CLI 没有安装时，它会按你的一句话指令执行 npm 安装命令，然后继续带你开始。</p>
             <div class="code-frame" data-copy>
-              <div class="code-head"><span>TERMINAL</span><button class="copy-button" type="button" aria-label="复制 Skill 安装命令">复制命令</button></div>
+              <div class="code-head"><span>先在终端安装一次 SKILL</span><button class="copy-button" type="button" aria-label="复制 Skill 安装命令">复制命令</button></div>
               <pre><code>npx skills add TFboy1/vibe-git-skill --skill vibe-git</code></pre>
             </div>
-            <p class="hint">↳ 在 Codex 中可使用 <code>$vibe-git</code> 调用。</p>
+            <p class="prompt"><strong>然后只对 Agent 说这一句话：</strong><br />“请自动安装并配置 Vibe-Git；如果 CLI 没安装就执行 <code>npm install -g @vibe-git/vibe-git</code>，安装成功后先问我是队长还是队员，再带我开始。”</p>
+            <p class="hint">↳ Skill 安装一次即可；之后由 Agent 检查和安装项目 CLI。</p>
           </div>
           <a class="card-link" href="https://skills.sh/tfboy1/vibe-git-skill/vibe-git" target="_blank" rel="noopener noreferrer">查看 Skill 文档 <span aria-hidden="true">↗</span></a>
         </article>
         <article class="install-card">
-          <div class="card-top"><span>02</span><span>CLI / MANUAL</span></div>
+          <div class="card-top"><span>MANUAL</span><span>CLI INSTALL</span></div>
           <div class="card-content">
-            <h3>手动安装 npm CLI</h3>
-            <p>需要 Node.js 24+、Git 和 Codex CLI。CLI 负责启动 Host、加入房间、发布任务和读取真实状态。</p>
+            <h3>不使用 Agent，自己手动安装</h3>
+            <p>适合不能让 Agent 执行终端命令，或想自己控制安装过程的人。先准备 Node.js 24+、Git 和 Codex CLI，再安装 npm CLI。</p>
             <div class="code-frame" data-copy>
               <div class="code-head"><span>TERMINAL</span><button class="copy-button" type="button" aria-label="复制 npm 安装命令">复制命令</button></div>
-              <pre><code>npm install -g @vibe-git/vibe-git</code></pre>
+              <pre><code>npm install -g @vibe-git/vibe-git
+vibe-git --help</code></pre>
             </div>
-            <p class="hint">↳ 安装后运行 <code>vibe-git --help</code> 检查命令。</p>
+            <p class="hint">↳ 手动安装 CLI 后，仍然建议安装 Skill，让 Agent 帮你完成角色分流和提案上传。</p>
           </div>
           <a class="card-link" href="https://www.npmjs.com/package/@vibe-git/vibe-git" target="_blank" rel="noopener noreferrer">查看 npm 包 <span aria-hidden="true">↗</span></a>
         </article>
-        <article class="install-card">
-          <div class="card-top"><span>03</span><span>CHECK</span></div>
-          <div class="card-content">
-            <h3>确认工具真的可用</h3>
-            <p>安装完成后不要猜。四条命令都能输出版本或帮助，就可以进入“我是队长/我是队员”的下一步。</p>
-            <div class="code-frame" data-copy>
-              <div class="code-head"><span>TERMINAL</span><button class="copy-button" type="button" aria-label="复制环境检查命令">复制命令</button></div>
-              <pre><code>node --version
-git --version
-codex --version
-vibe-git --help</code></pre>
-            </div>
-            <p class="hint">↳ 如果某一行找不到命令，先修复安装，不要继续开房。</p>
-          </div>
-          <a class="card-link" href="#start">进入身份教程 <span aria-hidden="true">↘</span></a>
-        </article>
       </div>
-      <div class="callout"><strong>Skill 和 CLI 的关系：</strong>Skill 不会代替 CLI，也不会自己创造房间；它会在 Codex 里读懂你的目标，确认身份和文件内容，然后在你同意后调用 CLI，并把成功或失败回执讲成人话。</div>
+      <div class="agent-compatibility">
+        <div><span class="index">SUPPORTED AGENTS</span><h3>可以在哪些智能体里使用？</h3></div>
+        <p>只要这个智能体支持安装 Agent Skill、读取当前工作区并执行终端命令，就可以使用 Vibe-Git。当前教程面向：</p>
+        <div class="agent-list" aria-label="支持的智能体"><span>Trae</span><span>Codex</span><span>WorkBuddy</span><span>Coder</span><span>Claude Code</span><span>Antigravity</span></div>
+      </div>
+      <div class="callout"><strong>最简单的记法：</strong>先装 Skill；然后告诉 Agent “自动安装并配置 Vibe-Git”。Agent 会负责执行 npm CLI 安装，安装完再问你是队长还是队员。</div>
     </section>
 
     <section id="start" class="section start-section" aria-labelledby="start-title">

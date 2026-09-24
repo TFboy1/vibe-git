@@ -111,6 +111,11 @@ pre { margin: 0; overflow-x: auto; padding: 17px 14px 19px; color: #f1f1f1; font
 .skill-card .card-link:hover { background: #dedede; }
 .callout { margin-top: 22px; padding: 18px 20px; color: #aaa; background: #151515; border: 1px solid var(--line); font-size: 12px; line-height: 1.8; }
 .callout strong { color: var(--white); }
+.agent-compatibility { display: grid; grid-template-columns: minmax(220px, .8fr) minmax(0, 1fr); gap: 18px 42px; align-items: end; margin-top: 43px; padding-top: 27px; border-top: 1px solid var(--line); }
+.agent-compatibility h3 { margin: 15px 0 0; font-size: clamp(23px, 3vw, 34px); line-height: 1.1; letter-spacing: -.06em; }
+.agent-compatibility > p { max-width: 540px; margin: 0; color: #999; font-size: 12px; line-height: 1.8; }
+.agent-list { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 9px; }
+.agent-list span { display: inline-flex; min-height: 34px; align-items: center; padding: 0 13px; color: #d9d9d9; background: #151515; border: 1px solid #3d3d3d; font: 11px var(--mono); }
 
 .start-section { background: #101010; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
 .start-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 46px; }
@@ -245,6 +250,8 @@ pre { margin: 0; overflow-x: auto; padding: 17px 14px 19px; color: #f1f1f1; font
   .timeline-list li { min-height: 0; }
   .community-card { grid-template-columns: minmax(0, 1fr); gap: 28px; padding: 20px; }
   .community-qr { width: min(100%, 330px); }
+  .agent-compatibility { grid-template-columns: minmax(0, 1fr); gap: 18px; }
+  .agent-list { grid-column: auto; }
   .text-link { margin-top: 16px; }
   .flow-row { grid-template-columns: 24px 100px minmax(0, 1fr); gap: 8px 16px; padding-block: 22px; }
   .flow-row code { grid-column: 3; text-align: left; }
