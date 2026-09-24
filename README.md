@@ -1,8 +1,6 @@
 <p align="center"><img src="docs/assets/vibe-git-logo-readme.svg" alt="Vibe-Git logo" width="180" /></p>
 
 <h1 align="center">Vibe-Git</h1>
-当前 Vibe-Git CLI 与 Host 位于 [`vibe-git/`](vibe-git/README.md)，安装需在该子目录执行。给 Codex 使用的 [Vibe-Git Skill](https://github.com/TFboy1/vibe-git-skill) 独立发布，包含安装步骤和队长、成员的 CLI 工作流；本项目通过 Git submodule 绑定它。
-
 <p align="center"><strong>One repo. Many agents. One intent.</strong><br />给多人 Codex 开发一条可追踪的协作协议。</p>
 
 <p align="center"><code>CLI-first</code> · <code>Captain-hosted</code> · <code>Git + Codex</code> · <code>v0.20</code></p>
