@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="theme-color" content="#070a14" />
+  <meta name="description" content="Vibe-Git 完整使用文档：安装、队长与队员、提案、对齐、任务、Codex 审核池和需求变更。" />
+  <title>Vibe-Git 文档</title>
+  <link rel="icon" href="assets/vibe-git-logo-readme.svg" />
+  <link rel="stylesheet" href="site.css" />
+</head>
+<body class="doc-page">
+  <canvas id="starfield" aria-hidden="true"></canvas>
+  <header class="site-header shell">
+    <a class="brand" href="index.html" aria-label="返回 Vibe-Git 官网"><span class="brand-mark">✦</span><span>vibe-git</span></a>
+    <nav class="desktop-nav" aria-label="文档导航"><a href="index.html">官网</a><a href="#installation">安装</a><a href="#roles">角色</a><a href="#features">功能</a></nav>
+    <a class="header-link" href="https://github.com/TFboy1/vibe-git" target="_blank" rel="noopener noreferrer">GitHub <span>↗</span></a>
+    <details class="mobile-nav"><summary aria-label="打开导航">菜单 <span>＋</span></summary><nav aria-label="移动端导航"><a href="index.html">官网 <span>↗</span></a><a href="#installation">安装 <span>↘</span></a><a href="#roles">角色 <span>↘</span></a><a href="#features">功能 <span>↘</span></a></nav></details>
+  </header>
+
+  <main class="doc-layout shell">
+    <aside class="doc-sidebar" aria-label="文档目录">
+      <p class="doc-kicker">VIBE-GIT / DOCS</p>
+      <h1>使用文档</h1>
+      <p>从安装 Skill 到完成一次提案、任务和需求变更。</p>
+      <nav class="doc-toc">
+        <a href="#installation">安装方式</a>
+        <a href="#roles">安装后选择身份</a>
+        <a href="#features">功能说明</a>
+        <a href="#skill">Skill 能做什么</a>
+        <a href="#security">安全边界</a>
+        <a href="#community">加入群聊</a>
+      </nav>
+      <a class="source-link" href="guide.md">查看 Markdown 源文档 ↗</a>
+    </aside>
+
+    <article class="doc-content">
+      <div class="doc-kicker">VERSION 0.20 / BEGINNER FRIENDLY</div>
+      <h2>先让 Agent 把协作装好。</h2>
+      <p class="doc-lede">Vibe-Git 让多人 Agent 在同一个项目里共享提案、决策、任务和需求变更。本页是完整教程；官网只负责安装入口。</p>
+
+      <div class="doc-callout"><strong>先记住：</strong>Skill 是教 Agent 如何协作的说明书；CLI 是真正创建房间、上传文件、发布任务和读取状态的工具。普通用户先安装 Skill，CLI 缺失时让 Agent 自动执行 npm 安装。</div>
+
+      <section id="installation" class="doc-section">
+        <h3>安装方式</h3>
+        <h4>Agent 自动安装（推荐）</h4>
+        <p>先在项目工作区或平时使用 Agent 的目录执行：</p>
+        <div class="doc-code" data-copy><div><span>INSTALL SKILL</span><button class="copy-button" type="button">复制</button></div><pre><code>npx skills add TFboy1/vibe-git-skill --skill vibe-git</code></pre></div>
+        <p>然后把这句话直接发给 Agent：</p>
+        <blockquote>请自动安装并配置 Vibe-Git：先检查 Node.js、Git、Codex CLI 和 vibe-git CLI；如果 CLI 没安装就执行 <code>npm install -g @vibe-git/vibe-git</code>，安装成功后先问我是队长还是队员，再带我完成第一步。</blockquote>
+        <p>Agent 会检查环境、安装 CLI、运行 <code>vibe-git --help</code>，然后询问你的身份。用户明确要求自动安装时，Skill 不要求你再手动复制 npm 命令。</p>
+
+        <h4>手动安装</h4>
+        <p>如果 Agent 不允许执行终端命令，或者你想自己控制安装过程：</p>
+        <div class="doc-code" data-copy><div><span>CLI INSTALL</span><button class="copy-button" type="button">复制</button></div><pre><code>npm install -g @vibe-git/vibe-git
+vibe-git --help</code></pre></div>
+        <p>手动安装 CLI 后，仍然建议安装 Skill，让 Agent 帮你完成后面的角色分流和提案上传。</p>
+
+        <h4>可以使用哪些 Agent</h4>
+        <p>只要智能体支持 Agent Skill、读取工作区和执行终端命令，就可以使用 Vibe-Git：</p>
+        <div class="doc-agent-list"><span>Trae</span><span>Codex</span><span>WorkBuddy</span><span>Coder</span><span>Claude Code</span><span>Antigravity</span><span>Cursor</span><span>Cline</span><span>OpenCode</span><span>Windsurf</span></div>
+      </section>
+
+      <section id="roles" class="doc-section">
+        <h3>安装后先选择身份</h3>
+        <p>不要一上来复制所有命令。你要创建房间并邀请别人，就是<strong>队长</strong>；你拿到别人发来的加入 URL，就是<strong>队员</strong>。</p>
+        <div class="doc-role-grid">
+          <div class="doc-role"><span class="doc-label">CAPTAIN / 队长</span><h4>创建房间、定方案、发任务</h4><div class="doc-code" data-copy><div><span>YOUR PROJECT WORKSPACE</span><button class="copy-button" type="button">复制</button></div><pre><code>vibe-git host start
+vibe-git open</code></pre></div><p><code>host start</code> 成功回执中的完整加入命令才是邀请入口，只发给预期队员。<code>open</code> 只是打开面板。</p></div>
+          <div class="doc-role"><span class="doc-label">MEMBER / 队员</span><h4>加入房间、提方案、做任务</h4><div class="doc-code" data-copy><div><span>YOUR PROJECT WORKSPACE</span><button class="copy-button" type="button">复制</button></div><pre><code>vibe-git connect "&lt;队长给你的完整 URL&gt;"
+vibe-git status
+vibe-git open</code></pre></div><p>连接成功后让 Agent 阅读项目，先展示提案给你确认，再执行 <code>plan submit</code>。</p></div>
+        </div>
+        <h4>队长的下一步</h4>
+        <ol><li>等待至少一位队员连接并上传提案。</li><li>运行 <code>vibe-git status</code>，再运行 <code>vibe-git align start</code>。</li><li>用真实的 <code>alignment-id</code>、<code>issue-id</code> 和 <code>option-id</code> 阅读并裁决冲突。</li><li>按需改派任务，最后运行 <code>vibe-git tasks publish &lt;alignment-id&gt;</code>。</li></ol>
+        <h4>队员的下一步</h4>
+        <ol><li>连接后运行 <code>status</code> 确认节点身份。</li><li>确认提案内容，再运行 <code>vibe-git plan submit proposal.md</code>。</li><li>收到任务后依次使用 <code>task list</code>、<code>task pull</code>、<code>task start</code>。</li><li>Codex 结束后先 <code>task sync</code>，确认状态新鲜后再 <code>task done</code>。</li></ol>
+      </section>
+
+      <section id="features" class="doc-section">
+        <h3>每个功能怎么用</h3>
+        <h4>提案：PLAN</h4><p>提案是每个成员自己的方案，不是任务细节，也不是需求变更单。</p><div class="doc-code"><pre><code>vibe-git plan submit proposal.md</code></pre></div><p>文件必须是非空 UTF-8 Markdown，最大 256 KiB。重复内容幂等，修改内容生成新版本。Skill 可以帮你阅读项目、整理内容并上传。</p>
+        <h4>对齐：ALIGN</h4><p>队长发起对齐，冻结各节点最新提案，查看共同稿和冲突；未裁决的实质冲突不能发布任务。</p><div class="doc-code"><pre><code>vibe-git align start
+vibe-git align status
+vibe-git align show &lt;alignment-id&gt;
+vibe-git align resolve &lt;alignment-id&gt; &lt;issue-id&gt; &lt;option-id&gt;</code></pre></div>
+        <h4>任务：BUILD</h4><p>发布任务不等于自动开工。负责人要自己拉取、开始、同步和完成。</p><div class="doc-code"><pre><code>vibe-git task list
+vibe-git task pull &lt;task-id&gt;
+vibe-git task push &lt;task-id&gt; execution.md
+vibe-git task start &lt;task-id&gt;
+vibe-git task sync &lt;task-id&gt;
+vibe-git task done &lt;task-id&gt;</code></pre></div>
+        <h4>Codex 审核池</h4><p>每个节点可以绑定独立的专用 Codex 审核账号，用于检查需求变更的真实代码影响，不替换日常 Codex。</p><div class="doc-code"><pre><code>vibe-git codex bind
+vibe-git codex status</code></pre></div><p>出现 device-auth 页面时由用户完成授权，不要读取或公开审核账号凭据。</p>
+        <h4>需求变更：CHANGE</h4><p><code>pr submit</code> 是 Vibe-Git 内部需求变更单，不会创建 GitHub Pull Request。建议包含原需求、修改内容、影响任务、兼容性和验收标准。</p><div class="doc-code"><pre><code>vibe-git pr submit change.md
+vibe-git pr list
+vibe-git review start --force
+vibe-git review status
+vibe-git review apply &lt;review-id&gt;</code></pre></div><p>如果状态是 <code>NEEDS_EVIDENCE</code>，先补证，不要强行 apply。</p>
+        <h4>高级能力：阶段、契约和工作流</h4><p>普通项目可以暂时不用。复杂项目需要阶段和确认点时，再使用 <code>stage</code>、<code>contract</code>、<code>work</code> 和 <code>align downgrade</code>。</p><div class="doc-code"><pre><code>vibe-git stage activate &lt;alignment-id&gt;
+vibe-git contract list
+vibe-git contract ack &lt;contract-id&gt;
+vibe-git work list
+vibe-git work pull &lt;workstream-id&gt;</code></pre></div>
+      </section>
+
+      <section id="skill" class="doc-section">
+        <h3>Skill 能帮你说人话</h3>
+        <p>你不需要记住每个命令，只需要描述目标。确认内容后，Skill 会创建 UTF-8 Markdown 并调用对应 CLI。</p>
+        <ul class="doc-prompts"><li>“我是队长，检查当前工作区并启动 Vibe-Git 房间。”</li><li>“我是队员，这是队长的加入命令，帮我连接并确认状态。”</li><li>“阅读这个项目，生成提案，先展示给我确认，确认后自动上传。”</li><li>“我想修改登录流程，生成需求变更单，确认后提交 Vibe-Git 内部 PR。”</li><li>“帮我连接 Vibe-Git 专用 Codex 审核池。”</li><li>“读取当前状态，告诉我下一步应该执行哪个命令，不要猜 ID。”</li></ul>
+      </section>
+
+      <section id="security" class="doc-section">
+        <h3>安全边界</h3>
+        <ul><li>加入命令包含注册密钥，只发给预期队员。</li><li>不要公开 <code>client.json</code>、<code>captain.json</code> 或 <code>audit-codex</code> 凭据。</li><li>Skill 只在 CLI 成功回执后报告“已上传”“已连接”或“已完成”。</li><li>GitHub 管理代码提交；Vibe-Git 管理团队意图、任务和需求变更。</li></ul>
+      </section>
+
+      <section id="community" class="doc-section community-doc">
+        <div class="community-doc-copy"><h3>加入群聊</h3><p>使用手机微信扫描二维码。图片标注二维码 7 天内有效（9 月 30 日前）；失效后请等待项目重新发布新的二维码。</p><p class="doc-note">群二维码不是 Vibe-Git 房间加入链接。房间加入命令由队长通过 CLI 生成。</p></div><img src="assets/vibe-git-wechat-qr.jpg" alt="vibe-git 微信群聊二维码" loading="lazy" />
+      </section>
+    </article>
+  </main>
+  <footer class="site-footer shell"><a class="brand" href="index.html"><span class="brand-mark">✦</span><span>vibe-git</span></a><p>Version the intent, not just the code.</p><div><a href="index.html">官网</a><a href="guide.md">Markdown ↗</a><a href="https://github.com/TFboy1/vibe-git" target="_blank" rel="noopener noreferrer">GitHub ↗</a></div></footer>
+  <div class="toast" role="status" aria-live="polite"></div>
+  <script src="site.js" defer></script>
+</body>
+</html>
