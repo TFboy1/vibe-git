@@ -1,8 +1,9 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
-import type { CollaborationNode, JobResultInput, NodeHeartbeatInput } from "@vibe-git/protocol";
+import type { CollaborationNode, JobResultInput, NodeHeartbeatInput, ProjectModule } from "@vibe-git/protocol";
 import { badRequest, forbidden, notFound, unavailable } from "../domain/errors.js";
 import type { CloudflareManager } from "../integrations/cloudflare/manager.js";
 import type { V20Service } from "./service.js";
+import { taskMarkdown, workstreamMarkdown } from "./contract-format.js";
 
 type MarkdownBody = { filename?: string; content?: string };
 type PlanUpdateBody = MarkdownBody & { expectedRevision?: number };
@@ -29,6 +30,8 @@ function isLoopback(address: string | undefined): boolean {
 function authenticate(request: FastifyRequest, service: V20Service): CollaborationNode {
   const authorization = firstHeader(request.headers.authorization);
   if (authorization) return service.authenticateBearer(authorization);
+  if (request.method !== "GET" && request.method !== "HEAD")
+    throw forbidden("远端面板仅可查看状态；请在成员自己的电脑运行 vibe-git open 操作");
   return service.authenticateSession(firstHeader(request.headers.cookie));
 }
 
@@ -66,6 +69,16 @@ export async function registerV20Routes(app: FastifyInstance, service: V20Servic
   app.get("/api/v1/bootstrap", async (request) => service.bootstrap(authenticate(request, service)));
   app.post<{ Body: NodeHeartbeatInput }>("/api/v1/nodes/heartbeat", async (request) => service.heartbeat(authenticate(request, service), request.body));
 
+  app.get("/api/v1/modules", async (request) => { authenticate(request, service); return service.modules(); });
+  app.put<{ Body: { expectedRevision?: number; items?: ProjectModule[] } }>("/api/v1/modules", async (request) => {
+    const node = authenticate(request, service);
+    if (!Number.isInteger(request.body?.expectedRevision) || !Array.isArray(request.body?.items)) throw badRequest("模块修订或内容无效");
+    return service.setModules(node, Number(request.body.expectedRevision), request.body.items);
+  });
+  app.get<{ Querystring: { limit?: string; offset?: string } }>("/api/v1/plans/history", async (request) => {
+    authenticate(request, service);
+    return service.planHistory(request.query.limit === undefined ? 100 : Number(request.query.limit), request.query.offset === undefined ? 0 : Number(request.query.offset));
+  });
   app.post<{ Body: MarkdownBody }>("/api/v1/plans", async (request) => {
     const body = markdownBody(request.body, "计划");
     return service.submitPlan(authenticate(request, service), body.filename, body.content);
@@ -75,6 +88,14 @@ export async function registerV20Routes(app: FastifyInstance, service: V20Servic
     const expectedRevision = request.body?.expectedRevision;
     if (!Number.isInteger(expectedRevision) || Number(expectedRevision) < 1) throw badRequest("缺少有效的 expectedRevision");
     return service.updatePlan(authenticate(request, service), request.params.id, Number(expectedRevision), body.filename, body.content);
+  });
+  app.post<{ Params: { id: string }; Body: { expectedRevision?: number } }>("/api/v1/plans/:id/restore", async (request) => {
+    if (!Number.isInteger(request.body?.expectedRevision) || Number(request.body.expectedRevision) < 0) throw badRequest("缺少有效的 expectedRevision");
+    return service.restorePlan(authenticate(request, service), request.params.id, Number(request.body.expectedRevision));
+  });
+  app.delete<{ Params: { id: string }; Body: { expectedRevision?: number } }>("/api/v1/plans/:id", async (request) => {
+    if (!Number.isInteger(request.body?.expectedRevision)) throw badRequest("缺少有效的 expectedRevision");
+    return service.withdrawPlan(authenticate(request, service), request.params.id, Number(request.body.expectedRevision));
   });
   app.post<{ Params: { id: string }; Body: MarkdownBody }>("/api/v1/tasks/:id/detail", async (request) => {
     const body = markdownBody(request.body, "任务细化");
@@ -89,7 +110,7 @@ export async function registerV20Routes(app: FastifyInstance, service: V20Servic
     return {
       task,
       detail,
-      markdown: [
+      markdown: task.brief ? `${taskMarkdown(task, task.dependencyEdges, service.repo.listContracts())}${detail ? `\n\n---\n\n## 成员执行细节（${detail.filename} r${detail.revision}）\n\n${detail.content}` : ""}` : [
         `# ${task.title}`,
         "",
         "## 正式目标（不可由任务细化 Markdown 修改）",
@@ -107,18 +128,21 @@ export async function registerV20Routes(app: FastifyInstance, service: V20Servic
       ].filter(Boolean).join("\n")
     };
   });
+  app.post<{ Params: { id: string } }>("/api/v1/notifications/:id/read", async (request) => service.readNotification(authenticate(request, service), request.params.id));
+
   app.post<{ Body: MarkdownBody }>("/api/v1/pull-requests", async (request) => {
     const body = markdownBody(request.body, "需求变更");
     return service.submitPullRequest(authenticate(request, service), body.filename, body.content);
   });
   app.get("/api/v1/pull-requests", async (request) => {
-    authenticate(request, service);
-    return service.repo.listPullRequests();
+    const viewer = authenticate(request, service);
+    return service.repo.listPullRequests().filter(change => viewer.role === "captain" || change.submitterNodeId === viewer.id);
   });
   app.get<{ Params: { id: string } }>("/api/v1/documents/:id", async (request) => {
-    authenticate(request, service);
+    const viewer = authenticate(request, service);
     const document = service.repo.getDocument(request.params.id);
     if (!document) throw notFound("文档不存在");
+    if (document.kind !== "plan" && viewer.role !== "captain" && document.ownerNodeId !== viewer.id) throw forbidden("只能查看自己的需求变更和执行细化");
     return document;
   });
 
@@ -132,7 +156,32 @@ export async function registerV20Routes(app: FastifyInstance, service: V20Servic
     if (!request.body?.taskId || !request.body.assigneeNodeId) throw badRequest("缺少 taskId 或 assigneeNodeId");
     return service.assignDraftTask(authenticate(request, service), request.params.id, request.body.taskId, request.body.assigneeNodeId);
   });
+  app.post<{ Params: { id: string }; Body: { expectedRevision?: number; sha256?: string } }>("/api/v1/contracts/:id/ack", async (request) => {
+    const { expectedRevision, sha256 } = request.body ?? {};
+    if (!Number.isInteger(expectedRevision) || typeof sha256 !== "string") throw badRequest("缺少契约版本或哈希");
+    return service.acknowledgeContract(authenticate(request, service), request.params.id, expectedRevision!, sha256);
+  });
+  app.post<{ Params: { id: string }; Body: { expectedRevision?: number; sha256?: string } }>("/api/v1/contracts/:id/publish", async (request) => {
+    const { expectedRevision, sha256 } = request.body ?? {};
+    if (!Number.isInteger(expectedRevision) || typeof sha256 !== "string") throw badRequest("缺少契约版本或哈希");
+    return service.publishRevisedContract(authenticate(request, service), request.params.id, expectedRevision!, sha256);
+  });
+  app.post<{ Params: { id: string }; Body: { taskId?: string; upstreamTaskId?: string } }>("/api/v1/alignments/:id/downgrade", async (request) => {
+    if (!request.body?.taskId || !request.body.upstreamTaskId) throw badRequest("缺少任务或上游 ID");
+    return service.downgradeDependency(authenticate(request, service), request.params.id, request.body.taskId, request.body.upstreamTaskId);
+  });
+  app.get<{ Params: { id: string } }>("/api/v1/workstreams/:id/brief", async (request, reply) => {
+    const node = authenticate(request, service);
+    const workstream = service.repo.getWorkstream(request.params.id);
+    if (!workstream) throw notFound("工作主线不存在");
+    if (node.role !== "captain" && node.id !== workstream.ownerNodeId) throw forbidden("只能下载自己的工作主线");
+    reply.type("text/markdown; charset=utf-8");
+    const tasks = workstream.taskIds.flatMap((id) => { const task = service.repo.getTask(id); return task ? [task] : []; });
+    return workstreamMarkdown(workstream, tasks, service.repo.listContracts(workstream.alignmentId));
+  });
   app.post<{ Params: { id: string } }>("/api/v1/alignments/:id/publish", async (request) => service.publishAlignment(authenticate(request, service), request.params.id));
+  app.post<{ Params: { id: string } }>("/api/v1/stages/:id/replan", async (request) => service.startStageReplan(authenticate(request, service), request.params.id));
+  app.post<{ Params: { id: string } }>("/api/v1/alignments/:id/activate-replan", async (request) => service.activateStageReplan(authenticate(request, service), request.params.id));
   app.get<{ Params: { id: string } }>("/api/v1/alignments/:id/export", async (request, reply) => {
     const node = authenticate(request, service); requireCaptain(node);
     const alignment = service.repo.getAlignment(request.params.id);
@@ -143,6 +192,7 @@ export async function registerV20Routes(app: FastifyInstance, service: V20Servic
   });
 
   app.post<{ Params: { id: string } }>("/api/v1/tasks/:id/start", async (request) => service.startTask(authenticate(request, service), request.params.id));
+  app.post<{ Params: { id: string } }>("/api/v1/tasks/:id/integrate", async (request) => service.integrateTask(authenticate(request, service), request.params.id));
   app.post<{ Params: { id: string } }>("/api/v1/tasks/:id/sync", async (request) => service.requestSync(authenticate(request, service), request.params.id));
   app.post<{ Params: { id: string } }>("/api/v1/tasks/:id/done", async (request) => service.doneTask(authenticate(request, service), request.params.id));
   app.post("/api/v1/tasks/sync", async (request) => service.requestSync(authenticate(request, service)));
@@ -189,10 +239,11 @@ export async function registerV20Routes(app: FastifyInstance, service: V20Servic
       "Content-Type": "text/event-stream; charset=utf-8", "Cache-Control": "no-cache, no-transform",
       Connection: "keep-alive", "X-Accel-Buffering": "no"
     });
+    reply.raw.flushHeaders();
     for (const event of service.repo.eventsSince(Number.isFinite(since) ? since : 0)) reply.raw.write(`id: ${event.seq}\ndata: ${JSON.stringify(event)}\n\n`);
     const unsubscribe = service.hub.subscribe((event) => reply.raw.write(`id: ${event.seq}\ndata: ${JSON.stringify(event)}\n\n`));
     const heartbeat = setInterval(() => reply.raw.write(`: ${node.id}\n\n`), 15_000);
-    request.raw.on("close", () => { clearInterval(heartbeat); unsubscribe(); });
+    reply.raw.once("close", () => { clearInterval(heartbeat); unsubscribe(); });
   });
 
   const localCaptain = (request: FastifyRequest): CollaborationNode => {

@@ -1,12 +1,15 @@
-import { appendFile, mkdir, stat } from "node:fs/promises";
+import { appendFile, mkdir, rm, stat } from "node:fs/promises";
 import { execFileSync } from "node:child_process";
 import { dirname } from "node:path";
 import type { AgentJob, GitSnapshot, NodeHeartbeatInput, RateLimitWindow } from "@vibe-git/protocol";
 import { api, post } from "./api.js";
-import { auditCodexHome, daemonLogPath, loadConfig, saveConfig, type ClientConfig } from "./config.js";
+import { defaultCodexHome, daemonLogPath, loadConfig, saveConfig, type ClientConfig } from "./config.js";
 import { probeCodex, readRateLimits, runAudit, startDevelopment, type ActiveRun } from "./codex.js";
 import { impactIndex, repositoryContext, worktreeFingerprint } from "./evidence.js";
+import { integrateWithReal, prepareMock } from "./mock.js";
+import { localPanelPath, startLocalPanel } from "./local-panel.js";
 
+const executing = new Map<string, string>();
 const active = new Map<string, ActiveRun>();
 let stopping = false;
 let quota: RateLimitWindow[] = [];
@@ -45,9 +48,9 @@ function probeGit(workspace: string): GitSnapshot | null {
 
 async function heartbeat(config: ClientConfig, taskId?: string, captain = false): Promise<void> {
   const normal = probeCodex();
-  const audit = probeCodex({ CODEX_HOME: auditCodexHome() });
+  const audit = normal;
   if (audit.state === "available" && Date.now() - lastQuotaAt > 5 * 60_000) {
-    quota = await readRateLimits(auditCodexHome());
+    quota = await readRateLimits(defaultCodexHome());
     lastQuotaAt = Date.now();
   }
   const gitState = probeGit(config.workspace);
@@ -59,7 +62,7 @@ async function heartbeat(config: ClientConfig, taskId?: string, captain = false)
     contextCache = { at: Date.now(), value: gitState ? await repositoryContext(config.workspace).catch(() => null) : null };
   }
   const input: NodeHeartbeatInput = {
-    workspaceReady: Boolean(gitState), auditCodex: audit.state, workCodex: normal.state,
+    workspaceReady: Boolean(gitState), codex: normal.state,
     workTransport: config.workTransport, rateLimits: quota, git: gitState,
     currentTaskId: taskId ?? active.keys().next().value ?? null,
     ...(captain ? { repositoryContext: contextCache?.value ?? null } : {})
@@ -74,24 +77,24 @@ async function report(config: ClientConfig, job: AgentJob, body: Record<string, 
 async function executeJob(config: ClientConfig, job: AgentJob): Promise<void> {
   try {
     if (!job.leaseToken) throw new Error("Host 返回了无租约作业");
-    if (job.kind === "ALIGN_PLANS" || job.kind === "REVIEW_CHANGES") {
+    if (job.kind === "ALIGN_PLANS" || job.kind === "DESCRIBE_WORKSTREAM" || job.kind === "REVIEW_CHANGES") {
       const runtimeId = `audit-${process.pid}-${Date.now()}`;
       await report(config, job, { phase: "started", runtimeId });
-      const result = await runAudit(String(job.payload.prompt ?? ""), job.payload.outputSchema, config.workspace, auditCodexHome());
+      const result = await runAudit(String(job.payload.prompt ?? ""), job.payload.outputSchema, config.workspace, defaultCodexHome());
       await report(config, job, { phase: "completed", runtimeId, result });
       return;
     }
     if (job.kind === "ALIGN_FINALIZE") {
       const runtimeId = `audit-${process.pid}-${Date.now()}`;
       await report(config, job, { phase: "started", runtimeId });
-      const result = await runAudit(String(job.payload.prompt ?? ""), job.payload.outputSchema, config.workspace, auditCodexHome());
+      const result = await runAudit(String(job.payload.prompt ?? ""), job.payload.outputSchema, config.workspace, defaultCodexHome());
       await report(config, job, { phase: "completed", runtimeId, result });
       return;
     }
     if (job.kind === "SUMMARIZE_CHANGE" || job.kind === "SUMMARIZE_PLAN") {
       const runtimeId = `summary-${process.pid}-${Date.now()}`;
       await report(config, job, { phase: "started", runtimeId });
-      const result = await runAudit(String(job.payload.prompt ?? ""), job.payload.outputSchema, config.workspace, auditCodexHome());
+      const result = await runAudit(String(job.payload.prompt ?? ""), job.payload.outputSchema, config.workspace, defaultCodexHome());
       await report(config, job, { phase: "completed", runtimeId, result });
       return;
     }
@@ -123,14 +126,14 @@ async function executeJob(config: ClientConfig, job: AgentJob): Promise<void> {
           `需求变更摘要：${changeBrief}`
         ].join("\n\n");
         if (Buffer.byteLength(prompt, "utf8") > 48 * 1024) throw new Error("本地取证提示词超出预算");
-        let result = await runAudit(prompt, PROBE_SCHEMA, config.workspace, auditCodexHome()) as { status: string; reason: string; paths: string[] };
+        let result = await runAudit(prompt, PROBE_SCHEMA, config.workspace, defaultCodexHome()) as { status: string; reason: string; paths: string[] };
         if (result.status === "uncertain") {
           const secondPrompt = [prompt,
             "第一次检索仍无法排除影响。请再做一轮只读补查：沿任务入口、依赖和验收路径扩展，不重复已查文件；本轮仍最多 20 个文件、每文件 200 行。确实无法判断则继续返回 uncertain，说明缺少什么证据。",
             `第一次结论：${JSON.stringify({ reason: String(result.reason ?? "").slice(0, 1_000), paths: Array.isArray(result.paths) ? result.paths.slice(0, 20) : [] })}`
           ].join("\n\n");
           if (Buffer.byteLength(secondPrompt, "utf8") > 48 * 1024) throw new Error("补查提示词超出预算");
-          result = await runAudit(secondPrompt, PROBE_SCHEMA, config.workspace, auditCodexHome()) as { status: string; reason: string; paths: string[] };
+          result = await runAudit(secondPrompt, PROBE_SCHEMA, config.workspace, defaultCodexHome()) as { status: string; reason: string; paths: string[] };
         }
         if (result.status === "affected") affectedTaskIds.push(task.id);
         else if (result.status === "unaffected") unaffectedTaskIds.push(task.id);
@@ -142,6 +145,24 @@ async function executeJob(config: ClientConfig, job: AgentJob): Promise<void> {
       await heartbeat(config).catch(() => undefined);
       await report(config, job, { phase: "completed", result: { nodeId: config.nodeId, headSha: before.headSha, fingerprint: before.fingerprint,
         affectedTaskIds, unaffectedTaskIds, uncertainTaskIds, findings, createdAt: new Date().toISOString() } });
+      return;
+    }
+    if (job.kind === "PREPARE_MOCK") {
+      const contracts = Array.isArray(job.payload.contracts) ? job.payload.contracts as Parameters<typeof prepareMock>[2] : [];
+      if (!contracts.length) throw new Error("Mock 作业缺少接口契约");
+      const result = await prepareMock(config, job.entityId, contracts, async (runtimeId) => {
+        await report(config, job, { phase: "started", runtimeId });
+      });
+      await report(config, job, { phase: "completed", result: { verified: true, ...result } });
+      return;
+    }
+    if (job.kind === "INTEGRATE_TASK") {
+      const contracts = Array.isArray(job.payload.contracts) ? job.payload.contracts as Parameters<typeof integrateWithReal>[3] : [];
+      const upstreamShas = Array.isArray(job.payload.upstreamShas) ? job.payload.upstreamShas.map(String) : [];
+      await report(config, job, { phase: "started", runtimeId: `integration-${Date.now()}` });
+      const result = integrateWithReal(config, job.entityId, upstreamShas, contracts);
+      await heartbeat(config, job.entityId);
+      await report(config, job, { phase: "completed", result: { verified: true, ...result } });
       return;
     }
     if (job.kind === "RUN_TASK") {
@@ -179,27 +200,36 @@ export async function runDaemon(): Promise<void> {
   const config = await loadConfig();
   if (!config) return;
   await stat(config.workspace);
-  await saveConfig({ ...config, daemonPid: process.pid });
+  config.daemonPid = process.pid;
+  await saveConfig(config);
   await log(`节点守护进程启动：${config.nodeId}`);
-  const captain = await api<{ viewer?: { role?: string } }>(config, "/api/v1/bootstrap").then((value) => value.viewer?.role === "captain").catch(() => false);
+  let captain = false;
+  const panel = await startLocalPanel(config, { busy: () => executing.values().next().value ?? null, changed: async () => { contextCache = null; await heartbeat(config, undefined, captain); } });
+  await log(`本机面板已监听 127.0.0.1:${panel.port}`);
+  captain = await api<{ viewer?: { role?: string } }>(config, "/api/v1/bootstrap").then((value) => value.viewer?.role === "captain").catch(() => false);
   const stop = () => { stopping = true; for (const run of active.values()) void run.interrupt(); };
   process.once("SIGINT", stop); process.once("SIGTERM", stop);
 
-  let nextHeartbeat = 0;
-  while (!stopping) {
-    if (Date.now() >= nextHeartbeat) {
-      await heartbeat(config, undefined, captain).catch((error) => log(`心跳失败：${error instanceof Error ? error.message : String(error)}`));
-      nextHeartbeat = Date.now() + 15_000;
+  try {
+    let nextHeartbeat = 0;
+    while (!stopping) {
+      if (Date.now() >= nextHeartbeat) {
+        await heartbeat(config, undefined, captain).catch((error) => log(`心跳失败：${error instanceof Error ? error.message : String(error)}`));
+        nextHeartbeat = Date.now() + 15_000;
+      }
+      try {
+        const job = await api<AgentJob | null>(config, "/api/v1/nodes/jobs/next", { method: "POST", body: "{}", headers: { "content-type": "application/json" } });
+        if (job) { executing.set(job.id, job.entityId); while (panel.switching()) await new Promise(resolve => setTimeout(resolve, 25)); void executeJob({ ...config }, job).finally(() => executing.delete(job.id)); }
+      } catch (error) {
+        await log(`获取作业失败：${error instanceof Error ? error.message : String(error)}`);
+        await new Promise((resolve) => setTimeout(resolve, 3_000));
+      }
     }
-    try {
-      const job = await api<AgentJob | null>(config, "/api/v1/nodes/jobs/next", { method: "POST", body: "{}", headers: { "content-type": "application/json" } });
-      if (job) void executeJob(config, job);
-    } catch (error) {
-      await log(`获取作业失败：${error instanceof Error ? error.message : String(error)}`);
-      await new Promise((resolve) => setTimeout(resolve, 3_000));
-    }
+  } finally {
+    const latest = await loadConfig(false);
+    await panel.close();
+    await rm(localPanelPath(), { force: true });
+    if (latest?.daemonPid === process.pid) await saveConfig({ ...latest, daemonPid: null });
+    await log("节点守护进程停止");
   }
-  const latest = await loadConfig(false);
-  if (latest?.daemonPid === process.pid) await saveConfig({ ...latest, daemonPid: null });
-  await log("节点守护进程停止");
 }

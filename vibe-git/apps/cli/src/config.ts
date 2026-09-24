@@ -15,6 +15,7 @@ export interface ClientConfig {
 
 export const vibeHome = () => resolve(process.env.VIBE_GIT_HOME?.trim() || resolve(homedir(), ".vibe-git"));
 export const configPath = () => resolve(vibeHome(), "client.json");
+export const defaultCodexHome = () => resolve(process.env.CODEX_HOME?.trim() || resolve(homedir(), ".codex"));
 export const auditCodexHome = () => resolve(vibeHome(), "audit-codex");
 export const daemonLogPath = () => resolve(vibeHome(), "daemon.log");
 export const hostProcessPath = () => resolve(vibeHome(), "host-process.json");

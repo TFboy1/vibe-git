@@ -1,7 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import type {
   AgentJob, AlignmentRun, CollaborationNode, DevelopmentStage, ImpactReviewBatch,
-  MarkdownDocument, Notification, RoomEvent, StageTask, VibePullRequest
+  MarkdownDocument, Notification, RoomEvent, StageTask, VibePullRequest, Workstream, InterfaceContract
 } from "@vibe-git/protocol";
 import { transaction } from "../db/database.js";
 
@@ -82,6 +82,29 @@ export class V20Repository {
       .run(value.id, value.createdAt, JSON.stringify(value));
   }
 
+  listWorkstreams(alignmentId?: string): Workstream[] {
+    const rows = alignmentId
+      ? this.db.prepare("SELECT data FROM v20_workstreams WHERE alignment_id = ? ORDER BY id").all(alignmentId)
+      : this.db.prepare("SELECT data FROM v20_workstreams ORDER BY id").all();
+    return (rows as { data: string }[]).map((row) => JSON.parse(row.data) as Workstream);
+  }
+  getWorkstream(id: string): Workstream | undefined { return parse<Workstream>(this.db.prepare("SELECT data FROM v20_workstreams WHERE id = ?").get(id) as { data: string } | undefined); }
+  putWorkstream(value: Workstream): void {
+    this.db.prepare("INSERT INTO v20_workstreams (id, alignment_id, stage_id, data) VALUES (?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET stage_id = excluded.stage_id, data = excluded.data")
+      .run(value.id, value.alignmentId, value.stageId, JSON.stringify(value));
+  }
+  listContracts(alignmentId?: string): InterfaceContract[] {
+    const rows = alignmentId
+      ? this.db.prepare("SELECT data FROM v20_interface_contracts WHERE alignment_id = ? ORDER BY id").all(alignmentId)
+      : this.db.prepare("SELECT data FROM v20_interface_contracts ORDER BY id").all();
+    return (rows as { data: string }[]).map((row) => JSON.parse(row.data) as InterfaceContract);
+  }
+  getContract(id: string): InterfaceContract | undefined { return parse<InterfaceContract>(this.db.prepare("SELECT data FROM v20_interface_contracts WHERE id = ?").get(id) as { data: string } | undefined); }
+  putContract(value: InterfaceContract): void {
+    this.db.prepare("INSERT INTO v20_interface_contracts (id, alignment_id, stage_id, data) VALUES (?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET stage_id = excluded.stage_id, data = excluded.data")
+      .run(value.id, value.alignmentId, value.stageId, JSON.stringify(value));
+  }
+
   listStages(): DevelopmentStage[] { return (this.db.prepare("SELECT data FROM v20_stages ORDER BY sequence").all() as { data: string }[]).map((row) => JSON.parse(row.data) as DevelopmentStage); }
   getStage(id: string): DevelopmentStage | undefined { return parse<DevelopmentStage>(this.db.prepare("SELECT data FROM v20_stages WHERE id = ?").get(id) as { data: string } | undefined); }
   currentStage(): DevelopmentStage | undefined { return parse<DevelopmentStage>(this.db.prepare("SELECT data FROM v20_stages WHERE json_extract(data, '$.status') IN ('ACTIVE','REVIEWING','AWAITING_APPLY') ORDER BY sequence DESC LIMIT 1").get() as { data: string } | undefined); }
@@ -94,7 +117,7 @@ export class V20Repository {
     const rows = stageId
       ? this.db.prepare("SELECT data FROM v20_stage_tasks WHERE stage_id = ? ORDER BY id").all(stageId)
       : this.db.prepare("SELECT data FROM v20_stage_tasks ORDER BY stage_id, id").all();
-    return (rows as { data: string }[]).map((row) => JSON.parse(row.data) as StageTask);
+    return (rows as { data: string }[]).map((row) => JSON.parse(row.data) as StageTask).filter((item) => !item.archived);
   }
   getTask(id: string): StageTask | undefined { return parse<StageTask>(this.db.prepare("SELECT data FROM v20_stage_tasks WHERE id = ?").get(id) as { data: string } | undefined); }
   putTask(value: StageTask): void {
@@ -131,6 +154,10 @@ export class V20Repository {
       ? this.db.prepare("SELECT data FROM v20_notifications WHERE recipient_node_id = ? ORDER BY created_at DESC LIMIT 100").all(nodeId)
       : this.db.prepare("SELECT data FROM v20_notifications ORDER BY created_at DESC LIMIT 300").all();
     return (rows as { data: string }[]).map((row) => JSON.parse(row.data) as Notification);
+  }
+  getNotification(id: string): Notification | null {
+    const row = this.db.prepare("SELECT data FROM v20_notifications WHERE id = ?").get(id) as { data: string } | undefined;
+    return row ? JSON.parse(row.data) as Notification : null;
   }
   putNotification(value: Notification): void {
     this.db.prepare("INSERT INTO v20_notifications (id, recipient_node_id, created_at, data) VALUES (?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET data = excluded.data")

@@ -4,20 +4,22 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import type { CapabilityStateV20, RateLimitWindow, WorkTransport } from "@vibe-git/protocol";
+import { codexInvocation } from "./codex-command.js";
 
-const executable = () => process.env.CODEX_BIN?.trim() || "codex";
 const message = (error: unknown) => error instanceof Error ? error.message : String(error);
 
 function commandWorks(args: string[], env?: NodeJS.ProcessEnv): boolean {
   try {
-    execFileSync(executable(), args, { encoding: "utf8", windowsHide: true, timeout: 8_000, stdio: ["ignore", "pipe", "ignore"], env: { ...process.env, ...env } });
+    const command = codexInvocation();
+    execFileSync(command.file, [...command.prefixArgs, ...args], { encoding: "utf8", windowsHide: true, timeout: 8_000, stdio: ["ignore", "pipe", "ignore"], env: { ...process.env, ...env } });
     return true;
   } catch { return false; }
 }
 
 export function probeCodex(env?: NodeJS.ProcessEnv): { state: CapabilityStateV20; appServer: boolean; version: string | null } {
   try {
-    const version = execFileSync(executable(), ["--version"], { encoding: "utf8", windowsHide: true, timeout: 5_000, stdio: ["ignore", "pipe", "ignore"], env: { ...process.env, ...env } }).trim();
+    const command = codexInvocation();
+    const version = execFileSync(command.file, [...command.prefixArgs, "--version"], { encoding: "utf8", windowsHide: true, timeout: 5_000, stdio: ["ignore", "pipe", "ignore"], env: { ...process.env, ...env } }).trim();
     const loggedIn = commandWorks(["login", "status"], env);
     return { state: loggedIn ? "available" : "unverified", appServer: loggedIn && commandWorks(["app-server", "--help"], env), version };
   } catch { return { state: "unsupported", appServer: false, version: null }; }
@@ -42,7 +44,8 @@ export async function runAudit(prompt: string, schema: unknown, workspace: strin
   await writeFile(schemaPath, JSON.stringify(schema), "utf8");
   try {
     await new Promise<void>((done, fail) => {
-      const child = spawn(executable(), [
+      const command = codexInvocation();
+      const child = spawn(command.file, [...command.prefixArgs,
         "exec", "--sandbox", "read-only", "--ephemeral", "--skip-git-repo-check",
         "--output-schema", schemaPath, "--output-last-message", outputPath, "--cd", workspace, "-"
       ], { cwd: workspace, windowsHide: true, env: { ...process.env, CODEX_HOME: codexHome }, stdio: ["pipe", "pipe", "pipe"] });
@@ -81,7 +84,8 @@ export async function startDevelopment(prompt: string, workspaceRaw: string, req
 }
 
 async function startCli(prompt: string, workspace: string): Promise<ActiveRun> {
-  const child = spawn(executable(), ["exec", "--sandbox", "workspace-write", "--json", "--cd", workspace, "-"], {
+  const command = codexInvocation();
+  const child = spawn(command.file, [...command.prefixArgs, "exec", "--sandbox", "workspace-write", "--json", "--cd", workspace, "-"], {
     cwd: workspace, windowsHide: true, stdio: ["pipe", "pipe", "pipe"]
   });
   const started = deferred<string>();
@@ -126,13 +130,14 @@ async function startCli(prompt: string, workspace: string): Promise<ActiveRun> {
 }
 
 async function startAppServer(prompt: string, workspace: string): Promise<ActiveRun> {
-  const child = spawn(executable(), ["app-server", "--stdio"], { cwd: workspace, windowsHide: true, stdio: ["pipe", "pipe", "pipe"] });
+  const command = codexInvocation();
+  const child = spawn(command.file, [...command.prefixArgs, "app-server", "--stdio"], { cwd: workspace, windowsHide: true, stdio: ["pipe", "pipe", "pipe"] });
   const client = new AppServerClient(child);
   try {
     await client.request("initialize", { clientInfo: { name: "vibe_git", title: "Vibe-Git", version: "0.20.0" } }, 20_000);
     client.notify("initialized", {});
     const thread = await client.request<{ thread: { id: string } }>("thread/start", {
-      cwd: workspace, approvalPolicy: "never", sandbox: "workspaceWrite", serviceName: "vibe_git"
+      cwd: workspace, approvalPolicy: "never", sandbox: "workspace-write", serviceName: "vibe_git"
     }, 20_000);
     const turn = await client.request<{ turn: { id: string } }>("turn/start", {
       threadId: thread.thread.id, input: [{ type: "text", text: prompt }], cwd: workspace,
@@ -206,7 +211,8 @@ class AppServerClient {
 }
 
 export async function readRateLimits(codexHome: string): Promise<RateLimitWindow[]> {
-  const child = spawn(executable(), ["app-server", "--stdio"], { windowsHide: true, env: { ...process.env, CODEX_HOME: codexHome }, stdio: ["pipe", "pipe", "pipe"] });
+  const command = codexInvocation();
+  const child = spawn(command.file, [...command.prefixArgs, "app-server", "--stdio"], { windowsHide: true, env: { ...process.env, CODEX_HOME: codexHome }, stdio: ["pipe", "pipe", "pipe"] });
   const client = new AppServerClient(child);
   try {
     await client.request("initialize", { clientInfo: { name: "vibe_git", title: "Vibe-Git", version: "0.20.0" } }, 10_000);
