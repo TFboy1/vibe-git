@@ -159,6 +159,18 @@ pre { margin: 0; overflow-x: auto; padding: 17px 14px 19px; color: #f1f1f1; font
 .faq-list details[open] summary::after { content: '−'; }
 .faq-list details p { max-width: 850px; margin: -3px 42px 22px 0; color: #999; font-size: 12px; line-height: 1.85; }
 .faq-list code { color: #ddd; font: 11px var(--mono); }
+.community-section { background: #0d0d0d; border-bottom: 1px solid var(--line); }
+.community-card { display: grid; grid-template-columns: minmax(240px, 420px) minmax(0, 1fr); gap: clamp(28px, 6vw, 92px); align-items: center; padding: clamp(20px, 4vw, 44px); background: #f0f0ef; color: #111; }
+.community-qr { width: min(100%, 360px); margin-inline: auto; background: #fff; }
+.community-qr img { display: block; width: 100%; height: auto; }
+.community-copy { max-width: 520px; }
+.community-copy .guide-number { color: #666; }
+.community-copy h3 { margin-bottom: 16px; font-size: clamp(28px, 4vw, 46px); line-height: 1.05; letter-spacing: -.07em; }
+.community-copy .mini-steps { margin-top: 0; color: #444; }
+.community-copy .mini-steps li::marker { color: #111; }
+.community-expiry { margin: 26px 0 0; padding: 15px 16px; color: #4a4a4a; background: #dededc; border-left: 2px solid #222; font-size: 12px; line-height: 1.75; }
+.community-expiry strong { color: #111; }
+.community-copy .guide-note { color: #666; }
 .start-step { min-width: 0; padding-top: 19px; border-top: 1px solid #414141; }
 .step-title { display: flex; gap: 15px; align-items: baseline; }
 .step-title span { color: #8d8d8d; font: 11px var(--mono); }
@@ -231,6 +243,8 @@ pre { margin: 0; overflow-x: auto; padding: 17px 14px 19px; color: #f1f1f1; font
   .start-grid { gap: 36px; }
   .role-card h3 { font-size: 27px; }
   .timeline-list li { min-height: 0; }
+  .community-card { grid-template-columns: minmax(0, 1fr); gap: 28px; padding: 20px; }
+  .community-qr { width: min(100%, 330px); }
   .text-link { margin-top: 16px; }
   .flow-row { grid-template-columns: 24px 100px minmax(0, 1fr); gap: 8px 16px; padding-block: 22px; }
   .flow-row code { grid-column: 3; text-align: left; }
