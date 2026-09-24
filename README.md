@@ -3,6 +3,26 @@
 <h1 align="center">Vibe-Git</h1>
 <p align="center"><strong>One repo. Many agents. One intent.</strong><br />给多人 Codex 开发一条可追踪的协作协议。</p>
 
+<p align="center">
+
+[![Discord](https://img.shields.io/badge/Discord-加入讨论-5865F2?style=for-the-badge&logo=discord&logoColor=white)](https://discord.gg/DrqtEjk6)
+[![Skills.sh](https://img.shields.io/badge/Skills.sh-安装%20Skill-00C853?style=for-the-badge&logo=hackthebox&logoColor=white)](https://skills.sh/tfboy1/vibe-git-skill/vibe-git)
+[![爱发电](https://img.shields.io/badge/爱发电-支持项目-FF69B4?style=for-the-badge&logo=buy-me-a-coffee&logoColor=white)](https://www.ifdian.net/item/1a20ed042f0711f1865a52540025c377)
+[![GitHub Stars](https://img.shields.io/github/stars/TFboy1/vibe-git?style=for-the-badge&logo=github&color=yellow)](https://github.com/TFboy1/vibe-git/stargazers)
+[![Buy Me a Coffee](https://img.shields.io/badge/Buy%20Me%20a%20Coffee-☕-FFDD00?style=for-the-badge&logo=buy-me-a-coffee&logoColor=black)](https://www.creem.io/payment/prod_1yc40mIhKwwrc7iqFOG9G2)
+
+</p>
+
+<p align="center">
+
+[![简体中文](https://img.shields.io/badge/简体中文-当前语言-red?style=flat-square)](#)
+[![English](https://img.shields.io/badge/English-README-blue?style=flat-square)](docs/README_EN.md)
+[![日本語](https://img.shields.io/badge/日本語-README-blue?style=flat-square)](docs/README_JA.md)
+[![Français](https://img.shields.io/badge/Français-README-blue?style=flat-square)](docs/README_FR.md)
+[![Deutsch](https://img.shields.io/badge/Deutsch-README-blue?style=flat-square)](docs/README_DE.md)
+
+</p>
+
 <p align="center"><code>CLI-first</code> · <code>Captain-hosted</code> · <code>Git + Codex</code> · <code>v0.20</code></p>
 
 <p align="center"><a href="https://tfboy1.github.io/vibe-git/">文档站</a> · <a href="#快速开始">快速开始</a> · <a href="vibe-git/README.md">使用手册</a> · <a href="vibe-git/CHANGELOG.md">更新日志</a> · <a href="https://github.com/TFboy1/vibe-git/issues">Issues</a></p>
