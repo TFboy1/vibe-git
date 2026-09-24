@@ -1,8 +1,6 @@
 <p align="center"><img src="docs/assets/vibe-git-logo-readme.svg" alt="Vibe-Git logo" width="180" /></p>
 
 <h1 align="center">Vibe-Git</h1>
-Vibe-Git CLI 已发布为 [@vibe-git/vibe-git](https://www.npmjs.com/package/@vibe-git/vibe-git)。给 Codex 使用的 [Vibe-Git Skill](https://github.com/TFboy1/vibe-git-skill) 独立发布；本项目通过 Git submodule 绑定它。
-
 <p align="center"><strong>One repo. Many agents. One intent.</strong><br />给多人 Codex 开发一条可追踪的协作协议。</p>
 
 <p align="center"><code>CLI-first</code> · <code>Captain-hosted</code> · <code>Git + Codex</code> · <code>v0.20</code></p>
