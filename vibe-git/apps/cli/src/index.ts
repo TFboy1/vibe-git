@@ -9,7 +9,7 @@ import type { AlignmentRun, JoinResponse, MarkdownDocument, V20BootstrapPayload,
 import { api, post } from "./api.js";
 import { codexInvocation } from "./codex-command.js";
 import {
-  auditCodexHome, configPath, daemonLogPath, hostLogPath, hostProcessPath, loadConfig, readJson,
+  defaultCodexHome, configPath, daemonLogPath, hostLogPath, hostProcessPath, loadConfig, readJson,
   saveConfig, vibeHome, writeJson, type ClientConfig
 } from "./config.js";
 import { probeCodex } from "./codex.js";
@@ -21,6 +21,10 @@ const ROOT = resolve(fileURLToPath(new URL("../../..", import.meta.url)));
 const HOST_ENTRY = resolve(fileURLToPath(new URL("../../host/dist/index.js", import.meta.url)));
 const CLI_ENTRY = fileURLToPath(import.meta.url);
 const LOCAL_HOST = "http://127.0.0.1:8787";
+
+function hostDataRoot(): string {
+  return resolve(process.env.VIBE_GIT_DATA_DIR?.trim() || resolve(vibeHome(), "host"));
+}
 
 interface HostProcess { pid: number; hostUrl: string; startedAt: string; root: string }
 interface CaptainFile { roomId: string; nodeId: string; nodeToken: string }
@@ -108,7 +112,13 @@ async function hostStart(): Promise<void> {
     const fd = openSync(hostLogPath(), "a");
     const child = spawn(process.execPath, [HOST_ENTRY], {
       detached: true, windowsHide: true, cwd: ROOT, stdio: ["ignore", fd, fd],
-      env: { ...process.env, PORT: "8787", HOST: "0.0.0.0", VIBE_GIT_TUNNEL_TARGET: LOCAL_HOST }
+      env: {
+        ...process.env,
+        PORT: "8787",
+        HOST: "0.0.0.0",
+        VIBE_GIT_DATA_DIR: hostDataRoot(),
+        VIBE_GIT_TUNNEL_TARGET: LOCAL_HOST
+      }
     });
     child.unref(); closeSync(fd);
     info = { pid: child.pid!, hostUrl: LOCAL_HOST, startedAt: new Date().toISOString(), root: ROOT };
@@ -117,7 +127,7 @@ async function hostStart(): Promise<void> {
     catch (error) { try { process.kill(info.pid, "SIGTERM"); } catch { /* no-op */ } throw error; }
   }
 
-  const captainPath = resolve(ROOT, "data/v20/captain.json");
+  const captainPath = resolve(hostDataRoot(), "v20/captain.json");
   const captain = await readJson<CaptainFile>(captainPath);
   if (!captain) throw new Error(`无法读取 Captain 凭据：${captainPath}`);
   const previous = await loadConfig(false);
@@ -129,8 +139,7 @@ async function hostStart(): Promise<void> {
   await saveConfig(config);
   await spawnDaemon(config);
   await post(config, "/api/v1/nodes/heartbeat", {
-    workspaceReady: false, auditCodex: probeCodex({ CODEX_HOME: auditCodexHome() }).state,
-    workCodex: probeCodex().state, workTransport: config.workTransport, rateLimits: [], git: null, currentTaskId: null
+    workspaceReady: false, codex: probeCodex().state, workTransport: config.workTransport, rateLimits: [], git: null, currentTaskId: null
   }).catch(() => undefined);
 
   let tunnelMessage = "";
@@ -282,22 +291,20 @@ async function main(): Promise<void> {
   if (group === "codex") {
     if (action === "bind") {
       const command = codexInvocation();
-      await mkdir(auditCodexHome(), { recursive: true, mode: 0o700 });
+      await mkdir(defaultCodexHome(), { recursive: true, mode: 0o700 });
       const result = spawn(command.file, [...command.prefixArgs, "login", "--device-auth"], {
-        stdio: "inherit", windowsHide: true, env: { ...process.env, CODEX_HOME: auditCodexHome() }
+        stdio: "inherit", windowsHide: true, env: { ...process.env, CODEX_HOME: defaultCodexHome() }
       });
       const code = await new Promise<number | null>((resolveExit, reject) => {
         result.once("error", (error) => reject(new Error(`无法启动 Codex CLI：${error.message}`)));
         result.once("exit", resolveExit);
       });
       if (code !== 0) throw new Error(`Codex device-auth 失败（退出码 ${code ?? "null"}）`);
-      out("专用审核 Codex 已绑定；凭据只保存在本机 ~/.vibe-git/audit-codex"); return;
+      out("Codex 算力网已接入；审核与开发共用本机默认登录"); return;
     }
-    if (action === "status") { out({ home: auditCodexHome(), ...probeCodex({ CODEX_HOME: auditCodexHome() }) }); return; }
+    if (action === "status") { out({ home: defaultCodexHome(), ...probeCodex({ CODEX_HOME: defaultCodexHome() }) }); return; }
     if (action === "unbind") {
-      const target = auditCodexHome();
-      if (target !== resolve(homedir(), ".vibe-git", "audit-codex") && !process.env.VIBE_GIT_HOME) throw new Error("拒绝删除非预期的 Codex 目录");
-      await rm(target, { recursive: true, force: true }); out("专用审核 Codex 已解绑；日常 ~/.codex 未受影响"); return;
+      throw new Error("审核与开发已共用本机 Codex 登录。如需退出，请在本机运行 codex logout；这会同时退出其他使用该登录的 Codex 客户端。");
     }
   }
   if (group === "config" && action === "set" && third === "work.transport") {

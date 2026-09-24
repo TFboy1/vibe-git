@@ -47,7 +47,7 @@ export async function ensureV20Runtime(repo: V20Repository, dataDir: string): Pr
     const now = new Date().toISOString();
     const node: CollaborationNode = storedCaptain ? { ...storedCaptain, revoked: false } : {
       id: nodeId, label: "Captain", role: "captain", revoked: false, connected: false,
-      workspaceReady: false, auditCodex: "unverified", workCodex: "unverified", workTransport: "auto",
+      workspaceReady: false, codex: "unverified", workTransport: "auto",
       activeJobCount: 0, rateLimits: [], git: null, currentTaskId: null, lastSeenAt: null,
       lastAuditJobAt: null, createdAt: now
     };

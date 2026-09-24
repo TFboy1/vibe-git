@@ -198,7 +198,7 @@ export class V20Service {
     const createdAt = now();
     const node: CollaborationNode = {
       id: nodeId, label: `Member-${nodeId.slice(-4).toUpperCase()}`, role: "member", revoked: false,
-      connected: false, workspaceReady: false, auditCodex: "unverified", workCodex: "unverified", workTransport: "auto",
+      connected: false, workspaceReady: false, codex: "unverified", workTransport: "auto",
       activeJobCount: 0, rateLimits: [], git: null, currentTaskId: null, lastSeenAt: null,
       lastAuditJobAt: null, createdAt
     };
@@ -212,7 +212,7 @@ export class V20Service {
   async bootstrap(viewer: CollaborationNode): Promise<V20BootstrapPayload> {
     const nodes = this.repo.listNodes().filter((node) => !node.revoked).map((node) => this.withConnection(node));
     const plans = this.latestPlans();
-    const available = nodes.filter((node) => node.connected && node.auditCodex === "available");
+    const available = nodes.filter((node) => node.connected && (node.codex ?? node.auditCodex) === "available");
     return {
       room: {
         id: this.repo.room()!.id,
@@ -232,12 +232,14 @@ export class V20Service {
   }
 
   heartbeat(node: CollaborationNode, input: NodeHeartbeatInput): CollaborationNode {
+    const codex = input.codex ?? input.workCodex ?? input.auditCodex;
+    if (!codex || !["available", "unverified", "unsupported", "offline"].includes(codex)) throw badRequest("Codex 状态无效");
+    const { auditCodex: _audit, workCodex: _work, ...baseNode } = node;
     const repositoryContext = node.role === "captain" && input.repositoryContext
       ? this.sanitizeRepositoryContext(input.repositoryContext, input.git?.headSha ?? null)
       : node.repositoryContext ?? null;
     const updated: CollaborationNode = {
-      ...node, connected: true, workspaceReady: Boolean(input.workspaceReady), auditCodex: input.auditCodex,
-      workCodex: input.workCodex, workTransport: input.workTransport, rateLimits: this.sanitizeRateLimits(input.rateLimits),
+      ...baseNode, connected: true, workspaceReady: Boolean(input.workspaceReady), codex, workTransport: input.workTransport, rateLimits: this.sanitizeRateLimits(input.rateLimits),
       git: this.sanitizeGit(input.git), currentTaskId: input.currentTaskId || null, lastSeenAt: now(), repositoryContext
     };
     this.repo.tx(() => {
@@ -249,7 +251,7 @@ export class V20Service {
         }
       }
     });
-    this.event("node.heartbeat", node.id, "node", node.id, { auditCodex: updated.auditCodex, workCodex: updated.workCodex, currentTaskId: updated.currentTaskId });
+    this.event("node.heartbeat", node.id, "node", node.id, { codex: updated.codex, currentTaskId: updated.currentTaskId });
     const stage = this.repo.currentStage();
     if (stage?.status === "ACTIVE") this.finishStageIfReady(stage.id);
     if (stage?.reviewId && ["REVIEWING", "AWAITING_APPLY"].includes(stage.status)) {
@@ -417,7 +419,7 @@ export class V20Service {
       baseRequirementRevision: this.repo.requirementRevision(), status: "QUEUED", reviewId: null,
       createdAt: document.createdAt, decidedAt: null
     };
-    this.repo.tx(() => { this.repo.putDocument(document); this.repo.putPullRequest(change); this.event("change.submitted", node.id, "pull_request", change.id, { stageId: stage.id, sha256: document.sha256 }); });
+    this.repo.tx(() => { this.repo.putDocument(document); this.repo.putPullRequest(change); this.repo.listNodes().filter(member => member.role === "captain" && !member.revoked && member.id !== node.id).forEach(member => this.notify(member.id, "CHANGE", `${node.label} 提交了需求变更`, document.filename, change.id)); this.event("change.submitted", node.id, "pull_request", change.id, { stageId: stage.id, sha256: document.sha256 }); });
     return change;
   }
 
@@ -580,7 +582,7 @@ export class V20Service {
     if (task.archived) throw invalidState("旧切片已被重编排，请领取新的工作主线");
     if (task.assigneeNodeId !== node.id) throw forbidden("只能启动分配给自己的任务");
     if (!["PUBLISHED", "READY", "FAILED"].includes(task.status)) throw invalidState("当前任务状态不能开工");
-    if (!node.workspaceReady || node.workCodex !== "available") throw unavailable("本机 Git 工作区或日常 Codex 尚未就绪");
+    if (!node.workspaceReady || (node.codex ?? node.workCodex) !== "available") throw unavailable("本机 Git 工作区或日常 Codex 尚未就绪");
     const activeDevelopment = this.repo.listJobs().find((job) => job.targetNodeId === node.id && job.kind === "RUN_TASK" && ["QUEUED", "LEASED", "RUNNING"].includes(job.status));
     if (activeDevelopment) throw invalidState("本节点已有开发任务正在执行", { jobId: activeDevelopment.id, taskId: activeDevelopment.entityId });
     const edges = task.dependencyEdges ?? task.dependencies.map((upstreamTaskId) => ({ upstreamTaskId, mode: "HARD" as const, reason: "旧版硬依赖", contractId: null, contractRevision: null }));
@@ -646,6 +648,16 @@ export class V20Service {
     const updated: StageTask = { ...task, status: "DONE", lastGit: currentNode.git, revision: task.revision + 1, doneAt: now(), updatedAt: now() };
     this.repo.tx(() => { this.repo.putTask(updated); this.event("task.done", node.id, "task", task.id, { headSha: currentNode.git!.headSha }); });
     this.finishStageIfReady(task.stageId);
+    return updated;
+  }
+
+  readNotification(node: CollaborationNode, notificationId: string): Notification {
+    const notification = this.repo.getNotification(notificationId);
+    if (!notification) throw notFound("通知不存在");
+    if (notification.recipientNodeId !== node.id) throw forbidden("只能标记自己的通知");
+    if (notification.readAt) return notification;
+    const updated = { ...notification, readAt: now() };
+    this.repo.tx(() => { this.repo.putNotification(updated); this.event("notification.read", node.id, "notification", notification.id, {}); });
     return updated;
   }
 
@@ -1684,7 +1696,7 @@ export class V20Service {
   private selectAuditNode(exclude: string[] = [], required = true): CollaborationNode | null {
     const excluded = new Set(exclude);
     const activeJobs = this.repo.listJobs().filter((job) => ["QUEUED", "LEASED", "RUNNING"].includes(job.status));
-    const candidates = this.repo.listNodes().filter((node) => !node.revoked && !excluded.has(node.id) && isRecent(node.lastSeenAt) && node.auditCodex === "available");
+    const candidates = this.repo.listNodes().filter((node) => !node.revoked && !excluded.has(node.id) && isRecent(node.lastSeenAt) && (node.codex ?? node.auditCodex) === "available");
     candidates.sort((a, b) => {
       const activeA = activeJobs.filter((job) => job.targetNodeId === a.id).length;
       const activeB = activeJobs.filter((job) => job.targetNodeId === b.id).length;
@@ -1757,7 +1769,8 @@ export class V20Service {
 
   private withConnection(node: CollaborationNode): CollaborationNode {
     const active = this.repo.listJobs().filter((job) => job.targetNodeId === node.id && ["QUEUED", "LEASED", "RUNNING"].includes(job.status)).length;
-    return { ...node, connected: !node.revoked && isRecent(node.lastSeenAt), activeJobCount: active };
+    const { auditCodex, workCodex, ...publicNode } = node;
+    return { ...publicNode, codex: node.codex ?? workCodex ?? auditCodex ?? "unverified", connected: !node.revoked && isRecent(node.lastSeenAt), activeJobCount: active };
   }
 
   private validNodeId(candidate: string): string {

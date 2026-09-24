@@ -4,7 +4,14 @@ Vibe-Git 是一个 **CLI 主导、网页观察** 的多人 Codex 协作控制面
 
 ## 安装
 
-需要 Node.js 24+、Git、Codex CLI。
+需要 Node.js 24+、Git、Codex CLI。通过 npm 手动安装已发布的 CLI：
+
+```powershell
+npm install -g @vibe-git/vibe-git
+vibe-git --help
+```
+
+若要从源码构建，请先进入仓库中的 `vibe-git/` 目录，然后执行：
 
 ```powershell
 npm ci
@@ -18,14 +25,7 @@ npm link
 node .\apps\cli\dist\index.js
 ```
 
-仓库根目录提供 Codex Skill：[`.agents/skills/vibe-git/SKILL.md`](../.agents/skills/vibe-git/SKILL.md)。在本仓库使用 Codex 时可用 `$vibe-git` 调用；Skill 包含源码安装、队长与成员的 CLI 工作流，以及凭据处理约定。若要在其他项目也使用该 Skill，可将整个 `.agents/skills/vibe-git` 文件夹复制到个人 `~/.codex/skills/` 下。
-
-```powershell
-$repoRoot = (git rev-parse --show-toplevel).Trim()
-$skillHome = Join-Path $HOME ".codex\skills"
-New-Item -ItemType Directory -Path $skillHome -Force | Out-Null
-Copy-Item -LiteralPath (Join-Path $repoRoot ".agents\skills\vibe-git") -Destination $skillHome -Recurse
-```
+Codex Skill 独立发布，可运行 `npx skills add TFboy1/vibe-git-skill --skill vibe-git` 安装。在 Codex 中可用 `$vibe-git` 调用；Skill 包含安装、队长与成员的 CLI 工作流，以及凭据处理约定。本仓库以 Git submodule 绑定该 Skill。
 
 ## 1. 队长启动
 

@@ -155,6 +155,10 @@ export class V20Repository {
       : this.db.prepare("SELECT data FROM v20_notifications ORDER BY created_at DESC LIMIT 300").all();
     return (rows as { data: string }[]).map((row) => JSON.parse(row.data) as Notification);
   }
+  getNotification(id: string): Notification | null {
+    const row = this.db.prepare("SELECT data FROM v20_notifications WHERE id = ?").get(id) as { data: string } | undefined;
+    return row ? JSON.parse(row.data) as Notification : null;
+  }
   putNotification(value: Notification): void {
     this.db.prepare("INSERT INTO v20_notifications (id, recipient_node_id, created_at, data) VALUES (?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET data = excluded.data")
       .run(value.id, value.recipientNodeId, value.createdAt, JSON.stringify(value));

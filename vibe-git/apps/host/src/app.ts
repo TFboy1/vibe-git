@@ -14,6 +14,10 @@ import { V20Service } from "./v20/service.js";
 
 const ROOT = resolve(fileURLToPath(new URL("../../..", import.meta.url)));
 
+function defaultDataRoot(): string {
+  return resolve(process.env.VIBE_GIT_DATA_DIR?.trim() || resolve(ROOT, "data"));
+}
+
 export interface BuildAppOptions {
   dbPath?: string;
   dataDir?: string;
@@ -67,15 +71,16 @@ async function registerStatic(app: FastifyInstance, staticDir: string): Promise<
 
 export async function buildApp(options: BuildAppOptions = {}) {
   const app = Fastify({ logger: options.logger ?? false, trustProxy: true, bodyLimit: 600 * 1024 });
-  const dbPath = options.dbPath ?? resolve(ROOT, "data/workspace.db");
-  const dataDir = options.dataDir ?? resolve(ROOT, "data/v20");
+  const dataRoot = defaultDataRoot();
+  const dbPath = options.dbPath ?? resolve(dataRoot, "workspace.db");
+  const dataDir = options.dataDir ?? resolve(dataRoot, "v20");
   if (options.backupDatabase !== false) await backupBeforeSchemaUpgrade(dbPath, dataDir);
   const db = openDatabase(dbPath);
   const repo = new V20Repository(db);
   repo.setMeta("schema_version", "21");
   const runtime = await ensureV20Runtime(repo, dataDir);
   const hub = new EventHub();
-  const cloudflareManager = options.cloudflareManager ?? new CloudflareTunnelManager(resolve(ROOT, "data/tools/cloudflared.exe"));
+  const cloudflareManager = options.cloudflareManager ?? new CloudflareTunnelManager(resolve(dataRoot, "tools/cloudflared.exe"));
   const service = new V20Service(repo, hub, dataDir, cloudflareManager, runtime.inviteToken);
 
   app.decorate("v20Service", service);

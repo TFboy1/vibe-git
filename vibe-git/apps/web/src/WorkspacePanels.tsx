@@ -4,8 +4,8 @@ import { api } from "./api";
 
 const stateLabel: Record<string, string> = { planned: "待开始", in_progress: "进行中", blocked: "受阻", done: "已完成" };
 
-export function ProposalComposer({ data, current, onClose, onSaved }: {
-  data: V20BootstrapPayload; current: MarkdownDocument | undefined; onClose(): void; onSaved(): Promise<void>;
+export function ProposalComposer({ data, current, onClose, onSaved, inline = false }: {
+  data: V20BootstrapPayload; current: MarkdownDocument | undefined; onClose(): void; onSaved(): Promise<void>; inline?: boolean;
 }) {
   const [file, setFile] = useState<{ filename: string; content: string } | null>(null);
   const [base] = useState(() => current ? { id: current.id, revision: current.revision } : null);
@@ -22,8 +22,8 @@ export function ProposalComposer({ data, current, onClose, onSaved }: {
     } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
     finally { setPending(false); }
   };
-  return <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
-    <section className="modal-card" role="dialog" aria-modal="true" aria-label={current ? "更新我的提案" : "提交我的提案"}>
+  return <div className={inline ? "inline-composer" : "modal-backdrop"} onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
+    <section className="modal-card" role="dialog" aria-modal={!inline} aria-label={current ? "更新我的提案" : "提交我的提案"}>
       <header><div><small>项目提案</small><h2>{current ? "更新我的提案" : "提交我的提案"}</h2><p>从本机选择 Markdown 文件。旧版本会保留，模块影响由队长发起的 Agent 对齐审核分析。</p></div><button onClick={onClose} aria-label="关闭">×</button></header>
       <div className="modal-body">
         <label className="file-pick"><span className="file-pick-icon" aria-hidden="true">↑</span><strong>选择 .md 文件</strong><small>UTF-8 · 最大 256 KiB</small><input type="file" accept=".md,text/markdown" aria-label="选择提案 Markdown 文件" onChange={async (event) => {

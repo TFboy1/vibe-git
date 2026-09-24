@@ -1,3 +1,5 @@
+import { codexController } from "./local-codex.js";
+import { workspaceController } from "./local-workspace.js";
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { existsSync } from "node:fs";
@@ -29,9 +31,11 @@ function json(res: ServerResponse, code: number, value: unknown): void {
   res.writeHead(code, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
   res.end(JSON.stringify(value));
 }
-export async function startLocalPanel(config: ClientConfig): Promise<{ port: number; close(): Promise<void> }> {
+export async function startLocalPanel(config: ClientConfig, controls: { busy(): string | null; changed(): Promise<void> } = { busy: () => null, changed: async () => undefined }): Promise<{ port: number; switching(): boolean; close(): Promise<void> }> {
+  const codex = codexController(controls.changed);
+  const workspace = workspaceController(config, controls.busy, controls.changed);
   const tickets = new Map<string, number>();
-  const sessions = new Set<string>();
+  const sessions = new Map<string, number>();
   const server = createServer(async (req, res) => {
     try {
       const url = new URL(req.url ?? "/", "http://127.0.0.1");
@@ -45,13 +49,23 @@ export async function startLocalPanel(config: ClientConfig): Promise<{ port: num
         const ticket = url.pathname.slice("/_local/open/".length);
         const expires = tickets.get(ticket); tickets.delete(ticket);
         if (!expires || expires < Date.now()) return json(res, 403, { error: "本机面板票据已失效" });
-        const session = randomBytes(32).toString("base64url"); sessions.add(session);
+        const session = randomBytes(32).toString("base64url"); sessions.set(session, Date.now() + 60 * 60_000);
         res.writeHead(302, { location: "/", "set-cookie": `vg_local=${session}; HttpOnly; SameSite=Strict; Path=/`, "cache-control": "no-store" }); res.end(); return;
       }
       const session = req.headers.cookie?.split(";").map((value) => value.trim()).find((value) => value.startsWith("vg_local="))?.slice(9) ?? "";
-      if (!sessions.has(session)) return json(res, 403, { error: "请先在本机运行 vibe-git open" });
+      if ((sessions.get(session) ?? 0) <= Date.now()) return json(res, 403, { error: "请先在本机运行 vibe-git open" });
       if (!["GET", "HEAD"].includes(req.method ?? "") && req.headers.origin !== origin) return json(res, 403, { error: "跨站请求被拒绝" });
       if (url.pathname === "/api/local/capabilities") return json(res, 200, { local: true, chat: probeCodex().appServer });
+      if (url.pathname === "/api/local/workspace" && req.method === "GET") return json(res, 200, await workspace.get());
+      if (url.pathname === "/api/local/workspace/pick" && req.method === "POST") return json(res, 200, await workspace.pick());
+      if (url.pathname === "/api/local/workspace/select" && req.method === "POST") {
+        const value = await body(req);
+        if (typeof value.path !== "string" || !value.path.trim()) return json(res, 400, { error: "请选择 Git 工作区" });
+        return json(res, 200, await workspace.select(value.path));
+      }
+      if (url.pathname === "/api/local/codex" && req.method === "GET") return json(res, 200, await codex.status());
+      if (url.pathname === "/api/local/codex/connect" && req.method === "POST") return json(res, 200, codex.connect());
+      if (url.pathname.startsWith("/api/local/") && !url.pathname.startsWith("/api/local/chat/")) return json(res, 404, { error: "本机接口不存在" });
       const match = url.pathname.match(/^\/api\/local\/chat\/([^/]+)(\/finalize)?$/);
       if (match && req.method === "POST") {
         const taskId = decodeURIComponent(match[1]!);
@@ -65,12 +79,16 @@ export async function startLocalPanel(config: ClientConfig): Promise<{ port: num
       }
       if (url.pathname.startsWith("/api/v1/") || url.pathname === "/health") {
         const input = ["GET", "HEAD"].includes(req.method ?? "") ? undefined : Buffer.from(JSON.stringify(await body(req)), "utf8");
+        const controller = new AbortController();
+        res.once("close", () => controller.abort());
         const upstream = await fetch(`${config.hostUrl.replace(/\/$/, "")}${url.pathname}${url.search}`, {
-          method: req.method ?? "GET", headers: { authorization: `Bearer ${config.nodeToken}`, ...(input ? { "content-type": "application/json" } : {}) },
+          signal: controller.signal, method: req.method ?? "GET", headers: { authorization: `Bearer ${config.nodeToken}`, ...(input ? { "content-type": "application/json" } : {}) },
           ...(input ? { body: input } : {})
         });
         res.writeHead(upstream.status, { "content-type": upstream.headers.get("content-type") ?? "application/octet-stream",
           "cache-control": "no-store" });
+        // An idle SSE stream must open immediately, before its first event.
+        if (upstream.headers.get("content-type")?.startsWith("text/event-stream")) res.flushHeaders();
         if (upstream.body) for await (const chunk of upstream.body) res.write(chunk);
         res.end(); return;
       }
@@ -89,5 +107,5 @@ export async function startLocalPanel(config: ClientConfig): Promise<{ port: num
   });
   const port = (server.address() as { port: number }).port;
   await writeJson(localPanelPath(), { port, pid: process.pid });
-  return { port, close: () => new Promise<void>((resolvePromise) => server.close(() => resolvePromise())) };
+  return { port, switching: workspace.isSwitching, close: () => { codex.close(); server.closeAllConnections(); return new Promise<void>((resolvePromise) => server.close(() => resolvePromise())); } };
 }
