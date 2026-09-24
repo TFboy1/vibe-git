@@ -34,11 +34,17 @@
       <div class="hero-copy">
         <p class="eyebrow"><span class="eyebrow-line"></span> AGENT-FIRST COLLABORATION <span class="eyebrow-dot">●</span> 0.20</p>
         <h1 id="hero-title">让 Agent 先把协作<br /><em>安装好。</em></h1>
-        <p class="hero-lede">Vibe-Git 把多人 Codex 的提案、对齐、任务和需求变更连成一条可追踪的线。你只需要安装 Skill，再用一句话让 Agent 带你开始。</p>
+        <p class="hero-lede" data-typewriter="intro">Vibe-Git 把多人 Codex 的提案、对齐、任务和需求变更连成一条可追踪的线。你只需要安装 Skill，再用一句话让 Agent 带你开始。</p>
         <div class="hero-actions"><a class="button button-primary" href="#install">开始安装 <span>↓</span></a><a class="button button-ghost" href="guide.html">阅读完整文档 <span>↗</span></a><a class="button button-text" href="https://github.com/TFboy1/vibe-git" target="_blank" rel="noopener noreferrer">GitHub 仓库 <span>↗</span></a></div>
         <div class="hero-proof"><span>ONE REPO</span><i>·</i><span>MANY AGENTS</span><i>·</i><span>ONE INTENT</span></div>
       </div>
-      <div class="hero-visual" aria-label="Vibe-Git 星云标志"><div class="orbit orbit-a" aria-hidden="true"></div><div class="orbit orbit-b" aria-hidden="true"></div><div class="hero-emblem"><img src="assets/vibe-git-logo-readme.svg" alt="Vibe-Git 标志" /></div><span class="orbit-label orbit-label-one">PLAN</span><span class="orbit-label orbit-label-two">ALIGN</span><span class="orbit-label orbit-label-three">BUILD</span></div>
+      <figure class="hero-visual" data-logo-intro>
+        <div class="logo-stage">
+          <img src="assets/vibe-git-poster.png" width="1254" height="1254" alt="Vibe-Git 猫头终端标志" fetchpriority="high" />
+          <span class="logo-scan" aria-hidden="true"></span>
+        </div>
+        <button class="motion-replay" type="button" aria-label="重播 Logo 开场动效" hidden><span aria-hidden="true">↻</span> 重播</button>
+      </figure>
     </section>
 
     <section id="install" class="install-section shell" aria-labelledby="install-title">
@@ -66,10 +72,31 @@
     </section>
 
     <section id="agents" class="agents-section" aria-labelledby="agents-title">
-      <div class="shell"><div class="section-kicker">WORKS WITH YOUR AGENT</div><div class="section-intro agents-intro"><h2 id="agents-title">你的 Agent，<br /><em>都可以接入。</em></h2><p>只要支持 Agent Skill、当前工作区和终端命令，就可以使用 Vibe-Git。图标会持续轮换；鼠标靠近星点时，星点会向光标组成协作图案。</p></div></div>
-      <div class="agent-marquee" aria-label="支持的智能体"><div class="agent-track">
-        <div class="agent-node" data-agent="Trae"><span class="agent-glyph" data-mark="✦"></span><strong>Trae</strong></div><div class="agent-node" data-agent="Codex"><span class="agent-glyph" data-mark="⌘"></span><strong>Codex</strong></div><div class="agent-node" data-agent="WorkBuddy"><span class="agent-glyph" data-mark="W"></span><strong>WorkBuddy</strong></div><div class="agent-node" data-agent="Coder"><span class="agent-glyph" data-mark="&lt;/&gt;"></span><strong>Coder</strong></div><div class="agent-node" data-agent="Claude Code"><span class="agent-glyph" data-mark="◎"></span><strong>Claude Code</strong></div><div class="agent-node" data-agent="Antigravity"><span class="agent-glyph" data-mark="✧"></span><strong>Antigravity</strong></div><div class="agent-node" data-agent="Cursor"><span class="agent-glyph" data-mark="◌"></span><strong>Cursor</strong></div><div class="agent-node" data-agent="Cline"><span class="agent-glyph" data-mark="C"></span><strong>Cline</strong></div><div class="agent-node" data-agent="OpenCode"><span class="agent-glyph" data-mark="⌁"></span><strong>OpenCode</strong></div><div class="agent-node" data-agent="Windsurf"><span class="agent-glyph" data-mark="≈"></span><strong>Windsurf</strong></div><div class="agent-node" data-agent="Trae"><span class="agent-glyph" data-mark="✦"></span><strong>Trae</strong></div><div class="agent-node" data-agent="Codex"><span class="agent-glyph" data-mark="⌘"></span><strong>Codex</strong></div><div class="agent-node" data-agent="WorkBuddy"><span class="agent-glyph" data-mark="W"></span><strong>WorkBuddy</strong></div><div class="agent-node" data-agent="Coder"><span class="agent-glyph" data-mark="&lt;/&gt;"></span><strong>Coder</strong></div>
-      </div></div>
+      <div class="shell"><div class="section-kicker">WORKS WITH YOUR AGENT</div><div class="section-intro agents-intro"><h2 id="agents-title">你的 Agent，<br /><em>都可以接入。</em></h2><p>只要支持 Agent Skill、当前工作区和终端命令，就可以使用 Vibe-Git。图标持续游动；鼠标靠近星点时，只有附近的粒子会响应。</p></div></div>
+      <svg class="agent-sprite" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
+        <symbol id="agent-trae" viewBox="0 0 48 48"><path d="M8 10h32L24 39 8 10Zm4 0 12 17 12-17M24 27v12"/></symbol>
+        <symbol id="agent-codex" viewBox="0 0 48 48"><path d="m24 5 13 7 6 12-6 12-13 7-13-7-6-12 6-12 13-7Zm0 9 9 5v10l-9 5-9-5V19l9-5Zm-13-2 4 7m22-7-4 7M11 36l4-7m22 7-4-7"/></symbol>
+        <symbol id="agent-workbuddy" viewBox="0 0 48 48"><path d="M6 10h28v20H18l-8 7v-7H6V10Zm14 26h14l6 5V21h-6M13 17h14m-14 6h10"/></symbol>
+        <symbol id="agent-coder" viewBox="0 0 48 48"><path d="m17 14-10 10 10 10m14-20 10 10-10 10m-4-24-6 28"/></symbol>
+        <symbol id="agent-claude" viewBox="0 0 48 48"><path d="M24 5v38M8 13l32 22M40 13 8 35M7 24h34M15 7l18 34M33 7 15 41"/></symbol>
+        <symbol id="agent-antigravity" viewBox="0 0 48 48"><path d="M24 4c2 12 8 18 20 20-12 2-18 8-20 20-2-12-8-18-20-20 12-2 18-8 20-20Z"/></symbol>
+        <symbol id="agent-cursor" viewBox="0 0 48 48"><path d="M9 6v34l9-9 7 12 6-3-7-12 14-2L9 6Z"/></symbol>
+        <symbol id="agent-cline" viewBox="0 0 48 48"><path d="M35 13a17 17 0 1 0 0 22M33 9h7v7M33 32h7v7"/></symbol>
+        <symbol id="agent-opencode" viewBox="0 0 48 48"><path d="M17 8c-6 0-6 5-6 9v3c0 3-2 4-5 4 3 0 5 1 5 4v3c0 4 0 9 6 9m14-32c6 0 6 5 6 9v3c0 3 2 4 5 4-3 0-5 1-5 4v3c0 4 0 9-6 9M21 29l6-10"/></symbol>
+        <symbol id="agent-windsurf" viewBox="0 0 48 48"><path d="M4 15c8-8 12 8 20 0s12 8 20 0M4 25c8-8 12 8 20 0s12 8 20 0M4 35c8-8 12 8 20 0s12 8 20 0"/></symbol>
+      </svg>
+      <div class="agent-marquee" aria-label="支持的智能体"><div class="agent-track"><div class="agent-group">
+        <div class="agent-node" data-agent="Trae"><svg class="agent-glyph" aria-hidden="true"><use href="#agent-trae" /></svg><strong>Trae</strong></div>
+        <div class="agent-node" data-agent="Codex"><svg class="agent-glyph" aria-hidden="true"><use href="#agent-codex" /></svg><strong>Codex</strong></div>
+        <div class="agent-node" data-agent="WorkBuddy"><svg class="agent-glyph" aria-hidden="true"><use href="#agent-workbuddy" /></svg><strong>WorkBuddy</strong></div>
+        <div class="agent-node" data-agent="Coder"><svg class="agent-glyph" aria-hidden="true"><use href="#agent-coder" /></svg><strong>Coder</strong></div>
+        <div class="agent-node" data-agent="Claude Code"><svg class="agent-glyph" aria-hidden="true"><use href="#agent-claude" /></svg><strong>Claude Code</strong></div>
+        <div class="agent-node" data-agent="Antigravity"><svg class="agent-glyph" aria-hidden="true"><use href="#agent-antigravity" /></svg><strong>Antigravity</strong></div>
+        <div class="agent-node" data-agent="Cursor"><svg class="agent-glyph" aria-hidden="true"><use href="#agent-cursor" /></svg><strong>Cursor</strong></div>
+        <div class="agent-node" data-agent="Cline"><svg class="agent-glyph" aria-hidden="true"><use href="#agent-cline" /></svg><strong>Cline</strong></div>
+        <div class="agent-node" data-agent="OpenCode"><svg class="agent-glyph" aria-hidden="true"><use href="#agent-opencode" /></svg><strong>OpenCode</strong></div>
+        <div class="agent-node" data-agent="Windsurf"><svg class="agent-glyph" aria-hidden="true"><use href="#agent-windsurf" /></svg><strong>Windsurf</strong></div>
+      </div></div></div>
       <div class="shell agents-bottom"><span>SUPPORTED AGENTS</span><a href="guide.html#installation">查看安装说明和兼容条件 ↗</a></div>
     </section>
   </main>
