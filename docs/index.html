@@ -6,14 +6,25 @@
   <meta name="theme-color" content="#090909" />
   <meta name="description" content="Vibe-Git：让多个 Codex 对齐意图。安装 Skill 和 CLI，开始协作。" />
   <title>Vibe-Git — Version the intent.</title>
+  <link rel="preload" href="assets/vibe-git-poster.png" as="image" />
   <link rel="icon" href="assets/vibe-git-logo-readme.svg" />
   <link rel="stylesheet" href="site.css" />
 </head>
 <body>
+  <a class="skip-link" href="#top">跳转到主要内容</a>
   <header class="header wrap">
     <a class="wordmark" href="#top" aria-label="Vibe-Git 首页">vibe-git<span>_</span></a>
     <nav aria-label="主导航"><a href="#install">安装</a><a href="#start">开始使用</a><a href="#workflow">工作流</a></nav>
     <a class="header-github" href="https://github.com/TFboy1/vibe-git" target="_blank" rel="noopener noreferrer">GitHub ↗</a>
+    <details class="mobile-menu">
+      <summary aria-label="导航菜单"><span>菜单</span><span class="menu-icon" aria-hidden="true"></span></summary>
+      <nav aria-label="移动端导航">
+        <a href="#install">安装 <span aria-hidden="true">↗</span></a>
+        <a href="#start">开始使用 <span aria-hidden="true">↗</span></a>
+        <a href="#workflow">工作流 <span aria-hidden="true">↗</span></a>
+        <a href="https://github.com/TFboy1/vibe-git" target="_blank" rel="noopener noreferrer">GitHub <span aria-hidden="true">↗</span></a>
+      </nav>
+    </details>
   </header>
 
   <main id="top">
@@ -21,22 +32,28 @@
       <div class="hero-copy">
         <p class="eyebrow"><span></span> COLLABORATION FOR CODING AGENTS</p>
         <h1 id="hero-title">Version the intent,<br /><em>not just the code.</em></h1>
-        <p class="hero-intro">多个 Codex 一起写代码，也应该共享同一份意图。Vibe-Git 把提案、对齐、任务和变更串成可追踪的协作过程。</p>
+        <p class="hero-intro" data-typewriter="intro">多个 Codex 一起写代码，也应该共享同一份意图。Vibe-Git 把提案、对齐、任务和变更串成可追踪的协作过程。</p>
         <div class="hero-actions">
           <a class="button button-primary" href="#install">开始安装 <span aria-hidden="true">↘</span></a>
           <a class="button button-secondary" href="https://skills.sh/tfboy1/vibe-git-skill/vibe-git" target="_blank" rel="noopener noreferrer">查看 Skill <span aria-hidden="true">↗</span></a>
         </div>
         <p class="hero-meta">CLI-FIRST <span>/</span> CAPTAIN-HOSTED <span>/</span> GIT + CODEX</p>
       </div>
-      <figure class="hero-visual">
-        <img src="assets/vibe-git-poster.png" width="1254" height="1254" alt="Vibe-Git 黑白猫头终端徽标海报" fetchpriority="high" />
+      <figure class="hero-visual" data-logo-intro>
+        <div class="logo-stage">
+          <img src="assets/vibe-git-poster.png" width="1254" height="1254" alt="Vibe-Git 黑白猫头终端徽标海报" fetchpriority="high" />
+          <span class="logo-ring logo-ring-inner" aria-hidden="true"></span>
+          <span class="logo-ring logo-ring-outer" aria-hidden="true"></span>
+          <span class="logo-scan" aria-hidden="true"></span>
+        </div>
+        <button class="motion-replay" type="button" aria-label="重播 Logo 开场动效" hidden><span aria-hidden="true">↻</span> 重播</button>
       </figure>
     </section>
 
     <section class="statement wrap" aria-label="Vibe-Git 简介">
       <span class="index">00 / THE IDEA</span>
-      <p><span>Git 记录代码。</span><br />Vibe-Git 记录团队为什么这样写。</p>
-      <small>ONE REPO<br />MANY AGENTS<br />ONE INTENT</small>
+      <p data-typewriter="statement"><span class="statement-muted">Git 记录代码。</span><br />Vibe-Git 记录团队为什么这样写。</p>
+      <small>ONE REPO <br />MANY AGENTS <br />ONE INTENT</small>
     </section>
 
     <section id="install" class="section wrap" aria-labelledby="install-title">
