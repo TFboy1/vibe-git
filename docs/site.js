@@ -89,7 +89,7 @@
   });
 
   const logo = document.querySelector('[data-logo-intro]');
-  const poster = logo?.querySelector('img');
+  const logoImage = logo?.querySelector('img');
   const replay = logo?.querySelector('.motion-replay');
   let logoTimer;
   let logoFrame;
@@ -110,22 +110,22 @@
       });
     });
   }
-  if (logo && poster && !reducedMotion.matches) {
+  if (logo && logoImage && !reducedMotion.matches) {
     logo.classList.add('logo-pending');
     const prepareLogo = () => {
-      if (!poster.naturalWidth) return settleLogo();
+      if (!logoImage.naturalWidth) return settleLogo();
       replay.hidden = false;
       playLogo();
     };
-    if (poster.complete) prepareLogo();
+    if (logoImage.complete) prepareLogo();
     else {
-      poster.addEventListener('load', prepareLogo, { once: true });
-      poster.addEventListener('error', settleLogo, { once: true });
+      logoImage.addEventListener('load', prepareLogo, { once: true });
+      logoImage.addEventListener('error', settleLogo, { once: true });
     }
   }
   replay?.addEventListener('click', playLogo);
   reducedMotion.addEventListener('change', (event) => {
-    if (replay) replay.hidden = event.matches || !poster?.naturalWidth;
+    if (replay) replay.hidden = event.matches || !logoImage?.naturalWidth;
     if (!event.matches) return;
     writers.forEach((finish) => finish());
     settleLogo();

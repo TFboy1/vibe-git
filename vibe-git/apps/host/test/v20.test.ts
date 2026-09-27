@@ -55,7 +55,8 @@ async function bootstrap(app: Awaited<ReturnType<typeof buildApp>>, token: strin
 async function completeAlignment(app: Awaited<ReturnType<typeof buildApp>>, captainToken: string, memberToken: string, memberId: string): Promise<AlignmentRun> {
   expect((await post(app, "/api/v1/nodes/heartbeat", captainToken, heartbeat)).statusCode).toBe(200);
   expect((await post(app, "/api/v1/nodes/heartbeat", memberToken, heartbeat)).statusCode).toBe(200);
-  expect((await post(app, "/api/v1/plans", memberToken, { filename: "plan.md", content: "# 成员计划\n实现可验证功能" })).statusCode).toBe(200);
+  if (!(await bootstrap(app, memberToken)).plans.some(plan => plan.ownerNodeId === memberId))
+    expect((await post(app, "/api/v1/plans", memberToken, { filename: "plan.md", content: "# 成员计划\n实现可验证功能" })).statusCode).toBe(200);
   const queued = await post(app, "/api/v1/alignments", captainToken);
   expect(queued.statusCode).toBe(200);
   const alignment = queued.json() as AlignmentRun;
@@ -132,7 +133,7 @@ describe("Vibe-Git v0.20 Host", () => {
     expect((await post(app, "/api/v1/plans", member.nodeToken, { filename: "empty.md", content: "" })).statusCode).toBe(400);
     const first = await post(app, "/api/v1/plans", member.nodeToken, { filename: "frontend-design.md", content: "# A" });
     const same = await post(app, "/api/v1/plans", member.nodeToken, { filename: "frontend-design.md", content: "# A" });
-    const second = await post(app, "/api/v1/plans", member.nodeToken, { filename: "implementation-notes.MD", content: "# B" });
+    const second = await put(app, `/api/v1/plans/${first.json().id}`, member.nodeToken, { expectedRevision: 1, filename: "implementation-notes.MD", content: "# B" });
     expect(first.json().revision).toBe(1); expect(same.json().id).toBe(first.json().id); expect(second.json().revision).toBe(2);
     expect(first.json().filename).toBe("frontend-design.md"); expect(second.json().filename).toBe("implementation-notes.MD");
     expect(first.json().sha256).toMatch(/^[0-9a-f]{64}$/);
@@ -498,10 +499,16 @@ describe("Vibe-Git v0.20 Host", () => {
       summaryMarkdown: "# 无现有任务受影响", requirementPatchMarkdown: "增加日志字段说明", decisions: [{ changeId: change.id, verdict: "accept", rationale: "合理" }],
       affectedTaskIds: [], replacementTasks: []
     } });
+    expect(service.repo.getPullRequest(change.id)?.reviewedAt).toBeTruthy();
+    expect((await post(app, `/api/v1/reviews/${review.id}/apply`, member.nodeToken)).statusCode).toBe(403);
     expect((await post(app, `/api/v1/reviews/${review.id}/apply`, captain.nodeToken)).statusCode).toBe(200);
     const requirement = service.repo.requirementMarkdown();
     expect(requirement).toContain("UNIQUE_OLD_REQUIREMENT_END");
     expect(requirement).toContain("增加日志字段说明");
+    expect(service.repo.listRequirementVersions().map(item => item.revision)).toEqual([1, 2]);
+    expect(service.repo.listRequirementVersions().at(-1)?.markdown).toBe(requirement);
+    expect(service.repo.getStage(stage.id)?.requirementRevision).toBe(2);
+    expect(service.repo.getStage(stage.id)?.requirementMarkdown).toBe(requirement);
     await app.close();
   });
 });

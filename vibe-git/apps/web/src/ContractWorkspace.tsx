@@ -13,8 +13,9 @@ const download = (filename: string, markdown: string) => {
 
 export function ContractBoard({ alignment, data, run }: { alignment: AlignmentRun; data: V20BootstrapPayload;
   run(work: () => Promise<unknown>, message: string): void }) {
-  const contracts = data.contracts.filter((item) => item.alignmentId === alignment.id);
   const captain = data.viewer.role === "captain";
+  const contracts = data.contracts.filter((item) => item.alignmentId === alignment.id && (captain ||
+    (item.stageId ? data.tasks : alignment.tasks).some(task => (task.id === item.providerTaskId || item.consumerTaskIds.includes(task.id)) && task.assigneeNodeId === data.viewer.id)));
   return <section className="contract-board"><div className="contract-head"><div><small>接口契约</small><h3>并行工作的交接面</h3><p>双方确认同一版本后，消费方才能用本机 Codex 生成接口替身。</p></div><strong>{contracts.length}</strong></div>
     {contracts.length ? contracts.map((contract) => {
       const participants = [...new Set((contract.stageId ? data.tasks : alignment.tasks).filter((task) => task.id === contract.providerTaskId || contract.consumerTaskIds.includes(task.id)).map((task) => task.assigneeNodeId))];

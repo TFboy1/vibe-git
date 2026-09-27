@@ -6,10 +6,14 @@ import { TopCommandBar } from "./TopCommandBar";
 import { TopologyCanvas, Avatar } from "./TopologyCanvas";
 import { GanttCanvas } from "./GanttCanvas";
 import { InspectorDrawer } from "./InspectorDrawer";
+import { JourneyPanel, AdvancedWorkspace } from "./JourneyPanel";
+import { VersionWorkbench } from "./VersionWorkbench";
+import { RecoveryHint } from "./RecoveryHint";
 import {
   deriveUnreadActivity,
   liveTasks,
   type CanvasMode,
+  type CanvasSurface,
   type InspectorTarget,
 } from "./model";
 import { bridge } from "./localApi";
@@ -83,6 +87,10 @@ export function AppShell() {
       ? "gantt"
       : "topology",
   );
+  const [surface, setSurfaceState] = useState<CanvasSurface | "auto">(() => {
+    const section = new URLSearchParams(location.search).get("section");
+    return ["guide", "canvas", "versions", "advanced"].includes(section ?? "") ? section as CanvasSurface : readTarget() ? "canvas" : "auto";
+  });
   const [target, setTarget] = useState<InspectorTarget | null>(readTarget);
   const [visibleMode, setVisibleMode] = useState<CanvasMode>(mode);
   const [switching, setSwitching] = useState(false);
@@ -97,6 +105,8 @@ export function AppShell() {
   const seq = useRef(0);
   const live = useRef(true);
   const refreshing = useRef<Promise<void> | null>(null);
+  const returnSurface = useRef<CanvasSurface | null>(null);
+  const openedBeforePublish = useRef(false);
   const refresh = useCallback(() => {
     if (refreshing.current) return refreshing.current;
     const operation = api
@@ -244,9 +254,10 @@ export function AppShell() {
     );
     return () => clearTimeout(timer);
   }, [mode, visibleMode]);
-  const historyState = (nextMode: CanvasMode, next: InspectorTarget | null) => {
+  const historyState = (nextMode: CanvasMode, next: InspectorTarget | null, nextSurface: CanvasSurface) => {
     const url = new URL(location.href);
     url.searchParams.set("view", nextMode);
+    url.searchParams.set("section", nextSurface);
     for (const key of ["object", "id", "tab"]) url.searchParams.delete(key);
     if (next) {
       url.searchParams.set("object", next.type);
@@ -258,19 +269,28 @@ export function AppShell() {
   };
   const open = useCallback(
     (next: InspectorTarget) => {
+      if (!returnSurface.current && surface !== "canvas") {
+        returnSurface.current = surface === "auto" ? (data?.stages.length ? "canvas" : "guide") : surface;
+        openedBeforePublish.current = !data?.stages.length;
+      }
       setTarget(next);
       setActivity(false);
-      historyState(mode, next);
+      setSurfaceState("canvas");
+      historyState(mode, next, "canvas");
       if (next.type === "change") {
         setSeen((old) => new Set([...old, next.id]));
         setToasts((old) => old.filter((t) => t.id !== next.id));
       }
     },
-    [mode],
+    [mode, surface, data?.stages.length],
   );
   const close = () => {
     setTarget(null);
-    historyState(mode, null);
+    const next = openedBeforePublish.current && data?.stages.length ? "canvas" : returnSurface.current ?? "canvas";
+    returnSurface.current = null;
+    openedBeforePublish.current = false;
+    setSurfaceState(next);
+    historyState(mode, null, next);
   };
   useEffect(() => {
     const pop = () => {
@@ -280,6 +300,10 @@ export function AppShell() {
           : "topology",
       );
       setTarget(readTarget());
+      returnSurface.current = null;
+      openedBeforePublish.current = false;
+      const section = new URLSearchParams(location.search).get("section");
+      setSurfaceState(["guide", "canvas", "versions", "advanced"].includes(section ?? "") ? section as CanvasSurface : readTarget() ? "canvas" : "auto");
     };
     window.addEventListener("popstate", pop);
     return () => window.removeEventListener("popstate", pop);
@@ -299,10 +323,7 @@ export function AppShell() {
         <h1>{error ? "暂时无法连接房间" : "正在连接协作房间"}</h1>
         {error ? (
           <>
-            <p role="alert">{error}</p>
-            <p>
-              在自己的工作区运行 <code>vibe-git open</code> 建立会话。
-            </p>
+            <RecoveryHint error={error} />
             <button onClick={() => void refresh()}>重新连接</button>
           </>
         ) : (
@@ -320,6 +341,8 @@ export function AppShell() {
   const tasks = liveTasks(data);
   const done = tasks.filter((t) => t.status === "DONE").length;
   const stage = data.stages.at(-1);
+  const currentSurface: CanvasSurface = surface === "auto" ? (data.stages.length ? "canvas" : "guide") : surface;
+  const changeSurface = (next: CanvasSurface) => { returnSurface.current = null; openedBeforePublish.current = false; setSurfaceState(next); setTarget(null); historyState(mode, null, next); };
   return (
     <div className="canvas-app">
       <a className="skip-link" href="#workspace-canvas">
@@ -328,9 +351,12 @@ export function AppShell() {
       <TopCommandBar
         data={data}
         mode={mode}
+        surface={currentSurface}
+        setSurface={changeSurface}
         setMode={(m) => {
           setModeState(m);
-          historyState(m, target);
+          setSurfaceState("canvas");
+          historyState(m, target, "canvas");
         }}
         open={open}
         sync={sync}
@@ -341,6 +367,11 @@ export function AppShell() {
       />
       <div className={`canvas-body ${target ? "has-inspector" : ""}`}>
         <main id="workspace-canvas" className="workspace-canvas">
+          {currentSurface === "guide" && <JourneyPanel data={data} local={local} open={open} refresh={refresh} />}
+          {currentSurface === "versions" && <VersionWorkbench data={data} open={open} />}
+          {currentSurface === "advanced" && <AdvancedWorkspace data={data} open={open} refresh={refresh} />}
+          {currentSurface === "canvas" && <>
+          <JourneyPanel data={data} compact local={local} open={open} refresh={refresh} />
           <div className="sync-line">
             {data.nodes.filter((n) => n.connected).length} 人在线 ·{" "}
             <span className={sync === "正在重连" ? "blocked" : ""}>{sync}</span>{" "}
@@ -398,6 +429,7 @@ export function AppShell() {
               待审
             </small>
           </button>
+          </>}
         </main>
         {target && (
           <InspectorDrawer
@@ -413,7 +445,7 @@ export function AppShell() {
       </div>
       {error && (
         <div className="global-error" role="alert">
-          {error}
+          <RecoveryHint error={error} />
           <button onClick={() => setError("")}>关闭</button>
         </div>
       )}

@@ -34,7 +34,7 @@ async function setup() {
   const service = (app as unknown as { v20Service: V20Service }).v20Service;
   await post(app, captain.nodeToken, "/api/v1/nodes/heartbeat", heartbeat);
   await post(app, member.nodeToken, "/api/v1/nodes/heartbeat", heartbeat);
-  return { app, captain, member, service };
+  return { app, captain, member, service, invite };
 }
 const brief = (ownedPath: string): TaskBrief => ({ deliverables: [`${ownedPath} 可运行交付物`], ownedPaths: [ownedPath], excludedPaths: ["其他成员拥有的模块"],
   requirementRefs: ["统一需求#验收"], interfaceNotes: ["输入输出及错误码遵守冻结接口"], mockStrategy: "使用本地 .vibe-git/mocks 替身，不提交仓库",
@@ -76,6 +76,82 @@ async function richAlignment(ctx: Awaited<ReturnType<typeof setup>>) {
 }
 
 describe("契约先行的阶段与并行切片", () => {
+  it("缺席成员需显式跳过，并冻结本轮参与者与需求版本", async () => {
+    const { app, captain, member, invite } = await setup();
+    // 第二名成员通过房间当前邀请加入，尚未提交提案。
+    const joined = await app.inject({ method: "POST", url: "/api/v1/join", payload: { invite: invite.inviteToken } });
+    const absent = joined.json() as { node: CollaborationNode };
+    await post(app, member.nodeToken, "/api/v1/plans", { filename: "member.md", content: "# 成员方案" });
+    const readiness = await app.inject({ method: "GET", url: "/api/v1/alignments/readiness", headers: { authorization: `Bearer ${captain.nodeToken}` } });
+    expect(readiness.json().missing.map((item: { nodeId: string }) => item.nodeId)).toEqual([absent.node.id]);
+    expect((await post(app, captain.nodeToken, "/api/v1/alignments")).statusCode).toBe(409);
+    expect((await post(app, captain.nodeToken, "/api/v1/alignments", { skipMissingNodeIds: [absent.node.id], expectedRequirementRevision: 9 })).statusCode).toBe(409);
+    const started = await post(app, captain.nodeToken, "/api/v1/alignments", { skipMissingNodeIds: [absent.node.id], expectedRequirementRevision: 0 });
+    expect(started.statusCode, started.body).toBe(200);
+    expect(started.json().skippedNodeIds).toEqual([absent.node.id]);
+    await app.close();
+  });
+
+  it("草稿修订、已读版本和契约确认失效受角色及并发限制", async () => {
+    const { app, captain, member, service } = await setup();
+    const { alignment, tokens, contracts } = await richAlignment({ app, captain, member, service });
+    const titlePath = `/api/v1/alignments/${alignment.id}/tasks/DRAFT-1`;
+    const rename = (token: string, revision: number) => app.inject({ method: "PATCH", url: titlePath,
+      headers: { authorization: `Bearer ${token}` }, payload: { title: "新版核心接口", expectedRevision: revision } });
+    expect((await rename(member.nodeToken, alignment.draftRevision!)).statusCode).toBe(403);
+    expect((await rename(captain.nodeToken, alignment.draftRevision! - 1)).statusCode).toBe(409);
+    expect((await rename(captain.nodeToken, alignment.draftRevision!)).statusCode).toBe(200);
+    const current = service.repo.getAlignment(alignment.id)!;
+    expect(current.tasks[0]?.title).toBe("新版核心接口");
+    expect(service.repo.listAlignmentDraftVersions(alignment.id).at(-1)?.revision).toBe(current.draftRevision);
+    expect((await post(app, member.nodeToken, `/api/v1/alignments/${alignment.id}/read`, { expectedRevision: alignment.draftRevision })).statusCode).toBe(409);
+    expect((await post(app, member.nodeToken, `/api/v1/alignments/${alignment.id}/read`, { expectedRevision: current.draftRevision })).statusCode).toBe(200);
+    const contract = contracts[0]!;
+    for (const token of [captain.nodeToken, member.nodeToken]) await post(app, token, `/api/v1/contracts/${contract.id}/ack`, { expectedRevision: contract.revision, sha256: contract.sha256 });
+    const edit = (token: string, hash = contract.sha256) => app.inject({ method: "PATCH", url: `/api/v1/contracts/${contract.id}`,
+      headers: { authorization: `Bearer ${token}` }, payload: { expectedRevision: contract.revision, sha256: hash,
+        name: contract.name, signature: "load(input: string): Promise<NewResult>", behavior: contract.behavior,
+        examples: contract.examples, errors: contract.errors, testCommand: contract.testCommand, handoff: contract.handoff } });
+    expect((await edit(member.nodeToken)).statusCode).toBe(403);
+    expect((await edit(captain.nodeToken, "0".repeat(64))).statusCode).toBe(409);
+    expect((await edit(captain.nodeToken)).statusCode).toBe(200);
+    const revised = service.repo.getContract(contract.id)!;
+    expect(revised.revision).toBe(2); expect(revised.acknowledgedNodeIds).toEqual([]);
+    expect(service.repo.getAlignment(alignment.id)?.status).toBe("QUEUED");
+    expect((await post(app, member.nodeToken, `/api/v1/contracts/${contract.id}/ack`, { expectedRevision: 1, sha256: contract.sha256 })).statusCode).toBe(409);
+    const jobs = service.repo.getAlignment(alignment.id)!.detailJobIds!.map(id => service.repo.getJob(id)!);
+    for (const job of jobs) {
+      const owner = job.payload.ownerNodeId;
+      await finishJob(app, service, tokens, job, { mission: "重新细化", boundary: "独占范围", tasks: [{ id: owner === captain.nodeId ? "DRAFT-1" : "DRAFT-2",
+        brief: brief(owner === captain.nodeId ? "apps/host/src/core.ts" : "apps/web/src/core-view.tsx") }] });
+    }
+    expect(service.repo.getAlignment(alignment.id)?.status).toBe("READY");
+    const finalRevision = service.repo.getAlignment(alignment.id)!.draftRevision!;
+    expect(service.repo.listAlignmentReads().some(item => item.nodeId === member.node.id && item.revision === finalRevision)).toBe(false);
+    await app.close();
+  });
+
+  it("变更保存提交时 Git 快照，全队可读正文，过期开工被拒绝", async () => {
+    const { app, captain, member, service, invite } = await setup();
+    const { alignment, contracts } = await richAlignment({ app, captain, member, service });
+    for (const token of [captain.nodeToken, member.nodeToken]) await post(app, token, `/api/v1/contracts/${contracts[0]!.id}/ack`, { expectedRevision: 1, sha256: contracts[0]!.sha256 });
+    const stage = (await post(app, captain.nodeToken, `/api/v1/alignments/${alignment.id}/publish`)).json() as { id: string };
+    const change = (await post(app, member.nodeToken, "/api/v1/pull-requests", { filename: "change.md", content: "# 调整输出字段" })).json() as { documentId: string; submittedGit: { branch: string; headSha: string } };
+    expect(change.submittedGit).toMatchObject({ branch: "main", headSha });
+    const visible = await app.inject({ method: "GET", url: `/api/v1/documents/${change.documentId}`, headers: { authorization: `Bearer ${captain.nodeToken}` } });
+    expect(visible.json().content).toContain("调整输出字段");
+    const late = (await app.inject({ method: "POST", url: "/api/v1/join", payload: { invite: invite.inviteToken } })).json() as { nodeToken: string };
+    expect((await app.inject({ method: "GET", url: `/api/v1/documents/${change.documentId}`, headers: { authorization: `Bearer ${late.nodeToken}` } })).json().content).toContain("调整输出字段");
+    expect((await app.inject({ method: "GET", url: "/api/v1/bootstrap", headers: { authorization: `Bearer ${member.nodeToken}` } })).json().requirementVersions).toHaveLength(1);
+    const task = service.repo.listTasks(stage.id).find(item => item.assigneeNodeId === member.node.id)!;
+    expect((await post(app, member.nodeToken, `/api/v1/tasks/${task.id}/start`, { expectedTaskRevision: task.revision - 1, expectedRequirementRevision: 1 })).statusCode).toBe(409);
+    expect((await post(app, member.nodeToken, `/api/v1/tasks/${task.id}/start`, { expectedTaskRevision: task.revision, expectedRequirementRevision: 1 })).statusCode).toBe(200);
+    const running = service.repo.getTask(task.id)!;
+    expect((await post(app, captain.nodeToken, `/api/v1/nodes/${member.node.id}/revoke`, { expectedActiveTaskRevisions: { [task.id]: task.revision } })).statusCode).toBe(409);
+    expect((await post(app, captain.nodeToken, `/api/v1/nodes/${member.node.id}/revoke`, { expectedActiveTaskRevisions: { [task.id]: running.revision } })).statusCode).toBe(200);
+    expect(service.repo.getTask(task.id)?.status).toBe("PAUSED");
+    await app.close();
+  });
   it("详细主线、双方确认、Mock 门禁与真实集成完成门禁", async () => {
     const ctx = await setup(); const { app, captain, member, service } = ctx;
     const { alignment, tokens, contracts } = await richAlignment(ctx);

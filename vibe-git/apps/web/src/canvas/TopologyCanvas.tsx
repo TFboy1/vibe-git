@@ -10,9 +10,13 @@ import {
   useViewport,
   useStore,
   type Node,
+  type Edge,
   type NodeProps,
   type Viewport,
   type ReactFlowInstance,
+  MarkerType,
+  Handle,
+  Position,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import type { V20BootstrapPayload } from "@vibe-git/protocol";
@@ -83,6 +87,9 @@ type MemberData = {
   plan: string;
   own: boolean;
   collaborations: number;
+  currentTask: string;
+  alert: string;
+  revision: number;
   open: (tab?: string) => void;
 };
 function MemberNode({ data: d }: NodeProps<Node<MemberData>>) {
@@ -91,6 +98,7 @@ function MemberNode({ data: d }: NodeProps<Node<MemberData>>) {
       className={`member-node ${d.tone} ${d.pulse ? "pulse" : ""} ${d.online ? "" : "offline"}`}
       onClick={() => d.open()}
     >
+      <Handle type="target" position={Position.Left} style={{ opacity: 0 }} />
       <Avatar id={d.id} captain={d.role === "captain"} />
       <div>
         <strong>{d.name}</strong>
@@ -103,6 +111,8 @@ function MemberNode({ data: d }: NodeProps<Node<MemberData>>) {
           {d.own && d.plan === "未提交" ? "提交提案 · " : ""}
           {d.text} · {d.done}/{d.total}
         </span>
+        {d.currentTask && <small className="node-current" title={d.currentTask}>当前：{d.currentTask}</small>}
+        {d.alert && <small className="node-alert">{d.alert}</small>}
         <code title={d.branch}>{d.branch || "未连接工作区"}</code>
       </div>
       <span className="node-badges">
@@ -119,6 +129,7 @@ function MemberNode({ data: d }: NodeProps<Node<MemberData>>) {
           {d.plan === "未提交" ? <File size={12} aria-hidden="true" /> : <FileCheck2 size={12} aria-hidden="true" />}
         </span>
         {d.pr > 0 && <b>{d.pr} PR</b>}
+        {d.revision > 0 && <b>R{d.revision}</b>}
       </span>
       {d.collaborations > 1 && (
         <span
@@ -140,6 +151,7 @@ function MemberNode({ data: d }: NodeProps<Node<MemberData>>) {
           +{d.collaborations - 1} 协作
         </span>
       )}
+      <Handle type="source" position={Position.Right} style={{ opacity: 0 }} />
     </button>
   );
 }
@@ -295,7 +307,7 @@ export function TopologyCanvas({
         // These cards have fixed CSS dimensions. Keep them on controlled nodes
         // so a data refresh cannot discard React Flow's measured dimensions.
         width: compactNodes ? 168 : 196,
-        height: compactNodes ? 92 : 104,
+        height: compactNodes ? 120 : 136,
         ...(pos.inside ? { parentId: "focused-package" } : {}),
         data: {
           id: n.id,
@@ -329,12 +341,48 @@ export function TopologyCanvas({
               (person) => person.id === n.id,
             ),
           ).length,
+          currentTask: tasks.find(task => task.id === n.currentTaskId)?.title ?? tasks.find(task => ["IN_PROGRESS", "STARTING", "PREPARING_MOCK"].includes(task.status))?.title ?? "",
+          alert: (() => {
+            const submitted = data.pullRequests.find(change => change.submitterNodeId === n.id && change.status === "QUEUED");
+            if (submitted) return "需求变更待审";
+            if (data.pullRequests.some(change => change.submitterNodeId === n.id && change.status === "IN_REVIEW")) return "正在取证 · 影响待定";
+            const review = data.reviews.find(review => review.status === "AWAITING_CAPTAIN" && review.affectedNodeIds.includes(n.id));
+            if (review) return `${tasks.filter(task => review.affectedTaskIds.includes(task.id)).length} 项受影响 · 待裁决`;
+            const paused = tasks.filter(task => task.status === "PAUSED");
+            if (paused.length) return `${paused.length} 项暂停 · 核对 R${data.room.requirementRevision}`;
+            return "";
+          })(),
+          revision: tasks.some(task => task.status === "PAUSED") ? data.room.requirementRevision : 0,
           open: (tab?: string) => open({ type: "member", id: n.id, tab }),
         },
       });
     }
     return list;
   }, [data, focus, seen, open, confirmed, maxColumns, compactNodes]);
+  const edges = useMemo<Edge[]>(() => {
+    const tasks = liveTasks(data);
+    const taskById = new Map(tasks.map(task => [task.id, task]));
+    const groups = new Map<string, { source: string; target: string; mode: "HARD" | "CONTRACT"; taskIds: string[]; confirmed: boolean }>();
+    for (const task of tasks) for (const dependency of task.dependencyEdges ?? task.dependencies.map(upstreamTaskId => ({ upstreamTaskId, mode: "HARD" as const, contractId: null, contractRevision: null }))) {
+      const upstream = taskById.get(dependency.upstreamTaskId);
+      if (!upstream || upstream.assigneeNodeId === task.assigneeNodeId) continue;
+      const key = `${upstream.assigneeNodeId}:${task.assigneeNodeId}:${dependency.mode}`;
+      const contract = data.contracts.find(item => item.id === dependency.contractId && item.revision === dependency.contractRevision);
+      const group = groups.get(key) ?? { source: upstream.assigneeNodeId, target: task.assigneeNodeId, mode: dependency.mode, taskIds: [], confirmed: true };
+      group.taskIds.push(task.id);
+      group.confirmed &&= dependency.mode === "HARD" || contract?.status === "PUBLISHED";
+      groups.set(key, group);
+    }
+    return [...groups.entries()].map(([key, group]) => ({ id: key, source: group.source, target: group.target,
+      type: "smoothstep", animated: group.mode === "CONTRACT" && group.confirmed,
+      label: `${group.mode === "HARD" ? "硬等待" : group.confirmed ? "已确认接口" : "接口待确认"} · ${group.taskIds.length}`,
+      labelStyle: { fill: group.mode === "HARD" ? "#f5b971" : "#91d6c5", fontSize: 11 },
+      labelBgStyle: { fill: "#1b202a" }, labelBgPadding: [6, 3],
+      style: { stroke: group.mode === "HARD" ? "#b7834e" : "#53a996", strokeWidth: 2, strokeDasharray: group.confirmed ? undefined : "5 4" },
+      markerEnd: { type: MarkerType.ArrowClosed, color: group.mode === "HARD" ? "#b7834e" : "#53a996" },
+      data: { taskId: group.taskIds[0] }
+    }));
+  }, [data]);
   return (
     <div className="topology-view">
       <div className="canvas-toolbar">
@@ -379,7 +427,8 @@ export function TopologyCanvas({
           <ReactFlow
             onInit={setFlow}
             nodes={nodes}
-            edges={[]}
+            edges={edges}
+            onEdgeClick={(_, edge) => { const taskId = edge.data?.taskId; if (typeof taskId === "string") open({ type: "task", id: taskId }); }}
             nodeTypes={nodeTypes}
             nodesDraggable={false}
             nodesConnectable={false}
@@ -417,6 +466,7 @@ export function TopologyCanvas({
           <div className="canvas-empty">暂无成员，请从顶部邀请成员。</div>
         )}
         {!packs.length && <div className="canvas-note">尚未建立工作包分组</div>}
+        {!liveTasks(data).length && <div className="topology-next-empty">还没有任务。队长先收集提案并运行需求对齐，再检查草稿后发布。<button onClick={() => open({ type: "project", id: "project", tab: "alignment" })}>查看对齐入口</button></div>}
         <div className="legend">
           <button onClick={() => setLegend(!legend)}>
             {legend ? "收起图例" : "状态图例"}
@@ -427,6 +477,7 @@ export function TopologyCanvas({
               <span className="done">● 完成</span>
               <span className="blocked">● 等待 / 暂停</span>
               <span className="change">● 需求变更</span>
+              <span>橙线：硬等待 · 绿线：接口交接</span>
             </>
           )}
         </div>

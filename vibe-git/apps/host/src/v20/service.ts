@@ -4,7 +4,8 @@ import type {
   DevelopmentStage, GitSnapshot, ImpactDecision, ImpactReviewBatch, JobResultInput,
   ImpactIndex, ImpactProbe, JoinResponse, MarkdownDocument, NodeHeartbeatInput, Notification, RateLimitWindow,
   ReplacementTask, RepositoryContext, RoomEvent, StageTask, StageTaskStatus, V20BootstrapPayload, VibePullRequest,
-  ProjectModule, PlanImpactFinding, Workstream, InterfaceContract, TaskBrief, DependencyEdge, ContractUpdate
+  ProjectModule, PlanImpactFinding, Workstream, InterfaceContract, TaskBrief, DependencyEdge, ContractUpdate,
+  AlignmentDraftVersion, RequirementVersion
 } from "@vibe-git/protocol";
 import type { CloudflareManager } from "../integrations/cloudflare/manager.js";
 import { EventHub } from "../events/hub.js";
@@ -225,6 +226,8 @@ export class V20Service {
       alignments: this.repo.listAlignments(), stages: this.repo.listStages(), tasks: this.repo.listTasks(),
       workstreams: this.repo.listWorkstreams(), contracts: this.repo.listContracts(),
       pullRequests: this.repo.listPullRequests(), reviews: this.repo.listReviews(),
+      requirementVersions: this.requirementVersions(),
+      alignmentDraftVersions: this.repo.listAlignmentDraftVersions(), alignmentReads: this.repo.listAlignmentReads(),
       notifications: this.repo.listNotifications(viewer.id),
       auditPool: { online: nodes.filter((node) => node.connected).length, available: available.length, busy: available.filter((node) => node.activeJobCount > 0).length },
       tunnel: viewer.role === "captain" ? await this.cloudflare.status().catch(() => null) : null
@@ -417,14 +420,30 @@ export class V20Service {
     const change: VibePullRequest = {
       id: changeId, submitterNodeId: node.id, documentId: document.id, stageId: stage.id,
       baseRequirementRevision: this.repo.requirementRevision(), status: "QUEUED", reviewId: null,
-      createdAt: document.createdAt, decidedAt: null
+      createdAt: document.createdAt, decidedAt: null,
+      submittedGit: isRecent(this.repo.getNode(node.id)?.lastSeenAt ?? null) ? this.repo.getNode(node.id)?.git ?? null : null,
+      reviewedPaths: [], reviewedAt: null
     };
     this.repo.tx(() => { this.repo.putDocument(document); this.repo.putPullRequest(change); this.repo.listNodes().filter(member => member.role === "captain" && !member.revoked && member.id !== node.id).forEach(member => this.notify(member.id, "CHANGE", `${node.label} 提交了需求变更`, document.filename, change.id)); this.event("change.submitted", node.id, "pull_request", change.id, { stageId: stage.id, sha256: document.sha256 }); });
     return change;
   }
 
-  startAlignment(node: CollaborationNode): AlignmentRun {
+  alignmentReadiness(): { missing: Array<{ nodeId: string; label: string; connected: boolean }>; submitted: number; requirementRevision: number } {
+    const submitted = new Set(this.latestPlans().map(plan => plan.ownerNodeId));
+    return { missing: this.repo.listNodes().filter(member => member.role === "member" && !member.revoked && !submitted.has(member.id))
+      .map(member => ({ nodeId: member.id, label: member.label, connected: isRecent(member.lastSeenAt) })),
+      submitted: submitted.size, requirementRevision: this.repo.requirementRevision() };
+  }
+
+  startAlignment(node: CollaborationNode, skipMissingNodeIds: string[] = [], expectedRequirementRevision?: number): AlignmentRun {
     this.captain(node);
+    const readiness = this.alignmentReadiness();
+    if (readiness.missing.length) {
+      const missingIds = readiness.missing.map(item => item.nodeId).sort();
+      if (expectedRequirementRevision !== readiness.requirementRevision ||
+        JSON.stringify([...skipMissingNodeIds].sort()) !== JSON.stringify(missingIds))
+        throw invalidState("仍有成员未提交提案；查看缺席影响后显式跳过", readiness);
+    } else if (skipMissingNodeIds.length) throw revisionConflict("成员提案状态已变化，请重新查看对齐准备情况", readiness);
     const plans = this.latestPlans();
     if (!plans.length) throw invalidState("至少需要一份计划 Markdown");
     const totalBytes = plans.reduce((sum, plan) => sum + plan.bytes, 0);
@@ -435,7 +454,7 @@ export class V20Service {
     const captain = this.repo.getNode(node.id) ?? node;
     const context = captain.repositoryContext?.headSha === captain.git?.headSha ? captain.repositoryContext ?? null : null;
     if (!context) throw invalidState("队长仓库摘要尚未就绪，请等待本机守护进程同步 Git 工作区");
-    const prompt = this.alignmentPrompt(plans, context);
+    const prompt = this.alignmentPrompt(plans, context, [], null, skipMissingNodeIds);
     const createdAt = now();
     const direct = Buffer.byteLength(prompt, "utf8") <= AUDIT_PROMPT_LIMIT;
     const job = direct ? this.newJob("ALIGN_PLANS", executor.id, alignmentId, { prompt, outputSchema: ALIGNMENT_SCHEMA }, 2) : null;
@@ -443,7 +462,8 @@ export class V20Service {
       id: alignmentId, source: "plans", status: "QUEUED", planSnapshot: snapshot,
       requirementBaseRevision: this.repo.requirementRevision(), alignmentMarkdown: null, tasksMarkdown: null, tasks: [],
       executorNodeId: executor.id, agentJobId: job?.id ?? null, error: null, createdAt, completedAt: null, publishedStageId: null,
-      phase: "ANALYZE", issues: [], decisionRevision: 0, repositoryContext: context,
+      phase: "ANALYZE", issues: [], decisionRevision: 0, draftRevision: 0, skippedNodeIds: skipMissingNodeIds,
+      repositoryContext: context,
       planBrief: null, summaryJobIds: [], summaryParts: {}, summaryRound: 0,
       planImpacts: [], moduleRevisionSnapshot: this.modules().revision
     };
@@ -455,7 +475,7 @@ export class V20Service {
           `<plan nodeId="${plan.ownerNodeId}" documentId="${plan.id}" revision="${plan.revision}" part="${index + 1}/${chunks.length}">\n${part}\n</plan>`));
         this.queuePlanSummaryRound(alignment, parts, 1);
       }
-      this.event("alignment.queued", node.id, "alignment", alignment.id, { plans: snapshot.length, executorNodeId: executor.id });
+      this.event("alignment.queued", node.id, "alignment", alignment.id, { plans: snapshot.length, skippedNodeIds: skipMissingNodeIds, executorNodeId: executor.id });
     });
     return alignment;
   }
@@ -475,7 +495,7 @@ export class V20Service {
       if (complete) {
         const plans = alignment.planSnapshot.map((item) => this.repo.getDocument(item.documentId)).filter((item): item is MarkdownDocument => Boolean(item));
         if (plans.length !== alignment.planSnapshot.length) throw invalidState("计划快照不完整");
-        const prompt = this.alignmentPrompt(plans, alignment.repositoryContext ?? null, issues, alignment.planBrief ?? null);
+        const prompt = this.alignmentPrompt(plans, alignment.repositoryContext ?? null, issues, alignment.planBrief ?? null, alignment.skippedNodeIds ?? []);
         this.promptWithinBudget(prompt);
         const executor = this.selectAuditNode()!;
         const job = this.newJob("ALIGN_FINALIZE", executor.id, alignment.id, { prompt, outputSchema: ALIGNMENT_SCHEMA }, 2);
@@ -495,11 +515,101 @@ export class V20Service {
     const assignee = this.repo.getNode(assigneeNodeId); if (!assignee || assignee.revoked) throw notFound("目标节点不存在");
     if (!alignment.tasks.some((task) => task.id === taskId)) throw notFound("草稿任务不存在");
     if (alignment.detailJobIds?.length) throw invalidState("详细工作主线已生成；改派请重新发起对齐或阶段重编排，以免接口和文件所有权过期");
-    const updated: AlignmentRun = { ...alignment, tasks: alignment.tasks.map((task) => task.id === taskId ? { ...task, assigneeNodeId } : task) };
+    const updated: AlignmentRun = { ...alignment, draftRevision: (alignment.draftRevision ?? 0) + 1,
+      tasks: alignment.tasks.map((task) => task.id === taskId ? { ...task, assigneeNodeId } : task) };
     updated.tasksMarkdown = this.tasksMarkdown(updated.tasks);
-    this.repo.putAlignment(updated);
-    this.event("alignment.task_assigned", node.id, "alignment", alignment.id, { taskId, assigneeNodeId });
+    this.repo.tx(() => { this.repo.putAlignment(updated); this.putDraftVersion(updated, node.id);
+      this.event("alignment.task_assigned", node.id, "alignment", alignment.id, { taskId, assigneeNodeId, draftRevision: updated.draftRevision }); });
     return updated;
+  }
+
+  readAlignment(node: CollaborationNode, alignmentId: string, expectedRevision: number) {
+    const alignment = this.repo.getAlignment(alignmentId); if (!alignment) throw notFound("对齐记录不存在");
+    if (!alignment.alignmentMarkdown || !["READY", "PUBLISHED"].includes(alignment.status)) throw invalidState("统一计划尚不可阅读确认");
+    if ((alignment.draftRevision ?? 0) !== expectedRevision) throw revisionConflict("统一计划草稿已变化，请重新阅读");
+    const previous = this.repo.listAlignmentReads().find(item => item.alignmentId === alignmentId && item.nodeId === node.id && item.revision === expectedRevision);
+    if (previous) return previous;
+    const receipt = { alignmentId, nodeId: node.id, revision: expectedRevision, readAt: now() };
+    this.repo.tx(() => { this.repo.putAlignmentRead(receipt); this.event("alignment.read", node.id, "alignment", alignmentId, { revision: expectedRevision }); });
+    return receipt;
+  }
+
+  renameDraftTask(node: CollaborationNode, alignmentId: string, taskId: string, title: string, expectedRevision: number): AlignmentRun {
+    this.captain(node);
+    const alignment = this.repo.getAlignment(alignmentId); if (!alignment) throw notFound("对齐记录不存在");
+    if (alignment.status !== "READY") throw invalidState("只能修改待发布的任务草稿");
+    if ((alignment.draftRevision ?? 0) !== expectedRevision) throw revisionConflict("任务草稿已变化，请刷新后重试");
+    if (!alignment.tasks.some(task => task.id === taskId)) throw notFound("任务草稿不存在");
+    const cleaned = title.trim();
+    if (!cleaned || cleaned.length > 160) throw badRequest("任务名称需为 1–160 个字符");
+    const updated = { ...alignment, draftRevision: expectedRevision + 1,
+      tasks: alignment.tasks.map(task => task.id === taskId ? { ...task, title: cleaned } : task) };
+    updated.tasksMarkdown = this.tasksMarkdown(updated.tasks);
+    this.repo.tx(() => { this.repo.putAlignment(updated); this.putDraftVersion(updated, node.id);
+      this.event("alignment.task_renamed", node.id, "alignment", alignmentId, { taskId, draftRevision: updated.draftRevision }); });
+    return updated;
+  }
+
+  reviseDraftContract(node: CollaborationNode, contractId: string, expectedRevision: number, expectedHash: string,
+    patch: Pick<InterfaceContract, "name" | "signature" | "behavior" | "examples" | "errors" | "testCommand" | "handoff">): InterfaceContract {
+    this.captain(node);
+    const contract = this.repo.getContract(contractId); if (!contract) throw notFound("接口契约不存在");
+    const alignment = this.repo.getAlignment(contract.alignmentId);
+    if (contract.stageId || !alignment || alignment.status !== "READY" || contract.status !== "DRAFT") throw invalidState("只能修改待发布的接口草稿");
+    if (contract.revision !== expectedRevision || contract.sha256 !== expectedHash) throw revisionConflict("接口契约已变化，请刷新后重试");
+    const values = [patch.name, patch.signature, patch.testCommand, patch.handoff];
+    const lists = [patch.behavior, patch.examples, patch.errors];
+    if (values.some(value => typeof value !== "string" || !value.trim() || value.length > 4000) ||
+      lists.some(items => !Array.isArray(items) || !items.length || items.length > 20 || items.some(value => typeof value !== "string" || !value.trim() || value.length > 4000)))
+      throw badRequest("契约签名、行为、样例、错误和测试步骤均不能为空");
+    const canonical = { kind: contract.kind, name: patch.name.trim(), signature: patch.signature.trim(),
+      behavior: patch.behavior.map(value => value.trim()), examples: patch.examples.map(value => value.trim()),
+      errors: patch.errors.map(value => value.trim()), testCommand: patch.testCommand.trim(), handoff: patch.handoff.trim(),
+      providerTaskId: contract.providerTaskId, consumerTaskIds: contract.consumerTaskIds, revision: contract.revision + 1 };
+    const updated: InterfaceContract = { ...contract, ...canonical, sha256: sha256(JSON.stringify(canonical)), acknowledgedNodeIds: [] };
+    const affected = new Set([contract.providerTaskId, ...contract.consumerTaskIds]);
+    const affectedOwners = [...new Set(alignment.tasks.filter(task => affected.has(task.id)).map(task => task.assigneeNodeId))];
+    const tasks: AlignmentTaskDraft[] = alignment.tasks.map(task => {
+      const dependencyEdges = task.dependencyEdges?.map(edge => edge.contractId === contract.id ? { ...edge, contractRevision: updated.revision } : edge);
+      const revised = { ...task, ...(dependencyEdges ? { dependencyEdges } : {}) };
+      if (!affected.has(task.id)) return revised;
+      const { brief: _brief, workstreamId: _workstreamId, ...withoutDetail } = revised;
+      return withoutDetail;
+    });
+    const jobs = alignment.detailJobIds?.length ? affectedOwners.map(ownerNodeId => {
+      const related = tasks.filter(task => task.assigneeNodeId === ownerNodeId);
+      const prompt = this.workstreamDetailPrompt(alignment.alignmentMarkdown!, related,
+        this.repo.listContracts(alignment.id).map(item => item.id === contract.id ? updated : item));
+      this.promptWithinBudget(prompt);
+      return this.newJob("DESCRIBE_WORKSTREAM", this.selectAuditNode()!.id, alignment.id,
+        { prompt, outputSchema: WORKSTREAM_DETAIL_SCHEMA, ownerNodeId }, 2);
+    }) : [];
+    const nextAlignment: AlignmentRun = { ...alignment, tasks, tasksMarkdown: this.tasksMarkdown(tasks),
+      draftRevision: (alignment.draftRevision ?? 0) + 1,
+      ...(jobs.length ? { status: "QUEUED", detailJobIds: jobs.map(job => job.id),
+        detailedNodeIds: [...new Set(tasks.map(task => task.assigneeNodeId))].filter(owner => !affectedOwners.includes(owner)), completedAt: null } : {}) };
+    this.repo.tx(() => { this.repo.putContract(updated); jobs.forEach(job => this.repo.putJob(job));
+      this.repo.putAlignment(nextAlignment); this.putDraftVersion(nextAlignment, node.id);
+      this.event("contract.draft_revised", node.id, "interface_contract", contractId,
+        { revision: updated.revision, draftRevision: nextAlignment.draftRevision, affectedOwners }); });
+    return updated;
+  }
+
+  private putDraftVersion(alignment: AlignmentRun, editorNodeId: string): void {
+    const version: AlignmentDraftVersion = { alignmentId: alignment.id, revision: alignment.draftRevision ?? 0,
+      tasks: alignment.tasks, contracts: this.repo.listContracts(alignment.id), editorNodeId, createdAt: now() };
+    this.repo.putAlignmentDraftVersion(version);
+  }
+
+  private requirementVersions(): RequirementVersion[] {
+    const stored = this.repo.listRequirementVersions();
+    const historical = new Map<number, RequirementVersion>(stored.map(version => [version.revision, version]));
+    for (const stage of this.repo.listStages()) if (!historical.has(stage.requirementRevision)) historical.set(stage.requirementRevision,
+      { revision: stage.requirementRevision, markdown: stage.requirementMarkdown, source: "alignment", sourceId: stage.sourceAlignmentId, createdAt: stage.createdAt });
+    if (this.repo.requirementRevision() && !historical.has(this.repo.requirementRevision())) historical.set(this.repo.requirementRevision(),
+      { revision: this.repo.requirementRevision(), markdown: this.repo.requirementMarkdown(), source: "alignment",
+        sourceId: this.repo.listStages().at(-1)?.sourceAlignmentId ?? "legacy", createdAt: now() });
+    return [...historical.values()].sort((a, b) => a.revision - b.revision);
   }
 
   publishAlignment(node: CollaborationNode, alignmentId: string): DevelopmentStage {
@@ -559,8 +669,11 @@ export class V20Service {
     }));
     this.repo.tx(() => {
       if (alignment.source === "plans") {
+        const storedRevisions = new Set(this.repo.listRequirementVersions().map(version => version.revision));
+        this.requirementVersions().filter(version => !storedRevisions.has(version.revision)).forEach(version => this.repo.putRequirementVersion(version));
         this.repo.setRequirementRevision(revision);
         this.repo.setRequirementMarkdown(alignment.alignmentMarkdown!);
+        this.repo.putRequirementVersion({ revision, markdown: alignment.alignmentMarkdown!, source: "alignment", sourceId: alignment.id, createdAt });
       }
       this.repo.putStage(stage);
       workstreams.forEach((workstream) => this.repo.putWorkstream({ ...workstream, stageId, status: "PUBLISHED", taskIds: workstream.taskIds.map((item) => taskIds.get(item) ?? item) }));
@@ -577,8 +690,12 @@ export class V20Service {
     return stage;
   }
 
-  startTask(node: CollaborationNode, taskId: string): AgentJob {
+  startTask(node: CollaborationNode, taskId: string, expectedTaskRevision?: number, expectedRequirementRevision?: number): AgentJob {
     const task = this.repo.getTask(taskId); if (!task) throw notFound("任务不存在");
+    const stage = this.repo.getStage(task.stageId); if (!stage) throw notFound("任务阶段不存在");
+    if ((expectedTaskRevision !== undefined && task.revision !== expectedTaskRevision) ||
+      (expectedRequirementRevision !== undefined && stage.requirementRevision !== expectedRequirementRevision))
+      throw revisionConflict("任务或需求版本已变化，请重新查看开工影响");
     if (task.archived) throw invalidState("旧切片已被重编排，请领取新的工作主线");
     if (task.assigneeNodeId !== node.id) throw forbidden("只能启动分配给自己的任务");
     if (!["PUBLISHED", "READY", "FAILED"].includes(task.status)) throw invalidState("当前任务状态不能开工");
@@ -599,7 +716,6 @@ export class V20Service {
       return !contract;
     }).map((edge) => edge.upstreamTaskId);
     if (waitingDependencies.length) throw invalidState("任务依赖尚未完成", { dependencyIds: waitingDependencies });
-    const stage = this.repo.getStage(task.stageId); if (!stage) throw notFound("任务阶段不存在");
     const detail = task.detailDocumentId ? this.repo.getDocument(task.detailDocumentId) : undefined;
     const mockContracts = [...new Map(edges.filter((edge) => edge.mode === "CONTRACT")
       .map((edge) => { const contract = contracts.find((item) => item.id === edge.contractId)!; return [contract.id, contract] as const; })).values()];
@@ -696,8 +812,11 @@ export class V20Service {
     let nextAlignment: AlignmentRun | null = null;
     this.repo.tx(() => {
       if (accepted.size) {
+        const storedRevisions = new Set(this.repo.listRequirementVersions().map(version => version.revision));
+        this.requirementVersions().filter(version => !storedRevisions.has(version.revision)).forEach(version => this.repo.putRequirementVersion(version));
         this.repo.setRequirementRevision(nextRevision);
         this.repo.setRequirementMarkdown(nextRequirement);
+        this.repo.putRequirementVersion({ revision: nextRevision, markdown: nextRequirement, source: "review", sourceId: review.id, createdAt: decidedAt });
       }
       for (const changeId of review.changeIds) {
         const change = this.repo.getPullRequest(changeId); if (!change) continue;
@@ -705,7 +824,8 @@ export class V20Service {
       }
       if (allDone) {
         const replacements = this.mergeReplacements(stage.nextStageDraftTasks ?? [], accepted.size ? review.replacementTasks : []);
-        this.repo.putStage({ ...stage, status: hasNextBatch ? "ACTIVE" : "COMPLETED", completedAt: hasNextBatch ? null : (stage.completedAt ?? decidedAt),
+        this.repo.putStage({ ...stage, ...(accepted.size ? { requirementRevision: nextRevision, requirementMarkdown: nextRequirement } : {}),
+          status: hasNextBatch ? "ACTIVE" : "COMPLETED", completedAt: hasNextBatch ? null : (stage.completedAt ?? decidedAt),
           reviewId: hasNextBatch ? null : review.id, nextStageDraftTasks: replacements });
         if (!hasNextBatch && replacements.length) {
           nextAlignment = this.nextStageAlignment(replacements, nextRevision, nextRequirement, review.executorNodeId, review.agentJobId, decidedAt);
@@ -747,7 +867,7 @@ export class V20Service {
               dependencies
             } : {}),
             ...(dependencyEdges ? { dependencyEdges } : {}),
-            status: accepted.size ? "PUBLISHED" : this.restoredTaskStatus(previous),
+            status: accepted.size ? (contractChanged ? "PAUSED" : "PUBLISHED") : this.restoredTaskStatus(previous),
             detailDocumentId: accepted.size ? null : task.detailDocumentId,
             activeJobId: null, runtimeId: null,
             mockEvidence: contractChanged ? null : task.mockEvidence ?? null,
@@ -770,7 +890,7 @@ export class V20Service {
             this.notify(added.assigneeNodeId, "TASK", "需求修订后新增任务", `${added.title}\n可先下载任务，再决定开工。`, taskId);
           }
         }
-        this.repo.putStage({ ...stage, status: "ACTIVE", reviewId: null });
+        this.repo.putStage({ ...stage, ...(accepted.size ? { requirementRevision: nextRevision, requirementMarkdown: nextRequirement } : {}), status: "ACTIVE", reviewId: null });
       }
       const applied: ImpactReviewBatch = { ...review, status: "APPLIED", decidedAt };
       this.repo.putReview(applied);
@@ -927,11 +1047,17 @@ export class V20Service {
     return this.inviteInfo(node, publicBase);
   }
 
-  revokeNode(node: CollaborationNode, targetId: string): CollaborationNode {
+  revokeNode(node: CollaborationNode, targetId: string, expectedActiveTaskRevisions?: Record<string, number>): CollaborationNode {
     this.captain(node);
     const target = this.repo.getNode(targetId); if (!target) throw notFound("节点不存在");
     if (target.role === "captain") throw forbidden("不能撤销队长节点");
+    if (expectedActiveTaskRevisions) {
+      const actual = Object.fromEntries(this.repo.listTasks().filter(task => task.assigneeNodeId === targetId && task.status !== "DONE").map(task => [task.id, task.revision]));
+      if (JSON.stringify(Object.entries(actual).sort()) !== JSON.stringify(Object.entries(expectedActiveTaskRevisions).sort()))
+        throw revisionConflict("成员任务状态已变化，请重新查看撤销影响");
+    }
     const updated = { ...target, revoked: true, connected: false };
+    const affectedTasks = this.repo.listTasks().filter(task => task.assigneeNodeId === target.id && task.status !== "DONE");
     this.repo.tx(() => {
       this.repo.putNode(updated);
       for (const job of this.repo.listJobs()) {
@@ -939,8 +1065,10 @@ export class V20Service {
           this.repo.putJob({ ...job, status: "CANCELLED", leaseToken: null, leaseExpiresAt: null, updatedAt: now(), error: "节点已被队长撤销" });
         }
       }
+      for (const task of affectedTasks) this.repo.putTask({ ...task, status: "PAUSED", activeJobId: null, runtimeId: null,
+        blockedReason: "负责人已撤销，等待队长重分配或重编排", revision: task.revision + 1, updatedAt: now() });
     });
-    this.event("node.revoked", node.id, "node", target.id, {});
+    this.event("node.revoked", node.id, "node", target.id, { affectedTaskIds: affectedTasks.map(task => task.id) });
     return updated;
   }
 
@@ -1110,12 +1238,12 @@ export class V20Service {
       if (!stage || stage.requirementRevision !== alignment.requirementBaseRevision || parsed.alignmentMarkdown !== stage.requirementMarkdown || parsed.issues?.length)
         throw badRequest("重编排不能修改已发布需求或产生待裁决需求");
     }
-    const validNodes = this.repo.listNodes().filter((node) => !node.revoked);
+    const validNodes = this.repo.listNodes().filter((node) => !node.revoked && !alignment.skippedNodeIds?.includes(node.id));
     const validIds = new Set(validNodes.map((node) => node.id));
     const sources = new Map(alignment.planSnapshot.map((item) => [item.nodeId, this.repo.getDocument(item.documentId)?.content ?? ""]));
     const moduleIds = new Set(this.modules().items.map((item) => item.id));
     if (alignment.source === "plans" && alignment.moduleRevisionSnapshot !== undefined && alignment.moduleRevisionSnapshot !== this.modules().revision) throw revisionConflict("模块目录已变化，请重新发起对齐审核");
-    if (alignment.moduleRevisionSnapshot !== undefined && (!Array.isArray(parsed.planImpacts) || parsed.planImpacts.length !== alignment.planSnapshot.length)) throw badRequest("提案模块影响分析不完整");
+    if (alignment.moduleRevisionSnapshot !== undefined && moduleIds.size > 0 && (!Array.isArray(parsed.planImpacts) || parsed.planImpacts.length !== alignment.planSnapshot.length)) throw badRequest("提案模块影响分析不完整");
     const impactDocs = new Set<string>();
     const planImpacts = parsed.planImpacts.map((item) => {
       if (!alignment.planSnapshot.some((plan) => plan.documentId === item.documentId) || impactDocs.has(item.documentId) ||
@@ -1198,13 +1326,14 @@ export class V20Service {
     }) : [];
     const updated: AlignmentRun = {
       ...alignment, status: issues.length ? "NEEDS_DECISION" : needsDetail ? "QUEUED" : "READY", alignmentMarkdown: parsed.alignmentMarkdown.trim(), tasksMarkdown: this.tasksMarkdown(tasks),
-      issues, planImpacts,
+      issues, planImpacts, draftRevision: (alignment.draftRevision ?? 0) + 1,
       tasks, executorNodeId: job.targetNodeId, error: null, completedAt: needsDetail ? null : now(),
       detailJobIds: detailJobs.map((item) => item.id), detailedNodeIds: []
     };
     contracts.forEach((contract) => this.repo.putContract(contract));
     detailJobs.forEach((item) => this.repo.putJob(item));
     this.repo.putAlignment(updated);
+    this.putDraftVersion(updated, job.targetNodeId);
     this.notifyAll("SYSTEM", issues.length ? "需求对齐需要队长裁决" : needsDetail ? "正在生成详细工作主线" : "需求对齐已完成",
       issues.length ? `${issues.length} 项实质冲突待选择，暂不可发布。` : needsDetail ? "将逐条补齐交付物、接口及集成约束。" : "对齐稿和任务草稿已生成，等待队长检查并发布。", alignment.id);
   }
@@ -1332,6 +1461,13 @@ export class V20Service {
     if ([...owners].some((owner) => !contract.acknowledgedNodeIds.includes(owner))) throw invalidState("接口提供方和所有消费方尚未确认同一版本");
     const updated: InterfaceContract = { ...contract, status: "PUBLISHED" };
     this.repo.tx(() => { this.repo.putContract(updated);
+      for (const task of tasks) {
+        if (!task || task.status !== "PAUSED" || !task.blockedReason?.startsWith("接口契约已修订")) continue;
+        const related = this.repo.listContracts().filter(item => item.stageId === stage.id &&
+          (item.providerTaskId === task.id || item.consumerTaskIds.includes(task.id)));
+        if (related.every(item => item.status === "PUBLISHED")) this.repo.putTask({ ...task, status: "PUBLISHED", blockedReason: null,
+          revision: task.revision + 1, updatedAt: now() });
+      }
       for (const task of tasks) this.notify(task!.assigneeNodeId, "TASK", "接口契约已重新发布", `${contract.name} r${contract.revision} 已冻结，可重新启动受影响切片。`, task!.id);
       this.event("contract.republished", node.id, "interface_contract", contract.id, { revision: contract.revision, sha256: contract.sha256 }); });
     return updated;
@@ -1382,7 +1518,7 @@ export class V20Service {
     }
     const plans = alignment.planSnapshot.map((item) => this.repo.getDocument(item.documentId)).filter((item): item is MarkdownDocument => Boolean(item));
     if (plans.length !== alignment.planSnapshot.length) throw invalidState("计划快照不完整");
-    const prompt = this.alignmentPrompt(plans, alignment.repositoryContext ?? null, [], merged);
+    const prompt = this.alignmentPrompt(plans, alignment.repositoryContext ?? null, [], merged, alignment.skippedNodeIds ?? []);
     this.promptWithinBudget(prompt);
     const executor = this.selectAuditNode()!;
     const analyze = this.newJob("ALIGN_PLANS", executor.id, alignment.id, { prompt, outputSchema: ALIGNMENT_SCHEMA }, 2);
@@ -1515,6 +1651,11 @@ export class V20Service {
       pausedTaskStates, executorNodeId: job.targetNodeId, error: null, completedAt: now()
     };
     this.repo.putReview(completed);
+    const reviewedPaths = [...new Set(Object.values(review.indexes ?? {}).flatMap(index => index.changedPaths))].slice(0, 80);
+    for (const changeId of review.changeIds) {
+      const change = this.repo.getPullRequest(changeId);
+      if (change) this.repo.putPullRequest({ ...change, reviewedPaths, reviewedAt: now() });
+    }
     this.repo.putStage({ ...stage, status: "AWAITING_APPLY", reviewId: review.id });
     this.notifyAll("REVIEW", "需求影响审核完成", "主控 Agent 已给出影响范围，等待队长应用或退回。", review.id);
   }
@@ -1881,12 +2022,15 @@ export class V20Service {
     }
     const workstream: Workstream = { id: workstreamId, alignmentId: alignment.id, stageId: null,
       ownerNodeId, mission: value.mission.trim(), boundary: value.boundary.trim(), taskIds: owned.map((task) => task.id),
-      revision: 1, status: "DRAFT" };
+      revision: (this.repo.getWorkstream(workstreamId)?.revision ?? 0) + 1, status: "DRAFT" };
     const detailedNodeIds = [...new Set([...(alignment.detailedNodeIds ?? []), ownerNodeId])];
     const complete = detailedNodeIds.length === new Set(updatedTasks.map((task) => task.assigneeNodeId)).size;
     this.repo.putWorkstream(workstream);
-    this.repo.putAlignment({ ...alignment, tasks: updatedTasks, detailedNodeIds, status: complete ? "READY" : "QUEUED",
-      tasksMarkdown: this.tasksMarkdown(updatedTasks), completedAt: complete ? now() : null });
+    const updated = { ...alignment, tasks: updatedTasks, detailedNodeIds, status: complete ? "READY" as const : "QUEUED" as const,
+      ...(complete ? { draftRevision: (alignment.draftRevision ?? 0) + 1 } : {}),
+      tasksMarkdown: this.tasksMarkdown(updatedTasks), completedAt: complete ? now() : null };
+    this.repo.putAlignment(updated);
+    if (complete) this.putDraftVersion(updated, job.targetNodeId);
     if (complete) this.notifyAll("SYSTEM", "详细分工已生成", "请双方确认接口契约，队长检查后发布。", alignment.id);
   }
 
@@ -1918,8 +2062,8 @@ export class V20Service {
     ])].join("\n");
   }
 
-  private alignmentPrompt(plans: MarkdownDocument[], context: RepositoryContext | null, decisions: AlignmentIssue[] = [], brief: string | null = null): string {
-    const nodes = this.repo.listNodes().filter((node) => !node.revoked).map((node) => ({
+  private alignmentPrompt(plans: MarkdownDocument[], context: RepositoryContext | null, decisions: AlignmentIssue[] = [], brief: string | null = null, skippedNodeIds: string[] = []): string {
+    const nodes = this.repo.listNodes().filter((node) => !node.revoked && !skippedNodeIds.includes(node.id)).map((node) => ({
       nodeId: node.id, connected: isRecent(node.lastSeenAt), workspaceReady: node.workspaceReady,
       activeDevelopmentTasks: this.repo.listTasks().filter((task) => task.assigneeNodeId === node.id && ["STARTING", "IN_PROGRESS"].includes(task.status)).length
     }));

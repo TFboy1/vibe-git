@@ -4,12 +4,15 @@ import { Bell, FolderGit2, Network, UserPlus } from "lucide-react";
 import type { V20BootstrapPayload } from "@vibe-git/protocol";
 import { api } from "../api";
 import { Avatar } from "./TopologyCanvas";
-import { codexState, type CanvasMode, type InspectorTarget } from "./model";
+import { codexState, type CanvasMode, type CanvasSurface, type InspectorTarget } from "./model";
 import { bridge, type WorkspaceInfo, type CodexInfo } from "./localApi";
+import { RecoveryHint } from "./RecoveryHint";
 export function TopCommandBar({
   data,
   mode,
   setMode,
+  surface,
+  setSurface,
   open,
   sync,
   local,
@@ -20,6 +23,8 @@ export function TopCommandBar({
   data: V20BootstrapPayload;
   mode: CanvasMode;
   setMode: (m: CanvasMode) => void;
+  surface: CanvasSurface;
+  setSurface: (surface: CanvasSurface) => void;
   open: (t: InspectorTarget) => void;
   sync: string;
   local: boolean;
@@ -36,6 +41,7 @@ export function TopCommandBar({
     joinUrl: string;
   } | null>(null);
   const [busy, setBusy] = useState(false);
+  const [localAction, setLocalAction] = useState<"codex" | "rotate" | "install" | "start" | "stop" | null>(null);
   const work = async (fn: () => Promise<void>) => {
     setError("");
     setBusy(true);
@@ -55,6 +61,20 @@ export function TopCommandBar({
     if (p === "codex" && local)
       void work(async () => setCodex(await bridge("/api/local/codex")));
     if (p === "invite") void work(async () => setInvite(await api.invite()));
+  };
+  const confirmLocal = () => {
+    const action = localAction; setLocalAction(null);
+    if (!action) return;
+    void work(async () => {
+      if (action === "codex") { setCodex(await bridge("/api/local/codex/connect", {})); await refresh(); return; }
+      const latest = await api.bootstrap();
+      if (action === "rotate") { if (latest.nodes.length !== data.nodes.length) throw new Error("成员状态已变化，请重新检查邀请影响"); setInvite(await api.rotateInvite()); return; }
+      if (latest.tunnel?.running !== data.tunnel?.running) throw new Error("Tunnel 状态已变化，请刷新后重试");
+      if (action === "install") await api.tunnelInstall();
+      if (action === "start") await api.tunnelStart();
+      if (action === "stop") await api.tunnelStop();
+      await refresh();
+    });
   };
   useEffect(() => {
     if (codex?.status !== "connecting") return;
@@ -126,50 +146,23 @@ export function TopCommandBar({
       </button>
       <div className="segmented view-switch" aria-label="画布视角">
         <button
-          className={mode === "topology" ? "selected" : ""}
+          className={surface === "canvas" && mode === "topology" ? "selected" : ""}
           onClick={() => setMode("topology")}
         >
           人员拓扑
         </button>
         <button
-          className={mode === "gantt" ? "selected" : ""}
+          className={surface === "canvas" && mode === "gantt" ? "selected" : ""}
           onClick={() => setMode("gantt")}
         >
           项目甘特
         </button>
       </div>
-      <div className="personal-actions">
-        <button
-          onClick={() => open({ type: "member", id: member.id, tab: "plan" })}
-        >
-          我的提案
-          {Math.max(
-            0,
-            ...data.alignments.flatMap((a) =>
-              a.planSnapshot
-                .filter((p) => p.nodeId === member.id)
-                .map((p) => p.revision),
-            ),
-          ) > 0 &&
-            (data.plans.find((plan) => plan.ownerNodeId === member.id)
-              ?.revision ?? 0) >
-              Math.max(
-                0,
-                ...data.alignments.flatMap((a) =>
-                  a.planSnapshot
-                    .filter((p) => p.nodeId === member.id)
-                    .map((p) => p.revision),
-                ),
-              ) && <i className="revision-dot" />}
-        </button>
-        <button
-          onClick={() =>
-            open({ type: "member", id: member.id, tab: "changes" })
-          }
-        >
-          我的需求 PR
-        </button>
-      </div>
+      <nav className="surface-switch" aria-label="工作页面">
+        <button className={surface === "guide" ? "selected" : ""} onClick={() => setSurface("guide")}>{member.role === "captain" ? "带队向导" : "我的向导"}</button>
+        <button className={surface === "versions" ? "selected" : ""} onClick={() => setSurface("versions")}>版本与变更</button>
+        <button className={surface === "advanced" ? "selected" : ""} onClick={() => setSurface("advanced")}>高级模式</button>
+      </nav>
       {member.role === "captain" && (
         <button onClick={() => toggle("invite")} aria-label="邀请成员">
           <UserPlus size={17} />
@@ -312,11 +305,7 @@ export function TopCommandBar({
                 disabled={
                   !local || busy || !codex || codex.status === "connecting"
                 }
-                onClick={() =>
-                  void work(async () =>
-                    setCodex(await bridge("/api/local/codex/connect", {})),
-                  )
-                }
+                onClick={() => setLocalAction("codex")}
               >
                 {codex?.status === "connecting"
                   ? "等待授权"
@@ -359,33 +348,19 @@ export function TopCommandBar({
                 <summary>更多设置</summary>
                 <button
                   disabled={!local || busy}
-                  onClick={() =>
-                    void work(async () => setInvite(await api.rotateInvite()))
-                  }
+                  onClick={() => setLocalAction("rotate")}
                 >
                   轮换邀请
                 </button>
                 <button
                   disabled={!local || busy}
-                  onClick={() =>
-                    void work(async () => {
-                      await api.tunnelInstall();
-                      await refresh();
-                    })
-                  }
+                  onClick={() => setLocalAction("install")}
                 >
                   安装 Tunnel
                 </button>
                 <button
                   disabled={!local || busy}
-                  onClick={() =>
-                    void work(async () => {
-                      await (data.tunnel?.running
-                        ? api.tunnelStop()
-                        : api.tunnelStart());
-                      await refresh();
-                    })
-                  }
+                  onClick={() => setLocalAction(data.tunnel?.running ? "stop" : "start")}
                 >
                   {data.tunnel?.running ? "停止" : "启动"} Tunnel
                 </button>
@@ -444,13 +419,12 @@ export function TopCommandBar({
             </p>
           )}
           {error && (
-            <p role="alert" className="form-error">
-              {error}
-            </p>
+            <RecoveryHint error={error} />
           )}
           {busy && <p role="status">处理中…</p>}
         </section>, document.body
       )}
+      {localAction && createPortal(<div className="impact-backdrop" role="dialog" aria-modal="true" aria-label="确认本机操作"><section className="impact-dialog"><h2>{localAction === "codex" ? "连接本机 Codex？" : localAction === "rotate" ? "轮换邀请链接？" : localAction === "install" ? "安装 Cloudflare Tunnel？" : localAction === "start" ? "启动 Cloudflare Tunnel？" : "停止 Cloudflare Tunnel？"}</h2><p>{localAction === "codex" ? "将启动本机 Codex 登录或连接流程。若尚未安装，请先安装 Codex 并登录。" : localAction === "rotate" ? "旧邀请链接会失效；已加入的队友不会退出。" : localAction === "install" ? "将在队长本机安装 Tunnel 组件，可能需要网络连接。" : localAction === "start" ? "将在队长本机启动 Tunnel，房间会获得远程邀请入口。" : "远程邀请与只读访问会中断；本机房间仍可用。"}</p><div><button onClick={() => setLocalAction(null)}>取消</button><button className="journey-primary" onClick={confirmLocal}>确认执行</button></div></section></div>, document.body)}
     </header>
   );
 }

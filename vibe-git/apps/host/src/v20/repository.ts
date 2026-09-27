@@ -1,7 +1,8 @@
 import type { DatabaseSync } from "node:sqlite";
 import type {
   AgentJob, AlignmentRun, CollaborationNode, DevelopmentStage, ImpactReviewBatch,
-  MarkdownDocument, Notification, RoomEvent, StageTask, VibePullRequest, Workstream, InterfaceContract
+  MarkdownDocument, Notification, RoomEvent, StageTask, VibePullRequest, Workstream, InterfaceContract,
+  RequirementVersion, AlignmentDraftVersion, AlignmentReadReceipt
 } from "@vibe-git/protocol";
 import { transaction } from "../db/database.js";
 
@@ -37,6 +38,28 @@ export class V20Repository {
   setRequirementRevision(value: number): void { this.setMeta("v20_requirement_revision", String(value)); }
   requirementMarkdown(): string { return this.getMeta("v20_requirement_markdown") ?? ""; }
   setRequirementMarkdown(value: string): void { this.setMeta("v20_requirement_markdown", value); }
+  listRequirementVersions(): RequirementVersion[] {
+    return (this.db.prepare("SELECT data FROM v20_requirement_versions ORDER BY revision").all() as { data: string }[]).map(row => JSON.parse(row.data) as RequirementVersion);
+  }
+  putRequirementVersion(value: RequirementVersion): void {
+    this.db.prepare("INSERT INTO v20_requirement_versions (revision, data) VALUES (?, ?)").run(value.revision, JSON.stringify(value));
+  }
+  listAlignmentDraftVersions(alignmentId?: string): AlignmentDraftVersion[] {
+    const rows = alignmentId
+      ? this.db.prepare("SELECT data FROM v20_alignment_draft_versions WHERE alignment_id = ? ORDER BY revision").all(alignmentId)
+      : this.db.prepare("SELECT data FROM v20_alignment_draft_versions ORDER BY alignment_id, revision").all();
+    return (rows as { data: string }[]).map(row => JSON.parse(row.data) as AlignmentDraftVersion);
+  }
+  putAlignmentDraftVersion(value: AlignmentDraftVersion): void {
+    this.db.prepare("INSERT INTO v20_alignment_draft_versions (alignment_id, revision, data) VALUES (?, ?, ?)").run(value.alignmentId, value.revision, JSON.stringify(value));
+  }
+  listAlignmentReads(): AlignmentReadReceipt[] {
+    return (this.db.prepare("SELECT data FROM v20_alignment_reads ORDER BY alignment_id, node_id, revision").all() as { data: string }[]).map(row => JSON.parse(row.data) as AlignmentReadReceipt);
+  }
+  putAlignmentRead(value: AlignmentReadReceipt): void {
+    this.db.prepare("INSERT INTO v20_alignment_reads (alignment_id, node_id, revision, data) VALUES (?, ?, ?, ?) ON CONFLICT(alignment_id, node_id, revision) DO NOTHING")
+      .run(value.alignmentId, value.nodeId, value.revision, JSON.stringify(value));
+  }
 
   listNodes(): CollaborationNode[] {
     return (this.db.prepare("SELECT data FROM v20_nodes ORDER BY role, id").all() as { data: string }[]).map((row) => JSON.parse(row.data) as CollaborationNode);

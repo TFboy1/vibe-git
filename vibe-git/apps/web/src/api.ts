@@ -1,4 +1,4 @@
-import type { AlignmentRun, MarkdownDocument, V20BootstrapPayload, ProjectModule, InterfaceContract } from "@vibe-git/protocol";
+import type { AlignmentRun, MarkdownDocument, V20BootstrapPayload, ProjectModule, InterfaceContract, AlignmentReadReceipt } from "@vibe-git/protocol";
 
 export class ApiError extends Error {
   constructor(readonly status: number, message: string, readonly code?: string) { super(message); }
@@ -21,6 +21,7 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 
 const post = <T>(path: string, body: unknown = {}) => request<T>(path, { method: "POST", body: JSON.stringify(body) });
 const put = <T>(path: string, body: unknown = {}) => request<T>(path, { method: "PUT", body: JSON.stringify(body) });
+const patch = <T>(path: string, body: unknown = {}) => request<T>(path, { method: "PATCH", body: JSON.stringify(body) });
 
 export const api = {
   bootstrap: async (): Promise<V20BootstrapPayload> => {
@@ -29,6 +30,9 @@ export const api = {
       ...data,
       workstreams: Array.isArray(data.workstreams) ? data.workstreams : [],
       contracts: Array.isArray(data.contracts) ? data.contracts : [],
+      requirementVersions: Array.isArray(data.requirementVersions) ? data.requirementVersions : [],
+      alignmentDraftVersions: Array.isArray(data.alignmentDraftVersions) ? data.alignmentDraftVersions : [],
+      alignmentReads: Array.isArray(data.alignmentReads) ? data.alignmentReads : [],
     };
   },
   planHistory: (limit = 100, offset = 0) => request<{ total: number; items: Array<Omit<MarkdownDocument, "content"> & { current: boolean; withdrawn: boolean }> }>(`/api/v1/plans/history?limit=${limit}&offset=${offset}`),
@@ -42,7 +46,12 @@ export const api = {
   uploadChange: (filename: string, content: string) => post(`/api/v1/pull-requests`, { filename, content }),
   document: (id: string) => request<MarkdownDocument>(`/api/v1/documents/${encodeURIComponent(id)}`),
   taskDetail: (id: string) => request<{ markdown: string }>(`/api/v1/tasks/${encodeURIComponent(id)}/detail`),
-  startAlignment: () => post<AlignmentRun>(`/api/v1/alignments`),
+  alignmentReadiness: () => request<{ missing: Array<{ nodeId: string; label: string; connected: boolean }>; submitted: number; requirementRevision: number }>("/api/v1/alignments/readiness"),
+  startAlignment: (skipMissingNodeIds: string[] = [], expectedRequirementRevision?: number) => post<AlignmentRun>(`/api/v1/alignments`, { skipMissingNodeIds, expectedRequirementRevision }),
+  readAlignment: (id: string, expectedRevision: number) => post<AlignmentReadReceipt>(`/api/v1/alignments/${encodeURIComponent(id)}/read`, { expectedRevision }),
+  renameDraftTask: (alignmentId: string, taskId: string, title: string, expectedRevision: number) => patch<AlignmentRun>(`/api/v1/alignments/${encodeURIComponent(alignmentId)}/tasks/${encodeURIComponent(taskId)}`, { title, expectedRevision }),
+  reviseDraftContract: (contract: InterfaceContract, values: Pick<InterfaceContract, "name" | "signature" | "behavior" | "examples" | "errors" | "testCommand" | "handoff">) =>
+    patch<InterfaceContract>(`/api/v1/contracts/${encodeURIComponent(contract.id)}`, { expectedRevision: contract.revision, sha256: contract.sha256, ...values }),
   resolveAlignment: (alignmentId: string, issueId: string, optionId: string, expectedRevision: number) => post(`/api/v1/alignments/${encodeURIComponent(alignmentId)}/resolve`, { issueId, optionId, expectedRevision }),
   assign: (alignmentId: string, taskId: string, assigneeNodeId: string) => post(`/api/v1/alignments/${encodeURIComponent(alignmentId)}/assign`, { taskId, assigneeNodeId }),
   publish: (alignmentId: string) => post(`/api/v1/alignments/${encodeURIComponent(alignmentId)}/publish`),
@@ -52,7 +61,7 @@ export const api = {
   replanStage: (stageId: string) => post<AlignmentRun>(`/api/v1/stages/${encodeURIComponent(stageId)}/replan`),
   activateReplan: (alignmentId: string) => post(`/api/v1/alignments/${encodeURIComponent(alignmentId)}/activate-replan`),
   workstreamBrief: (id: string) => request<string>(`/api/v1/workstreams/${encodeURIComponent(id)}/brief`),
-  taskStart: (id: string) => post(`/api/v1/tasks/${encodeURIComponent(id)}/start`),
+  taskStart: (id: string, expectedTaskRevision?: number, expectedRequirementRevision?: number) => post(`/api/v1/tasks/${encodeURIComponent(id)}/start`, { expectedTaskRevision, expectedRequirementRevision }),
   taskIntegrate: (id: string) => post(`/api/v1/tasks/${encodeURIComponent(id)}/integrate`),
   taskSync: (id: string) => post(`/api/v1/tasks/${encodeURIComponent(id)}/sync`),
   taskDone: (id: string) => post(`/api/v1/tasks/${encodeURIComponent(id)}/done`),
@@ -62,7 +71,7 @@ export const api = {
   cancelReview: (id: string) => post(`/api/v1/reviews/${encodeURIComponent(id)}/cancel`),
   invite: () => request<{ joinUrl: string; command: string }>("/api/v1/invite"),
   rotateInvite: () => post<{ joinUrl: string; command: string }>("/api/v1/invite/rotate"),
-  revokeNode: (id: string) => post(`/api/v1/nodes/${encodeURIComponent(id)}/revoke`),
+  revokeNode: (id: string, expectedActiveTaskRevisions?: Record<string, number>) => post(`/api/v1/nodes/${encodeURIComponent(id)}/revoke`, { expectedActiveTaskRevisions }),
   tunnelInstall: () => post(`/api/v1/local/cloudflare/install`),
   tunnelStart: () => post(`/api/v1/local/cloudflare/start`),
   tunnelStop: () => post(`/api/v1/local/cloudflare/stop`)
@@ -74,6 +83,7 @@ export async function localCapabilities(): Promise<{ local: boolean; chat: boole
   catch { return { local: false, chat: false }; }
 }
 export const localFinalize = (taskId: string) => post<ExecutionDetail>(`/api/local/chat/${encodeURIComponent(taskId)}/finalize`);
+export const localProposalDraft = () => post<{ markdown: string }>("/api/local/proposal-draft");
 export async function localChat(taskId: string, message: string, onDelta: (value: string) => void): Promise<string> {
   const response = await fetch(`/api/local/chat/${encodeURIComponent(taskId)}`, { method: "POST", credentials: "same-origin",
     headers: { "content-type": "application/json" }, body: JSON.stringify({ message }) });

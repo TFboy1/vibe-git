@@ -1,16 +1,26 @@
-import { useEffect, useState, type CSSProperties } from "react";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
 import type { MarkdownDocument, ProjectModule, V20BootstrapPayload } from "@vibe-git/protocol";
-import { api } from "./api";
+import { api, localProposalDraft } from "./api";
+import { RecoveryHint } from "./canvas/RecoveryHint";
 
 const stateLabel: Record<string, string> = { planned: "待开始", in_progress: "进行中", blocked: "受阻", done: "已完成" };
 
 export function ProposalComposer({ data, current, onClose, onSaved, inline = false }: {
   data: V20BootstrapPayload; current: MarkdownDocument | undefined; onClose(): void; onSaved(): Promise<void>; inline?: boolean;
 }) {
-  const [file, setFile] = useState<{ filename: string; content: string } | null>(null);
+  const [file, setFile] = useState<{ filename: string; content: string } | null>(() => current ? { filename: current.filename, content: current.content } : null);
   const [base] = useState(() => current ? { id: current.id, revision: current.revision } : null);
   const [pending, setPending] = useState(false);
+  const [generating, setGenerating] = useState(false);
+  const attempted = useRef(false);
   const [error, setError] = useState("");
+  const generate = async () => {
+    setGenerating(true); setError("");
+    try { const draft = await localProposalDraft(); setFile({ filename: file?.filename ?? "proposal.md", content: draft.markdown }); }
+    catch (cause) { setError(`${cause instanceof Error ? cause.message : String(cause)}。请在本机运行 vibe-git open，确认 Codex 已安装并登录，然后重试；也可手动编辑草稿。`); }
+    finally { setGenerating(false); }
+  };
+  useEffect(() => { if (!current && data.viewer.codex === "available" && !attempted.current) { attempted.current = true; void generate(); } }, []);
   useEffect(() => { const onKey = (event: KeyboardEvent) => { if (event.key === "Escape") onClose(); }; window.addEventListener("keydown", onKey); return () => window.removeEventListener("keydown", onKey); }, [onClose]);
   const submit = async () => {
     if (!file) return;
@@ -24,9 +34,12 @@ export function ProposalComposer({ data, current, onClose, onSaved, inline = fal
   };
   return <div className={inline ? "inline-composer" : "modal-backdrop"} onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
     <section className="modal-card" role="dialog" aria-modal={!inline} aria-label={current ? "更新我的提案" : "提交我的提案"}>
-      <header><div><small>项目提案</small><h2>{current ? "更新我的提案" : "提交我的提案"}</h2><p>从本机选择 Markdown 文件。旧版本会保留，模块影响由队长发起的 Agent 对齐审核分析。</p></div><button onClick={onClose} aria-label="关闭">×</button></header>
+      <header><div><small>项目提案</small><h2>{current ? "更新我的提案" : data.viewer.role === "captain" ? "描述项目想法" : "提出我的方案"}</h2><p>Codex 在本机只读生成 Markdown 草稿。检查、修改后再提交；旧版本会保留。</p></div><button onClick={onClose} aria-label="关闭">×</button></header>
       <div className="modal-body">
-        <label className="file-pick"><span className="file-pick-icon" aria-hidden="true">↑</span><strong>选择 .md 文件</strong><small>UTF-8 · 最大 256 KiB</small><input type="file" accept=".md,text/markdown" aria-label="选择提案 Markdown 文件" onChange={async (event) => {
+        <button type="button" onClick={() => void generate()} disabled={generating || pending}>{generating ? "Codex 正在生成…" : file ? "用 Codex 重新生成草稿" : "用本机 Codex 生成草稿"}</button>
+        <label className="proposal-editor-label">文件名<input disabled={generating} value={file?.filename ?? "proposal.md"} onChange={event => setFile({ filename: event.target.value, content: file?.content ?? "" })} /></label>
+        <label className="proposal-editor-label">提案内容<textarea disabled={generating} value={file?.content ?? ""} rows={14} placeholder="项目目标、我的方案、边界、接口依赖、验收与待确认问题…" onChange={event => setFile({ filename: file?.filename ?? "proposal.md", content: event.target.value })} /></label>
+        <label className="file-pick"><span className="file-pick-icon" aria-hidden="true">↑</span><strong>选择 .md 文件</strong><small>UTF-8 · 最大 256 KiB</small><input disabled={generating} type="file" accept=".md,text/markdown" aria-label="选择提案 Markdown 文件" onChange={async (event) => {
           const picked = event.currentTarget.files?.[0]; if (!picked) return;
           if (!/\.md$/i.test(picked.name) || picked.size > 256 * 1024) { setError("请选择不超过 256 KiB 的 .md 文件"); return; }
           try { setFile({ filename: picked.name, content: new TextDecoder("utf-8", { fatal: true }).decode(await picked.arrayBuffer()) }); setError(""); }
@@ -34,9 +47,9 @@ export function ProposalComposer({ data, current, onClose, onSaved, inline = fal
         }}/></label>
         {file && <div className="selected-file"><b>{file.filename}</b><span>{Math.ceil(new TextEncoder().encode(file.content).length / 1024)} KiB · 本地待提交</span></div>}
         <div className="impact-preview"><b>模块影响交给队长端审核</b><p>提交时无需指定模块。{data.modules.length ? `队长端 Agent 会对照房间登记的 ${data.modules.length} 个模块分析正文，结果附在冻结的提案版本上。` : "房间尚未登记模块，审核前需先登记模块。"}审核完成前显示“待分析”。</p></div>
-        {error && <p className="form-error" role="alert">{error}</p>}
+        {error && <RecoveryHint error={error} />}
       </div>
-      <footer><button onClick={onClose}>取消</button><button className="primary" disabled={!file || pending} onClick={() => void submit()}>{pending ? "处理中…" : current ? "保存更新" : "提交提案"}</button></footer>
+      <footer><button onClick={onClose}>取消</button><button className="primary" disabled={!file?.content.trim() || generating || pending} onClick={() => void submit()}>{pending ? "处理中…" : current ? "保存更新" : "提交提案"}</button></footer>
     </section>
   </div>;
 }

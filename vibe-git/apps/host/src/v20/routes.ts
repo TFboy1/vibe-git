@@ -135,18 +135,38 @@ export async function registerV20Routes(app: FastifyInstance, service: V20Servic
     return service.submitPullRequest(authenticate(request, service), body.filename, body.content);
   });
   app.get("/api/v1/pull-requests", async (request) => {
-    const viewer = authenticate(request, service);
-    return service.repo.listPullRequests().filter(change => viewer.role === "captain" || change.submitterNodeId === viewer.id);
+    authenticate(request, service);
+    return service.repo.listPullRequests();
   });
   app.get<{ Params: { id: string } }>("/api/v1/documents/:id", async (request) => {
     const viewer = authenticate(request, service);
     const document = service.repo.getDocument(request.params.id);
     if (!document) throw notFound("文档不存在");
-    if (document.kind !== "plan" && viewer.role !== "captain" && document.ownerNodeId !== viewer.id) throw forbidden("只能查看自己的需求变更和执行细化");
+    if (document.kind === "task_detail" && viewer.role !== "captain" && document.ownerNodeId !== viewer.id) throw forbidden("只能查看自己的执行细化");
     return document;
   });
 
-  app.post("/api/v1/alignments", async (request) => service.startAlignment(authenticate(request, service)));
+  app.get("/api/v1/alignments/readiness", async (request) => { authenticate(request, service); return service.alignmentReadiness(); });
+  app.post<{ Body: { skipMissingNodeIds?: string[]; expectedRequirementRevision?: number } }>("/api/v1/alignments", async (request) => {
+    const { skipMissingNodeIds = [], expectedRequirementRevision } = request.body ?? {};
+    if (!Array.isArray(skipMissingNodeIds) || skipMissingNodeIds.some(id => typeof id !== "string") ||
+      (expectedRequirementRevision !== undefined && !Number.isInteger(expectedRequirementRevision))) throw badRequest("跳过成员参数无效");
+    return service.startAlignment(authenticate(request, service), skipMissingNodeIds, expectedRequirementRevision);
+  });
+  app.post<{ Params: { id: string }; Body: { expectedRevision?: number } }>("/api/v1/alignments/:id/read", async (request) => {
+    if (!Number.isInteger(request.body?.expectedRevision)) throw badRequest("缺少统一计划版本");
+    return service.readAlignment(authenticate(request, service), request.params.id, Number(request.body.expectedRevision));
+  });
+  app.patch<{ Params: { id: string; taskId: string }; Body: { title?: string; expectedRevision?: number } }>("/api/v1/alignments/:id/tasks/:taskId", async (request) => {
+    if (typeof request.body?.title !== "string" || !Number.isInteger(request.body.expectedRevision)) throw badRequest("缺少任务名称或草稿版本");
+    return service.renameDraftTask(authenticate(request, service), request.params.id, request.params.taskId, request.body.title, Number(request.body.expectedRevision));
+  });
+  app.patch<{ Params: { id: string }; Body: { expectedRevision?: number; sha256?: string; name?: string; signature?: string; behavior?: string[]; examples?: string[]; errors?: string[]; testCommand?: string; handoff?: string } }>("/api/v1/contracts/:id", async (request) => {
+    const body = request.body;
+    if (!body || !Number.isInteger(body.expectedRevision) || typeof body.sha256 !== "string") throw badRequest("缺少接口契约版本或哈希");
+    return service.reviseDraftContract(authenticate(request, service), request.params.id, Number(body.expectedRevision), body.sha256,
+      { name: body.name!, signature: body.signature!, behavior: body.behavior!, examples: body.examples!, errors: body.errors!, testCommand: body.testCommand!, handoff: body.handoff! });
+  });
   app.post<{ Params: { id: string }; Body: { issueId?: string; optionId?: string; expectedRevision?: number } }>("/api/v1/alignments/:id/resolve", async (request) => {
     const { issueId, optionId, expectedRevision } = request.body ?? {};
     if (!issueId || !optionId || !Number.isInteger(expectedRevision)) throw badRequest("缺少冲突、选项或裁决版本");
@@ -191,7 +211,12 @@ export async function registerV20Routes(app: FastifyInstance, service: V20Servic
     return markdown;
   });
 
-  app.post<{ Params: { id: string } }>("/api/v1/tasks/:id/start", async (request) => service.startTask(authenticate(request, service), request.params.id));
+  app.post<{ Params: { id: string }; Body: { expectedTaskRevision?: number; expectedRequirementRevision?: number } }>("/api/v1/tasks/:id/start", async (request) => {
+    const { expectedTaskRevision, expectedRequirementRevision } = request.body ?? {};
+    if ((expectedTaskRevision !== undefined && !Number.isInteger(expectedTaskRevision)) ||
+      (expectedRequirementRevision !== undefined && !Number.isInteger(expectedRequirementRevision))) throw badRequest("开工版本参数无效");
+    return service.startTask(authenticate(request, service), request.params.id, expectedTaskRevision, expectedRequirementRevision);
+  });
   app.post<{ Params: { id: string } }>("/api/v1/tasks/:id/integrate", async (request) => service.integrateTask(authenticate(request, service), request.params.id));
   app.post<{ Params: { id: string } }>("/api/v1/tasks/:id/sync", async (request) => service.requestSync(authenticate(request, service), request.params.id));
   app.post<{ Params: { id: string } }>("/api/v1/tasks/:id/done", async (request) => service.doneTask(authenticate(request, service), request.params.id));
@@ -213,7 +238,11 @@ export async function registerV20Routes(app: FastifyInstance, service: V20Servic
     const tunnel = await cloudflare.status().catch(() => null);
     return service.rotateInvite(node, tunnel?.url ?? publicBase(request));
   });
-  app.post<{ Params: { id: string } }>("/api/v1/nodes/:id/revoke", async (request) => service.revokeNode(authenticate(request, service), request.params.id));
+  app.post<{ Params: { id: string }; Body: { expectedActiveTaskRevisions?: Record<string, number> } }>("/api/v1/nodes/:id/revoke", async (request) => {
+    const expected = request.body?.expectedActiveTaskRevisions;
+    if (expected !== undefined && (!expected || typeof expected !== "object" || Array.isArray(expected) || Object.values(expected).some(value => !Number.isInteger(value)))) throw badRequest("任务版本快照无效");
+    return service.revokeNode(authenticate(request, service), request.params.id, expected);
+  });
 
   app.post("/api/v1/nodes/jobs/next", async (request, reply) => {
     const node = authenticate(request, service);

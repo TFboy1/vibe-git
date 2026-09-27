@@ -4,6 +4,7 @@ import type {
   V20BootstrapPayload,
 } from "@vibe-git/protocol";
 export type CanvasMode = "topology" | "gantt";
+export type CanvasSurface = "guide" | "canvas" | "versions" | "advanced";
 export type InspectorTarget = {
   type: "member" | "module" | "package" | "task" | "change" | "project";
   id: string;
@@ -85,13 +86,12 @@ export function deriveMemberVisualState(
       p.submitterNodeId === node.id &&
       ["QUEUED", "IN_REVIEW"].includes(p.status),
   );
-  if (data.viewer.role === "captain" && changes.some((c) => !seen.has(c.id)))
-    return {
-      tone: "change",
-      text: "需求变更",
-      pulse:
-        data.viewer.role === "captain" && changes.some((c) => !seen.has(c.id)),
-    };
+  if (changes.some(change => change.status === "IN_REVIEW"))
+    return { tone: "change", text: "取证中 · 影响待定", pulse: false };
+  if (changes.some(change => change.status === "QUEUED"))
+    return { tone: "change", text: "变更待审", pulse: changes.some(change => !seen.has(change.id)) };
+  const review = data.reviews.find(item => item.status === "AWAITING_CAPTAIN" && item.affectedNodeIds.includes(node.id));
+  if (review) return { tone: "blocked", text: "需求影响已确认", pulse: false };
   if (tasks.some((t) => ["BLOCKED", "PAUSED", "FAILED"].includes(t.status)))
     return { tone: "blocked", text: "需要处理", pulse: false };
   if (
@@ -130,7 +130,7 @@ export function deriveTopologyLayout(
   const count = inside.size,
     cols = Math.min(maxColumns, count <= 3 ? Math.max(1, count) : count <= 6 ? 3 : 4),
     width = Math.max(320, cols * 228 + 56),
-    height = Math.max(1, Math.ceil(count / cols)) * 144 + 154;
+    height = Math.max(1, Math.ceil(count / cols)) * 172 + 154;
   let inner = 0,
     outer = 0;
   return {
@@ -142,7 +142,7 @@ export function deriveTopologyLayout(
         return {
           id: n.id,
           x: (width - cols * 228 + 32) / 2 + (i % cols) * 228,
-          y: 146 + Math.floor(i / cols) * 144,
+          y: 146 + Math.floor(i / cols) * 172,
           inside: true,
         };
       }
@@ -151,7 +151,7 @@ export function deriveTopologyLayout(
         return {
           id: n.id,
           x: i % 2 === 0 ? -260 : width + 64,
-          y: Math.floor(i / 2) * 160 + 30,
+          y: Math.floor(i / 2) * 184 + 30,
           inside: false,
         };
       }

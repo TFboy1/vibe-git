@@ -178,6 +178,8 @@ export interface PlanImpactFinding {
 }
 
 export interface AlignmentRun {
+  draftRevision?: number;
+  skippedNodeIds?: string[];
   planImpacts?: PlanImpactFinding[];
   moduleRevisionSnapshot?: number;
   id: string;
@@ -302,6 +304,33 @@ export interface VibePullRequest {
   reviewId: string | null;
   createdAt: string;
   decidedAt: string | null;
+  submittedGit?: GitSnapshot | null;
+  reviewedPaths?: string[];
+  reviewedAt?: string | null;
+}
+
+export interface RequirementVersion {
+  revision: number;
+  markdown: string;
+  source: "alignment" | "review";
+  sourceId: string;
+  createdAt: string;
+}
+
+export interface AlignmentDraftVersion {
+  alignmentId: string;
+  revision: number;
+  tasks: AlignmentTaskDraft[];
+  contracts: InterfaceContract[];
+  editorNodeId: string;
+  createdAt: string;
+}
+
+export interface AlignmentReadReceipt {
+  alignmentId: string;
+  nodeId: string;
+  revision: number;
+  readAt: string;
 }
 
 export interface ImpactDecision {
@@ -423,6 +452,9 @@ export interface V20BootstrapPayload {
   workstreams: Workstream[];
   contracts: InterfaceContract[];
   pullRequests: VibePullRequest[];
+  requirementVersions: RequirementVersion[];
+  alignmentDraftVersions: AlignmentDraftVersion[];
+  alignmentReads: AlignmentReadReceipt[];
   reviews: ImpactReviewBatch[];
   notifications: Notification[];
   auditPool: AuditPoolStatus;

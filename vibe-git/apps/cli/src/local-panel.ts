@@ -7,7 +7,7 @@ import { readFile, stat } from "node:fs/promises";
 import { extname, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { probeCodex } from "./codex.js";
-import { chatWithCodex } from "./local-chat.js";
+import { chatWithCodex, draftProposalWithCodex } from "./local-chat.js";
 import { vibeHome, writeJson, type ClientConfig } from "./config.js";
 
 const WEB_DIST = resolve(fileURLToPath(new URL("../../web/dist", import.meta.url)));
@@ -65,6 +65,10 @@ export async function startLocalPanel(config: ClientConfig, controls: { busy(): 
       }
       if (url.pathname === "/api/local/codex" && req.method === "GET") return json(res, 200, await codex.status());
       if (url.pathname === "/api/local/codex/connect" && req.method === "POST") return json(res, 200, codex.connect());
+      if (url.pathname === "/api/local/proposal-draft" && req.method === "POST") {
+        if (!probeCodex().appServer) return json(res, 409, { error: "本机 Codex 不可用。请安装并登录 Codex，然后重新生成草稿。" });
+        return json(res, 200, await draftProposalWithCodex(config));
+      }
       if (url.pathname.startsWith("/api/local/") && !url.pathname.startsWith("/api/local/chat/")) return json(res, 404, { error: "本机接口不存在" });
       const match = url.pathname.match(/^\/api\/local\/chat\/([^/]+)(\/finalize)?$/);
       if (match && req.method === "POST") {

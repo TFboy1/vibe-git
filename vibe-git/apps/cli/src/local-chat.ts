@@ -1,7 +1,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createInterface } from "node:readline";
 import { resolve } from "node:path";
-import type { StageTask } from "@vibe-git/protocol";
+import type { StageTask, V20BootstrapPayload } from "@vibe-git/protocol";
 import { api } from "./api.js";
 import { codexInvocation } from "./codex-command.js";
 import { readJson, vibeHome, writeJson, type ClientConfig } from "./config.js";
@@ -136,5 +136,26 @@ export async function chatWithCodex(config: ClientConfig, taskId: string, messag
     if (!Array.isArray(value.steps) || !Array.isArray(value.files) || !Array.isArray(value.validation) ||
       typeof value.mockUsage !== "string" || typeof value.notes !== "string") throw new Error("Codex 细化输出不符合结构化格式");
     return value;
+  } finally { app.close(); }
+}
+
+export async function draftProposalWithCodex(config: ClientConfig): Promise<{ markdown: string }> {
+  const data = await api<V20BootstrapPayload>(config, "/api/v1/bootstrap");
+  const captainPlan = data.plans.find(plan => plan.ownerNodeId === data.nodes.find(node => node.role === "captain")?.id);
+  const app = new LocalAppServer(config.workspace);
+  try {
+    await app.initialize();
+    const started = await app.request<{ thread: { id: string } }>("thread/start", { cwd: config.workspace,
+      approvalPolicy: "never", sandbox: "read-only", serviceName: "vibe_git_proposal_draft" });
+    const prompt = [
+      "你是成员本机的 Codex。只读查看当前 Git 工作区，形成一份可供人修改的个人项目提案 Markdown。不要写文件、执行修改、启动开发或输出源码。",
+      "根据仓库结构和现有需求，写出建议目标、边界、自己适合认领的工作、接口依赖、验收标准与仍需队长决定的问题。不确定的内容明确标注为待确认，不替团队擅自决定。只输出 Markdown 正文。",
+      `<role>${data.viewer.role}</role>`,
+      `<current_requirement revision="${data.room.requirementRevision}">${data.room.currentRequirementMarkdown.slice(0, 40_000)}</current_requirement>`,
+      ...(captainPlan && captainPlan.ownerNodeId !== data.viewer.id ? [`<captain_proposal>${captainPlan.content.slice(0, 40_000)}</captain_proposal>`] : [])
+    ].join("\n\n");
+    const markdown = (await app.turn(started.thread.id, prompt, config.workspace, () => undefined)).trim();
+    if (!markdown || Buffer.byteLength(markdown, "utf8") > 256 * 1024) throw new Error("Codex 生成的提案为空或过大");
+    return { markdown };
   } finally { app.close(); }
 }

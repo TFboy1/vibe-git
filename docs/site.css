@@ -77,7 +77,7 @@ h1 em, h2 em { color: var(--mint); font-style: normal; }
 .hero-proof i { color: var(--mint); font-style: normal; }
 .hero-visual { position: relative; width: min(100%, 545px); min-width: 0; margin: 0 0 0 auto; }
 .logo-stage { position: relative; isolation: isolate; aspect-ratio: 1; overflow: hidden; }
-.hero-visual img { display: block; width: 100%; height: auto; mix-blend-mode: screen; }
+.hero-visual img { display: block; width: 100%; height: auto; }
 .logo-pending img { opacity: 0; }
 .logo-scan { position: absolute; inset: 0; opacity: 0; pointer-events: none; background: linear-gradient(180deg, transparent 46%, #ffffff12 49.5%, #ffffff65 50%, transparent 50.5%); }
 .is-introducing img { animation: logo-awaken 1.65s var(--ease) both; }
@@ -107,7 +107,8 @@ h1 em, h2 em { color: var(--mint); font-style: normal; }
 .copy-button { min-height: 38px; padding: 0 0 0 12px; color: var(--muted); background: transparent; border: 0; cursor: pointer; font: 10px var(--mono); }
 .copy-button:hover { color: var(--mint); }
 pre { margin: 0; overflow-x: auto; padding: 15px 12px 17px; color: #dbe8ff; font: 12px/1.7 var(--mono); scrollbar-width: thin; }
-.prompt-box { margin-top: 13px; padding: 12px 14px; color: #c1d3c9; background: rgba(185,255,216,.07); border-left: 2px solid var(--mint); font-size: 11px; line-height: 1.75; }
+.prompt-box { margin-bottom: 13px; padding: 12px 14px; color: #c1d3c9; background: rgba(185,255,216,.07); border-left: 2px solid var(--mint); font-size: 11px; line-height: 1.75; }
+.prompt-box strong { color: var(--mint); font-weight: 600; }
 .prompt-box code, .install-note code { color: var(--mint); font-family: var(--mono); }
 .card-action { display: flex; min-height: 54px; align-items: center; justify-content: space-between; margin-top: auto; color: var(--muted); border-top: 1px solid var(--line); font: 10px var(--mono); transition: color .2s ease, padding .2s var(--ease); }
 .card-action:hover { padding-inline: 4px; color: var(--mint); }

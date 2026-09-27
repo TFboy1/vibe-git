@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 560 560" role="img" aria-labelledby="logo-title">
+  <title id="logo-title">Vibe-Git 猫头终端标志</title>
+  <path fill="#f2f6ff" fill-rule="evenodd" d="M138 204 138 80q0-14 12-6l54 46q76-30 152 0l54-46q12-8 12 6v124q28 34 28 83c0 95-76 155-170 155s-170-60-170-155q0-49 28-83Zm18 82c0 70 55 112 124 112s124-42 124-112c0-66-49-101-124-95-75-6-124 29-124 95Z"/>
+  <g fill="none" stroke="#f2f6ff" stroke-width="12" stroke-linecap="square" stroke-linejoin="miter">
+    <path d="m206 263 30 20-30 20m148-40-30 20 30 20"/>
+    <path d="M247 310h15m36 0h15"/>
+  </g>
+  <text x="280" y="510" fill="#f2f6ff" font-family="Arial, Helvetica, sans-serif" font-size="61" font-weight="700" letter-spacing="-3" text-anchor="middle">vibe-git</text>
+  <text x="280" y="541" fill="#aeb9cd" font-family="Arial, Helvetica, sans-serif" font-size="11" letter-spacing="2.2" text-anchor="middle">VERSION THE INTENT, NOT JUST THE CODE.</text>
+</svg>

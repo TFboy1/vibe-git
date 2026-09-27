@@ -11,7 +11,7 @@ Vibe-Git 有两个部分：
 - **Skill**：告诉 Agent 如何理解 Vibe-Git，如何区分队长和队员，以及什么时候应该上传提案、提交需求变更或连接 Codex 审核池。
 - **CLI**：真正创建房间、连接节点、上传 Markdown、发布任务和读取状态的命令行工具。
 
-普通用户只需要先安装 Skill。之后可以让 Agent 自动检查 CLI；CLI 不存在时，Agent 会执行：
+普通用户只需要先安装 Skill。之后可以让 Agent 检查 CLI；如果你要求自动安装且 CLI 不存在，Agent 会执行：
 
 ```powershell
 npm install -g @vibe-git/vibe-git
@@ -21,17 +21,17 @@ npm install -g @vibe-git/vibe-git
 
 ### Agent 自动安装（推荐）
 
-在项目工作区或你平时使用 Agent 的目录执行：
+把下面这句话直接发给支持终端操作的 Agent：
+
+> 请运行 `npx skills add TFboy1/vibe-git-skill --skill vibe-git`，并指导用户如何使用。
+
+如果你想自己先安装 Skill，也可以在项目工作区执行：
 
 ```powershell
 npx skills add TFboy1/vibe-git-skill --skill vibe-git
 ```
 
-然后把这句话直接发给 Agent：
-
-> 请自动安装并配置 Vibe-Git：先检查 Node.js、Git、Codex CLI 和 vibe-git CLI；如果 CLI 没安装就执行 `npm install -g @vibe-git/vibe-git`，安装成功后先问我是队长还是队员，再带我完成第一步。
-
-Agent 会检查环境、安装 CLI、运行 `vibe-git --help`，然后询问你的身份。用户明确要求自动安装时，Skill 不要求你再手动复制 npm 命令。
+Agent 安装并加载 Skill 后，会按教程检查环境与 CLI，并先询问你是队长还是队员。需要继续安装 CLI 时，Skill 会说明 npm 安装步骤并验证 `vibe-git --help`。
 
 ### 手动安装
 

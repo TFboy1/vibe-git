@@ -75,6 +75,8 @@ export function GanttCanvas({
       (!closed.has(r.parent) &&
         !closed.has(all.find((p) => p.id === r.parent)?.parent ?? "")),
   );
+  const unscheduled = rows.filter(row => row.type === "task" && (!row.start || !row.end));
+  const scheduledRows = rows.filter(row => row.type !== "task" || (row.start && row.end));
   const locate = () => {
     if (scroll.current) {
       const labelWidth = parseFloat(getComputedStyle(scroll.current).getPropertyValue("--gantt-label"));
@@ -172,7 +174,7 @@ export function GanttCanvas({
               ))}
             </div>
           </div>
-          {rows.map((row) => {
+          {scheduledRows.map((row) => {
             const hasPlan = !!row.start && !!row.end;
             const planFrom = hasPlan ? day(row.start!) : null;
             const planTo = hasPlan ? day(row.end!) : null;
@@ -260,9 +262,9 @@ export function GanttCanvas({
             );
           })}
         </div>
-        {!rows.length && (
+        {!scheduledRows.length && !unscheduled.length && (
           <div className="canvas-empty">
-            <p>{all.length ? "当前筛选下没有工作项" : "尚未建立排期"}</p>
+            <p>{all.length ? "当前筛选下没有工作项" : "尚无任务排期。队长先在向导中对齐提案、发布任务，再将任务加入工作包并设置日期。"}</p>
             <button
               onClick={() =>
                 open({ type: "project", id: "project", tab: "stage" })
@@ -273,6 +275,7 @@ export function GanttCanvas({
           </div>
         )}
       </div>
+      {unscheduled.length > 0 && <section className="gantt-unscheduled" aria-label="待排期任务"><div><strong>待排期</strong><small>{unscheduled.length} 项任务尚未安排时间</small></div><div>{unscheduled.map(row => <button key={row.key} onClick={() => open({ type: "task", id: row.id })}><strong>{row.name}</strong><span>{row.owner || label(row.status)} · {label(row.status)}</span></button>)}</div></section>}
     </div>
   );
 }

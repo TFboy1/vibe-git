@@ -578,6 +578,7 @@ export function AlignmentView({
   section?: "all" | "alignment" | "decisions" | "publish";
 }) {
   const captain = data.viewer.role === "captain";
+  const [renaming, setRenaming] = useState<{ id: string; title: string } | null>(null);
   return (
     <div className="alignment-layout">
       {section !== "publish" && <article className="paper alignment-paper">
@@ -677,7 +678,7 @@ export function AlignmentView({
           </div>
           <b>{String(alignment.tasks.length).padStart(2, "0")}</b>
         </div>
-        {alignment.tasks.map((task, index) => (
+        {alignment.tasks.filter(task => captain || section !== "publish" || task.assigneeNodeId === data.viewer.id).map((task, index) => (
           <article key={task.id} className="draft-card">
             <div>
               <code>
@@ -690,6 +691,7 @@ export function AlignmentView({
               </Pill>
             </div>
             <h4>{task.title}</h4>
+            {captain && alignment.status === "READY" && (renaming?.id === task.id ? <div className="draft-rename"><input aria-label="任务名称草稿" value={renaming.title} onChange={event => setRenaming({ id: task.id, title: event.target.value })}/><button onClick={() => { const title = renaming.title; setRenaming(null); run(() => api.renameDraftTask(alignment.id, task.id, title, alignment.draftRevision ?? 0), "任务名称已保存为新草稿版本"); }}>保存名称</button><button onClick={() => setRenaming(null)}>取消</button></div> : <button onClick={() => setRenaming({ id: task.id, title: task.title })}>修改任务名称</button>)}
             <p>{task.goal}</p>
             <small>{task.boundary}</small>
             {task.assignmentRationale && (
@@ -749,6 +751,8 @@ export function TaskCard({
   writable?: boolean;
 }) {
   const [detail, setDetail] = useState<string | null>(null);
+  const [confirmStart, setConfirmStart] = useState(false);
+  const [firstStartTip, setFirstStartTip] = useState(() => { try { return localStorage.getItem("vibe-git-tip:task-start") !== "1"; } catch { return true; } });
   const mine = task.assigneeNodeId === data.viewer.id;
   const owner = data.nodes.find((node) => node.id === task.assigneeNodeId);
   const canStart =
@@ -898,16 +902,15 @@ export function TaskCard({
           )}
           {canStart && (
             <button
-              className="primary"
+              className={`primary ${firstStartTip ? "first-action" : ""}`}
               disabled={!writable}
-              onClick={() =>
-                run(() => api.taskStart(task.id), "开工命令已发送到本机 Codex")
-              }
+              onClick={() => { setConfirmStart(true); setFirstStartTip(false); try { localStorage.setItem("vibe-git-tip:task-start", "1"); } catch { /* 确认仍可继续 */ } }}
             >
               <Play size={13} />
               开工
             </button>
           )}
+          {canStart && firstStartTip && <small className="action-teaching">首次开工：这里会先展示执行影响，再让你确认启动本机 Codex。</small>}
           {mine &&
             ["STARTING", "IN_PROGRESS", "WAITING_CONFIRMATION"].includes(
               task.status,
@@ -946,6 +949,7 @@ export function TaskCard({
           )}
         </div>
       )}
+      {confirmStart && <div className="impact-backdrop" role="dialog" aria-modal="true" aria-label="确认本机任务开工"><section className="impact-dialog"><h2>确认在本机开工</h2><p>Codex 将在你的工作区执行「{task.title}」。任务 r{task.revision}，需求 R{data.stages.find(stage => stage.id === task.stageId)?.requirementRevision ?? data.room.requirementRevision}。</p><p>工作区：{owner?.git?.branch ?? "未连接"} · HEAD {owner?.git?.headSha?.slice(0, 12) ?? "未知"}。会读取任务说明与接口契约，并可能修改本机文件。</p><ul>{edges.map(edge => <li key={edge.upstreamTaskId}>{edge.mode === "HARD" ? "硬等待" : "接口交接"}：{data.tasks.find(item => item.id === edge.upstreamTaskId)?.title ?? edge.upstreamTaskId}</li>)}</ul><div><button onClick={() => setConfirmStart(false)}>取消</button><button className="journey-primary" onClick={() => { setConfirmStart(false); run(async () => { const latest = await api.bootstrap(); const current = latest.tasks.find(item => item.id === task.id); const requirementRevision = latest.stages.find(stage => stage.id === task.stageId)?.requirementRevision; const shownRevision = data.stages.find(stage => stage.id === task.stageId)?.requirementRevision; if (!current || current.revision !== task.revision || requirementRevision !== shownRevision) throw new Error("任务或需求版本已变化，请重新查看开工影响"); await api.taskStart(task.id, task.revision, shownRevision); }, "开工命令已发送到本机 Codex"); }}>确认启动本机命令</button></div></section></div>}
       {mine && writable && task.brief && (
         <TaskChat
           task={task}

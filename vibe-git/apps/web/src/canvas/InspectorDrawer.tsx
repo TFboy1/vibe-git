@@ -12,6 +12,7 @@ import { ProposalComposer, ModuleManager } from "../WorkspacePanels";
 import { PlanHistory } from "../PlanHistory";
 import { ContractBoard, WorkstreamBoard } from "../ContractWorkspace";
 import { Avatar } from "./TopologyCanvas";
+import { RecoveryHint } from "./RecoveryHint";
 import {
   codexState,
   derivePackageParticipants,
@@ -196,6 +197,7 @@ export function InspectorDrawer({
   const [notice, setNotice] = useState("");
   const [compose, setCompose] = useState(false);
   const [confirmWithdraw, setConfirmWithdraw] = useState(false);
+  const [confirmation, setConfirmation] = useState<{ kind: "apply" | "cancel" | "reject" | "revoke"; id: string } | null>(null);
   const [doc, setDoc] = useState<MarkdownDocument | null>(null);
   const [alignmentId, setAlignmentId] = useState("");
   const [newName, setNewName] = useState("");
@@ -264,8 +266,7 @@ export function InspectorDrawer({
   useEffect(() => {
     if (
       readStarted.current ||
-      !change ||
-      !(captain || change.submitterNodeId === data.viewer.id)
+      !change
     )
       return;
     readStarted.current = true;
@@ -288,7 +289,7 @@ export function InspectorDrawer({
   useEffect(() => {
     let stopped = false;
     setDoc(null);
-    if (change && (captain || change.submitterNodeId === data.viewer.id))
+    if (change)
       void api
         .document(change.documentId)
         .then((d) => {
@@ -310,13 +311,13 @@ export function InspectorDrawer({
         ["packages", "参与功能"],
       ]
     : target.type === "project"
-      ? [
+      ? captain ? [
           ["stage", "阶段概览"],
           ["alignment", "提案对齐"],
           ["decisions", "裁决问题"],
           ["publish", "任务发布"],
           ["review", "变更审核"],
-        ]
+        ] : [["stage", "现行需求"], ["alignment", "统一计划"], ["publish", "我的接口确认"]]
       : [];
   const taskLinks = (ids: string[]) =>
     ids.map((id) => {
@@ -340,8 +341,7 @@ export function InspectorDrawer({
   const changesList = (owner?: string) => {
     const items = data.pullRequests.filter(
       (c) =>
-        (!owner || c.submitterNodeId === owner) &&
-        (captain || c.submitterNodeId === data.viewer.id),
+        !owner || c.submitterNodeId === owner,
     );
     return (
       <>
@@ -418,9 +418,7 @@ export function InspectorDrawer({
             ["QUEUED", "RUNNING", "NEEDS_EVIDENCE"].includes(review.status) && (
               <button
                 disabled={!local || busy}
-                onClick={() =>
-                  run(() => api.cancelReview(review.id), "审核已取消")
-                }
+                onClick={() => setConfirmation({ kind: "cancel", id: review.id })}
               >
                 取消审核
               </button>
@@ -429,17 +427,13 @@ export function InspectorDrawer({
             <>
               <button
                 disabled={!local || busy}
-                onClick={() =>
-                  run(() => api.applyReview(review.id), "审核已应用")
-                }
+                onClick={() => setConfirmation({ kind: "apply", id: review.id })}
               >
                 应用
               </button>
               <button
                 disabled={!local || busy}
-                onClick={() =>
-                  run(() => api.rejectReview(review.id), "审核已退回")
-                }
+                onClick={() => setConfirmation({ kind: "reject", id: review.id })}
               >
                 退回
               </button>
@@ -484,6 +478,15 @@ export function InspectorDrawer({
           ×
         </button>
       </header>
+      {member && !target.tab && <div className="inspector-next"><small>当前最相关的操作</small>{(() => {
+        const memberTasks = liveTasks(data).filter(item => item.assigneeNodeId === member.id);
+        const memberChange = data.pullRequests.find(item => item.submitterNodeId === member.id && ["QUEUED", "IN_REVIEW"].includes(item.status));
+        const activeTask = memberTasks.find(item => ["BLOCKED", "PAUSED", "FAILED"].includes(item.status)) ?? memberTasks.find(item => item.status !== "DONE");
+        if (memberChange) return <button className="journey-primary" onClick={() => open({ type: "change", id: memberChange.id })}>{memberChange.status === "QUEUED" ? "查看待审变更" : "查看取证进度"}</button>;
+        if (activeTask) return <button className="journey-primary" onClick={() => open({ type: "task", id: activeTask.id })}>查看当前任务：{activeTask.title}</button>;
+        if (myMember && !plan) return <button className="journey-primary" onClick={() => open({ ...target, tab: "plan" })}>提交我的提案</button>;
+        return <button onClick={() => open({ ...target, tab: "tasks" })}>查看任务与交接</button>;
+      })()}</div>}
       {!!tabs.length && (
         <nav className="inspector-tabs">
           {tabs.map(([id, text]) => (
@@ -508,9 +511,7 @@ export function InspectorDrawer({
           </p>
         )}
         {error && (
-          <p className="form-error" role="alert">
-            {error}
-          </p>
+          <RecoveryHint error={error} />
         )}
         {notice && (
           <p role="status" className="success">
@@ -587,9 +588,7 @@ export function InspectorDrawer({
                 <summary>更多操作</summary>
                 <button
                   disabled={!local || busy}
-                  onClick={() =>
-                    run(() => api.revokeNode(member.id), "成员已撤销")
-                  }
+                  onClick={() => setConfirmation({ kind: "revoke", id: member.id })}
                 >
                   撤销成员
                 </button>
@@ -828,7 +827,7 @@ export function InspectorDrawer({
             />
           </fieldset>
         )}
-        {change && (captain || change.submitterNodeId === data.viewer.id) && (
+        {change && (
           <>
             <h3>{doc?.filename ?? "需求变更"}</h3>
             <p>
@@ -933,26 +932,7 @@ export function InspectorDrawer({
             {["alignment", "decisions", "publish"].includes(tab) && (
               <>
                 <div className="button-row">
-                  {captain && tab === "alignment" && (
-                    <button
-                      disabled={
-                        !local ||
-                        busy ||
-                        !data.plans.length ||
-                        data.alignments.some((a) =>
-                          ["QUEUED", "RUNNING"].includes(a.status),
-                        )
-                      }
-                      onClick={() =>
-                        run(async () => {
-                          const result = await api.startAlignment();
-                          setAlignmentId(result.id);
-                        }, "已开始对齐")
-                      }
-                    >
-                      开始对齐
-                    </button>
-                  )}
+                  {captain && tab === "alignment" && <p className="inline-note">请从顶部「带队向导」开始对齐；向导会检查提案到齐情况，并在跳过缺席成员前展示影响。</p>}
                   <select
                     aria-label="对齐轮次"
                     value={alignment?.id ?? ""}
@@ -1016,6 +996,29 @@ export function InspectorDrawer({
           </>
         )}
       </div>
+      {confirmation && <div className="impact-backdrop" role="dialog" aria-modal="true" aria-label="确认操作影响"><section className="impact-dialog">
+        <h2>{confirmation.kind === "apply" ? "应用已确认需求变更？" : confirmation.kind === "cancel" ? "取消本轮审核？" : confirmation.kind === "reject" ? "退回本轮需求变更？" : "撤销成员访问？"}</h2>
+        {confirmation.kind === "revoke" ? <p>该成员的凭据会失效，运行中的作业将取消。尚未完成的任务：{data.tasks.filter(item => item.assigneeNodeId === confirmation.id && item.status !== "DONE").map(item => item.title).join("、") || "无"}。</p> : <><p>本轮涉及 {review?.changeIds.length ?? 0} 项变更、{review?.affectedTaskIds.length ?? 0} 个受影响任务、{review?.contractUpdates?.length ?? 0} 份契约。</p><p>{confirmation.kind === "apply" ? `获批后可能形成需求 R${data.room.requirementRevision + 1}；相关任务暂停或重编排，契约旧确认失效。` : confirmation.kind === "reject" ? "本轮变更将退回，审核中暂停的任务恢复至原状态。" : "取证作业将取消，变更返回待审队列。"}</p></>}
+        <div><button onClick={() => setConfirmation(null)}>返回</button><button className={confirmation.kind === "apply" ? "journey-primary" : "danger"} disabled={busy} onClick={() => {
+          const selected = confirmation; setConfirmation(null);
+          run(async () => {
+            const latest = await api.bootstrap();
+            if (selected.kind === "revoke") {
+              const before = data.nodes.find(item => item.id === selected.id);
+              const current = latest.nodes.find(item => item.id === selected.id);
+              const taskState = (value: V20BootstrapPayload) => value.tasks.filter(item => item.assigneeNodeId === selected.id && item.status !== "DONE").map(item => `${item.id}:${item.revision}`).sort().join("|");
+              if (!before || !current || before.lastSeenAt !== current.lastSeenAt || taskState(data) !== taskState(latest)) throw new Error("成员或任务状态已变化，请重新查看撤销影响");
+              await api.revokeNode(selected.id, Object.fromEntries(data.tasks.filter(item => item.assigneeNodeId === selected.id && item.status !== "DONE").map(item => [item.id, item.revision])));
+            } else {
+              const current = latest.reviews.find(item => item.id === selected.id);
+              if (!review || !current || current.status !== review.status || latest.room.requirementRevision !== data.room.requirementRevision || JSON.stringify(current.affectedTaskIds) !== JSON.stringify(review.affectedTaskIds)) throw new Error("审核证据或需求版本已变化，请重新查看影响");
+              if (selected.kind === "apply") await api.applyReview(selected.id);
+              else if (selected.kind === "reject") await api.rejectReview(selected.id);
+              else await api.cancelReview(selected.id);
+            }
+          }, selected.kind === "apply" ? "审核已应用" : selected.kind === "cancel" ? "审核已取消" : selected.kind === "reject" ? "审核已退回" : "成员已撤销");
+        }}>确认{confirmation.kind === "apply" ? "应用" : confirmation.kind === "cancel" ? "取消审核" : confirmation.kind === "reject" ? "退回" : "撤销成员"}</button></div>
+      </section></div>}
       <footer className="inspector-footer">
         {((member && myMember && tab === "changes") || (target.type === "project" && tab === "review")) && (
           <FileButton
