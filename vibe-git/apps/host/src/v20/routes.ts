@@ -1,3 +1,4 @@
+import { registerCoordinationRoutes } from "./coordination-routes.js";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import type { CollaborationNode, JobResultInput, NodeHeartbeatInput, ProjectModule } from "@vibe-git/protocol";
 import { badRequest, forbidden, notFound, unavailable } from "../domain/errors.js";
@@ -52,6 +53,7 @@ async function tunnelOperation(work: () => Promise<unknown>): Promise<unknown> {
 }
 
 export async function registerV20Routes(app: FastifyInstance, service: V20Service, cloudflare: CloudflareManager): Promise<void> {
+  registerCoordinationRoutes(app, service.coordination, request => authenticate(request, service));
   app.get("/health", async () => ({ ok: true, service: "vibe-git-host", version: "0.20", time: new Date().toISOString() }));
 
   app.post<{ Body: { invite?: string } }>("/api/v1/join", async (request) => {
@@ -249,9 +251,19 @@ export async function registerV20Routes(app: FastifyInstance, service: V20Servic
     let job = service.claimJob(node);
     if (!job) {
       await new Promise<void>((resolve) => {
-        const timeout = setTimeout(() => { unsubscribe(); resolve(); }, 25_000);
-        const unsubscribe = service.hub.subscribe(() => { clearTimeout(timeout); unsubscribe(); resolve(); });
-        request.raw.once("close", () => { clearTimeout(timeout); unsubscribe(); resolve(); });
+        let settled = false;
+        const finish = () => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timeout);
+          unsubscribe();
+          reply.raw.off("close", finish);
+          resolve();
+        };
+        const unsubscribe = service.hub.subscribe(finish);
+        const timeout = setTimeout(finish, 25_000);
+        reply.raw.once("close", finish);
+        if (reply.raw.destroyed) finish();
       });
       job = service.claimJob(node);
     }

@@ -11,6 +11,8 @@ export interface ClientConfig {
   workTransport: WorkTransport;
   daemonPid: number | null;
   connectedAt: string;
+  openaiApiKey?: string;
+  openaiModel?: string;
 }
 
 export const vibeHome = () => resolve(process.env.VIBE_GIT_HOME?.trim() || resolve(homedir(), ".vibe-git"));

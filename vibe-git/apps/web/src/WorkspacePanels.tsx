@@ -1,24 +1,49 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import type { MarkdownDocument, ProjectModule, V20BootstrapPayload } from "@vibe-git/protocol";
-import { api, localProposalDraft } from "./api";
+import { api, localProposalDraft, localCodexModels } from "./api";
+import { Markdown } from "./Markdown";
 import { RecoveryHint } from "./canvas/RecoveryHint";
 
 const stateLabel: Record<string, string> = { planned: "待开始", in_progress: "进行中", blocked: "受阻", done: "已完成" };
 
-export function ProposalComposer({ data, current, onClose, onSaved, inline = false }: {
-  data: V20BootstrapPayload; current: MarkdownDocument | undefined; onClose(): void; onSaved(): Promise<void>; inline?: boolean;
+export function ProposalComposer({ data, current, onClose, onSaved, inline = false, initialIdea = "" }: {
+  data: V20BootstrapPayload; current: MarkdownDocument | undefined; onClose(): void; onSaved(): Promise<void>; inline?: boolean; initialIdea?: string | undefined;
 }) {
   const [file, setFile] = useState<{ filename: string; content: string } | null>(() => current ? { filename: current.filename, content: current.content } : null);
   const [base] = useState(() => current ? { id: current.id, revision: current.revision } : null);
   const [pending, setPending] = useState(false);
   const [generating, setGenerating] = useState(false);
+  const [captainIdea, setCaptainIdea] = useState(initialIdea);
+  const [model, setModel] = useState(() => {
+    try { return localStorage.getItem("vibe-git:codex-model") || "default"; } catch { return "default"; }
+  });
+  const [modelOptions, setModelOptions] = useState<Array<{ id: string; name: string }>>([{ id: "default", name: "Codex 默认模型" }]);
+  const [viewMode, setViewMode] = useState<"edit" | "preview" | "split">("split");
   const attempted = useRef(false);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const [error, setError] = useState("");
+
+  useEffect(() => {
+    let active = true;
+    localCodexModels()
+      .then((models) => {
+        if (active && Array.isArray(models) && models.length > 0) {
+          setModelOptions(models);
+          setModel(current => models.some(option => option.id === current) ? current : "default");
+        }
+      })
+      .catch(() => {});
+    return () => { active = false; };
+  }, []);
   const generate = async () => {
     setGenerating(true); setError("");
-    try { const draft = await localProposalDraft(); setFile({ filename: file?.filename ?? "proposal.md", content: draft.markdown }); }
-    catch (cause) { setError(`${cause instanceof Error ? cause.message : String(cause)}。请在本机运行 vibe-git open，确认 Codex 已安装并登录，然后重试；也可手动编辑草稿。`); }
-    finally { setGenerating(false); }
+    const selectedModel = modelOptions.some(option => option.id === model) && model !== "default" ? model : undefined;
+    try {
+      const draft = await localProposalDraft({ prompt: captainIdea, model: selectedModel });
+      setFile({ filename: file?.filename ?? "proposal.md", content: draft.markdown });
+    } catch (cause) {
+      setError(`${cause instanceof Error ? cause.message : String(cause)}。请在本机运行 vibe-git open，确认 Codex 已安装并登录，然后重试；也可手动编辑草稿。`);
+    } finally { setGenerating(false); }
   };
   useEffect(() => { if (!current && data.viewer.codex === "available" && !attempted.current) { attempted.current = true; void generate(); } }, []);
   useEffect(() => { const onKey = (event: KeyboardEvent) => { if (event.key === "Escape") onClose(); }; window.addEventListener("keydown", onKey); return () => window.removeEventListener("keydown", onKey); }, [onClose]);
@@ -32,20 +57,196 @@ export function ProposalComposer({ data, current, onClose, onSaved, inline = fal
     } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
     finally { setPending(false); }
   };
+
+  const insertMarkdown = (before: string, after: string = "") => {
+    const el = textareaRef.current;
+    if (!el) return;
+    const start = el.selectionStart;
+    const end = el.selectionEnd;
+    const currentText = file?.content ?? "";
+    const selectedText = currentText.substring(start, end);
+    const replacement = `${before}${selectedText}${after}`;
+    const newText = currentText.substring(0, start) + replacement + currentText.substring(end);
+    setFile({ filename: file?.filename ?? "proposal.md", content: newText });
+    setTimeout(() => {
+      el.focus();
+      el.setSelectionRange(start + before.length, end + before.length);
+    }, 0);
+  };
+
+  const applyTemplate = (type: "standard" | "architecture" | "minimal") => {
+    let tpl = "";
+    if (type === "standard") {
+      tpl = `# ${data.viewer.role === "captain" ? "项目需求与对齐提案" : "个人技术方案"}\n\n## 1. 项目核心目标\n- 明确项目要解决的核心痛点与终态标准。\n\n## 2. 核心功能模块\n- **模块 A**: 描述职责范围与输出要求。\n- **模块 B**: 描述与团队其他模块的协同。\n\n## 3. 接口与依赖要求\n- 简述核心数据流向或对外暴露的 API 契约。\n\n## 4. 交付与验收标准\n- 100% 单元测试覆盖与自动化构建通过。\n`;
+    } else if (type === "architecture") {
+      tpl = `# 技术架构方案\n\n## 1. 系统架构全景\n- 前后端架构分层与组件拓扑。\n\n## 2. 核心流程与协议\n- 数据交互格式 (JSON / Protocol Buffers)。\n\n## 3. 边界与限制\n- 性能指标、并发要求与异常容错。\n`;
+    } else {
+      tpl = `# 极简方案草稿\n\n- [ ] 核心功能点 1\n- [ ] 核心功能点 2\n- [ ] 接口契约确认\n`;
+    }
+    setFile({ filename: file?.filename ?? "proposal.md", content: tpl });
+  };
+
+  const content = file?.content ?? "";
+  const charCount = content.length;
+  const wordCount = content.trim() ? content.trim().split(/\s+/).length : 0;
+  const lineCount = content ? content.split("\n").length : 0;
+  const kbSize = Math.ceil(new TextEncoder().encode(content).length / 1024);
   return <div className={inline ? "inline-composer" : "modal-backdrop"} onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
-    <section className="modal-card" role="dialog" aria-modal={!inline} aria-label={current ? "更新我的提案" : "提交我的提案"}>
-      <header><div><small>项目提案</small><h2>{current ? "更新我的提案" : data.viewer.role === "captain" ? "描述项目想法" : "提出我的方案"}</h2><p>Codex 在本机只读生成 Markdown 草稿。检查、修改后再提交；旧版本会保留。</p></div><button onClick={onClose} aria-label="关闭">×</button></header>
-      <div className="modal-body">
-        <button type="button" onClick={() => void generate()} disabled={generating || pending}>{generating ? "Codex 正在生成…" : file ? "用 Codex 重新生成草稿" : "用本机 Codex 生成草稿"}</button>
-        <label className="proposal-editor-label">文件名<input disabled={generating} value={file?.filename ?? "proposal.md"} onChange={event => setFile({ filename: event.target.value, content: file?.content ?? "" })} /></label>
-        <label className="proposal-editor-label">提案内容<textarea disabled={generating} value={file?.content ?? ""} rows={14} placeholder="项目目标、我的方案、边界、接口依赖、验收与待确认问题…" onChange={event => setFile({ filename: file?.filename ?? "proposal.md", content: event.target.value })} /></label>
-        <label className="file-pick"><span className="file-pick-icon" aria-hidden="true">↑</span><strong>选择 .md 文件</strong><small>UTF-8 · 最大 256 KiB</small><input disabled={generating} type="file" accept=".md,text/markdown" aria-label="选择提案 Markdown 文件" onChange={async (event) => {
+    <section className="modal-card markdown-composer-card" style={{ maxWidth: viewMode === "split" ? "1100px" : "860px", width: "95vw" }} role="dialog" aria-modal={!inline} aria-label={current ? "更新我的提案" : "提交我的提案"}>
+      <header>
+        <div>
+          <small style={{ color: "var(--accent)", fontWeight: 600 }}>内置 Markdown 编辑器</small>
+          <h2>{current ? "更新我的提案" : data.viewer.role === "captain" ? "描述项目想法" : "提出我的方案"}</h2>
+          <p>支持 Codex AI 智能草稿生成、实时 Markdown 渲染与格式工具栏。检查确认后提交。</p>
+        </div>
+        <button onClick={onClose} aria-label="关闭">×</button>
+      </header>
+      <div className="modal-body" style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
+        <div className="composer-ai-box" style={{ background: "var(--surface)", border: "1px solid var(--line)", borderRadius: "10px", padding: "14px", display: "grid", gap: "10px" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <span style={{ fontSize: "13px", fontWeight: 700, display: "flex", alignItems: "center", gap: "6px" }}>
+              <span style={{ color: "var(--accent)" }}>✦</span> Codex AI 智能提案生成器
+            </span>
+            <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+              <span style={{ fontSize: "12px", color: "var(--muted)" }}>Codex 模型:</span>
+              <select
+                value={model}
+                disabled={generating}
+                style={{ padding: "4px 8px", borderRadius: "6px", fontSize: "12px", background: "var(--bg)", color: "var(--text)", border: "1px solid var(--line)" }}
+                onChange={event => {
+                  const val = event.target.value; setModel(val);
+                  try { if (val !== "custom") localStorage.setItem("vibe-git:codex-model", val); } catch {}
+                }}
+              >
+                {modelOptions.map(opt => <option key={opt.id} value={opt.id}>{opt.name}</option>)}
+              </select>
+            </div>
+          </div>
+
+          <div style={{ display: "flex", gap: "10px", flexWrap: "wrap", alignItems: "flex-start" }}>
+            <textarea
+              disabled={generating}
+              value={captainIdea}
+              rows={2}
+              placeholder={data.viewer.role === "captain" ? "输入队长的核心想法、项目目标或主要功能要求…" : "输入你的核心想法、负责模块或技术方案设想…"}
+              style={{ flex: 1, minWidth: "260px", padding: "8px 10px", fontSize: "13px", background: "var(--bg)", border: "1px solid var(--line)", borderRadius: "6px", color: "var(--text)", resize: "vertical" }}
+              onChange={event => setCaptainIdea(event.target.value)}
+            />
+            <button
+              type="button"
+              className="button primary"
+              style={{ padding: "8px 16px", fontSize: "13px", height: "auto", alignSelf: "stretch", display: "flex", alignItems: "center", justifyContent: "center", gap: "6px" }}
+              onClick={() => void generate()}
+              disabled={generating || pending}
+            >
+              {generating ? "Codex 生成中…" : "⚡ 生成/重构 AI 草稿"}
+            </button>
+          </div>
+        </div>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "8px", borderBottom: "1px solid var(--line)", paddingBottom: "8px" }}>
+          <div style={{ display: "flex", gap: "4px", flexWrap: "wrap", alignItems: "center" }}>
+            <button type="button" className="editor-btn" title="一级标题" onClick={() => insertMarkdown("# ")}>H1</button>
+            <button type="button" className="editor-btn" title="二级标题" onClick={() => insertMarkdown("## ")}>H2</button>
+            <button type="button" className="editor-btn" title="三级标题" onClick={() => insertMarkdown("### ")}>H3</button>
+            <span style={{ color: "var(--line)", margin: "0 2px" }}>|</span>
+            <button type="button" className="editor-btn" title="加粗" onClick={() => insertMarkdown("**", "**")}><b>B</b></button>
+            <button type="button" className="editor-btn" title="斜体" onClick={() => insertMarkdown("*", "*")}><i>I</i></button>
+            <button type="button" className="editor-btn" title="删除线" onClick={() => insertMarkdown("~~", "~~")}><s>S</s></button>
+            <span style={{ color: "var(--line)", margin: "0 2px" }}>|</span>
+            <button type="button" className="editor-btn" title="引用" onClick={() => insertMarkdown("> ")}>” Quote</button>
+            <button type="button" className="editor-btn" title="代码块" onClick={() => insertMarkdown("```\n", "\n```")}>`Code`</button>
+            <button type="button" className="editor-btn" title="无序列表" onClick={() => insertMarkdown("- ")}>• List</button>
+            <button type="button" className="editor-btn" title="任务列表" onClick={() => insertMarkdown("- [ ] ")}>☑ Task</button>
+            <button type="button" className="editor-btn" title="表格" onClick={() => insertMarkdown("\n| 模块 | 职责 | 负责人 |\n| --- | --- | --- |\n| API | 数据流 | Developer |\n")}>田 Table</button>
+            <span style={{ color: "var(--line)", margin: "0 2px" }}>|</span>
+            <select
+              style={{ padding: "3px 6px", fontSize: "12px", borderRadius: "4px", background: "var(--surface)", color: "var(--text)", border: "1px solid var(--line)" }}
+              onChange={(e) => {
+                if (e.target.value) {
+                  applyTemplate(e.target.value as any);
+                  e.target.value = "";
+                }
+              }}
+            >
+              <option value="">+ 载入范本...</option>
+              <option value="standard">标准提案范本</option>
+              <option value="architecture">技术架构范本</option>
+              <option value="minimal">极简清单范本</option>
+            </select>
+          </div>
+
+          <div className="seg" role="group" aria-label="编辑器视图切换">
+            <button type="button" className={viewMode === "edit" ? "active" : ""} onClick={() => setViewMode("edit")}>✏️ 编辑</button>
+            <button type="button" className={viewMode === "split" ? "active" : ""} onClick={() => setViewMode("split")}>🌗 双栏对比</button>
+            <button type="button" className={viewMode === "preview" ? "active" : ""} onClick={() => setViewMode("preview")}>👁️ 渲染预览</button>
+          </div>
+        </div>
+
+        <div style={{ display: "grid", gridTemplateColumns: viewMode === "split" ? "1fr 1fr" : "1fr", gap: "14px", minHeight: "340px", maxHeight: "55vh" }}>
+          {(viewMode === "edit" || viewMode === "split") && (
+            <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+              <div style={{ fontSize: "11px", color: "var(--muted)", fontWeight: 600, textTransform: "uppercase" }}>Markdown 源码编辑器</div>
+              <textarea
+                ref={textareaRef}
+                disabled={generating}
+                value={content}
+                rows={16}
+                placeholder="请输入项目目标、团队分工、接口依赖与验收标准 (支持标准 Markdown 语法)…"
+                style={{
+                  width: "100%", height: "100%", minHeight: "300px", padding: "12px",
+                  fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
+                  fontSize: "13px", lineHeight: "1.6", background: "var(--bg)", border: "1px solid var(--line)",
+                  borderRadius: "8px", color: "var(--text)", resize: "vertical"
+                }}
+                onChange={event => setFile({ filename: file?.filename ?? "proposal.md", content: event.target.value })}
+              />
+            </div>
+          )}
+
+          {(viewMode === "preview" || viewMode === "split") && (
+            <div style={{ display: "flex", flexDirection: "column", gap: "6px", overflow: "hidden" }}>
+              <div style={{ fontSize: "11px", color: "var(--accent)", fontWeight: 600, textTransform: "uppercase" }}>实时渲染效果 (Preview)</div>
+              <div
+                style={{
+                  width: "100%", height: "100%", minHeight: "300px", padding: "14px",
+                  background: "var(--surface)", border: "1px solid var(--line)", borderRadius: "8px",
+                  overflowY: "auto", fontSize: "13px"
+                }}
+              >
+                {content.trim() ? <Markdown>{content}</Markdown> : <div style={{ color: "var(--muted)", textAlign: "center", padding: "40px 0" }}>暂无内容，在左侧输入 Markdown 或使用 AI 生成提案</div>}
+              </div>
+            </div>
+          )}
+        </div>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "10px", background: "var(--surface)", padding: "10px 14px", borderRadius: "8px", border: "1px solid var(--line)" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: "10px", flex: 1, minWidth: "240px" }}>
+            <span style={{ fontSize: "12px", color: "var(--muted)", fontWeight: 600 }}>文件名:</span>
+            <input
+              disabled={generating}
+              value={file?.filename ?? "proposal.md"}
+              style={{ padding: "4px 8px", fontSize: "12px", borderRadius: "6px", background: "var(--bg)", border: "1px solid var(--line)", color: "var(--text)", width: "160px" }}
+              onChange={event => setFile({ filename: event.target.value, content: file?.content ?? "" })}
+            />
+            <label className="file-pick" style={{ padding: "4px 10px", margin: 0, display: "inline-flex", alignItems: "center", gap: "6px", cursor: "pointer" }}>
+              <span className="file-pick-icon" aria-hidden="true" style={{ fontSize: "12px" }}>↑</span>
+              <strong style={{ fontSize: "12px", fontWeight: 500 }}>导入 .md 文件</strong>
+              <input disabled={generating} type="file" accept=".md,text/markdown" aria-label="选择提案 Markdown 文件" onChange={async (event) => {
           const picked = event.currentTarget.files?.[0]; if (!picked) return;
           if (!/\.md$/i.test(picked.name) || picked.size > 256 * 1024) { setError("请选择不超过 256 KiB 的 .md 文件"); return; }
           try { setFile({ filename: picked.name, content: new TextDecoder("utf-8", { fatal: true }).decode(await picked.arrayBuffer()) }); setError(""); }
           catch { setError("文件必须为 UTF-8 Markdown"); }
-        }}/></label>
-        {file && <div className="selected-file"><b>{file.filename}</b><span>{Math.ceil(new TextEncoder().encode(file.content).length / 1024)} KiB · 本地待提交</span></div>}
+              }}/>
+            </label>
+          </div>
+
+          <div style={{ display: "flex", alignItems: "center", gap: "12px", fontSize: "12px", color: "var(--muted)" }}>
+            <span>{lineCount} 行</span>
+            <span>{wordCount} 词</span>
+            <span>{charCount} 字符</span>
+            <span style={{ color: kbSize > 256 ? "var(--danger)" : "var(--accent)" }}>{kbSize} KiB</span>
+          </div>
+        </div>
+
         <div className="impact-preview"><b>模块影响交给队长端审核</b><p>提交时无需指定模块。{data.modules.length ? `队长端 Agent 会对照房间登记的 ${data.modules.length} 个模块分析正文，结果附在冻结的提案版本上。` : "房间尚未登记模块，审核前需先登记模块。"}审核完成前显示“待分析”。</p></div>
         {error && <RecoveryHint error={error} />}
       </div>

@@ -49,13 +49,16 @@ export async function prepareMock(config: ClientConfig, taskId: string, contract
   return { contractHashes: hashes, summary };
 }
 
+import { gitExecutable } from "./git-command.js";
+
 export function integrateWithReal(config: ClientConfig, taskId: string, upstreamShas: string[], contracts: InterfaceContract[]): {
   contractHashes: Record<string, string>; headSha: string; summary: string
 } {
-  const headSha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: config.workspace, encoding: "utf8", windowsHide: true }).trim();
+  const bin = gitExecutable();
+  const headSha = execFileSync(bin, ["rev-parse", "HEAD"], { cwd: config.workspace, encoding: "utf8", windowsHide: true }).trim();
   for (const sha of upstreamShas) {
     if (!/^[0-9a-f]{40}$/i.test(sha)) throw new Error("上游交接 SHA 无效");
-    execFileSync("git", ["merge-base", "--is-ancestor", sha, headSha], { cwd: config.workspace, windowsHide: true });
+    execFileSync(bin, ["merge-base", "--is-ancestor", sha, headSha], { cwd: config.workspace, windowsHide: true });
   }
   const summary = runTest(config.workspace, join(mockDirectory(config.workspace, taskId), "integration.test.mjs"));
   return { contractHashes: Object.fromEntries(contracts.map((item) => [item.id, item.sha256])), headSha, summary };

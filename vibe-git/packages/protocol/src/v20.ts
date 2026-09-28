@@ -178,6 +178,9 @@ export interface PlanImpactFinding {
 }
 
 export interface AlignmentRun {
+  quickIntentId?: string;
+  quickIntentRevision?: number;
+  quickPlan?: import("./coordination.js").QuickPlanInput;
   draftRevision?: number;
   skippedNodeIds?: string[];
   planImpacts?: PlanImpactFinding[];
@@ -264,6 +267,12 @@ export type StageTaskStatus =
   | "FAILED";
 
 export interface StageTask {
+  executionMode?: "external" | "codex";
+  progressSummary?: string;
+  externalEvidence?: import("./coordination.js").ExternalEvidence | null;
+  pendingChangeId?: string | null;
+  pauseRequested?: boolean;
+  changeNotes?: string[];
   id: string;
   stageId: string;
   assigneeNodeId: string;
@@ -398,7 +407,7 @@ export interface ImpactReviewBatch {
   clearedNodeIds?: string[];
 }
 
-export type AgentJobKind = "ALIGN_PLANS" | "ALIGN_FINALIZE" | "DESCRIBE_WORKSTREAM" | "SUMMARIZE_PLAN" | "SUMMARIZE_CHANGE" | "IMPACT_INDEX" | "IMPACT_PROBE" | "REVIEW_CHANGES" | "PREPARE_MOCK" | "INTEGRATE_TASK" | "RUN_TASK" | "INTERRUPT_TASK" | "SYNC_NODE";
+export type AgentJobKind = "ASSESS_CHANGE" | "PLAN_INTENT" | "ALIGN_PLANS" | "ALIGN_FINALIZE" | "DESCRIBE_WORKSTREAM" | "SUMMARIZE_PLAN" | "SUMMARIZE_CHANGE" | "IMPACT_INDEX" | "IMPACT_PROBE" | "REVIEW_CHANGES" | "PREPARE_MOCK" | "INTEGRATE_TASK" | "RUN_TASK" | "INTERRUPT_TASK" | "SYNC_NODE";
 export type AgentJobStatus = "QUEUED" | "LEASED" | "RUNNING" | "COMPLETED" | "FAILED" | "CANCELLED";
 export interface AgentJob {
   id: string;
@@ -435,6 +444,7 @@ export interface AuditPoolStatus {
 }
 
 export interface V20BootstrapPayload {
+  coordination?: import("./coordination.js").CoordinationSnapshot;
   room: {
     id: string;
     requirementRevision: number;

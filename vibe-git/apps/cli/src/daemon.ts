@@ -1,16 +1,19 @@
 import { appendFile, mkdir, rm, stat } from "node:fs/promises";
 import { execFileSync } from "node:child_process";
-import { dirname } from "node:path";
-import type { AgentJob, GitSnapshot, NodeHeartbeatInput, RateLimitWindow } from "@vibe-git/protocol";
+import { realpathSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import type { AgentJob, GitSnapshot, NodeHeartbeatInput, RateLimitWindow, V20BootstrapPayload } from "@vibe-git/protocol";
 import { api, post } from "./api.js";
 import { defaultCodexHome, daemonLogPath, loadConfig, saveConfig, type ClientConfig } from "./config.js";
 import { probeCodex, readRateLimits, runAudit, startDevelopment, type ActiveRun } from "./codex.js";
 import { impactIndex, repositoryContext, worktreeFingerprint } from "./evidence.js";
 import { integrateWithReal, prepareMock } from "./mock.js";
 import { localPanelPath, startLocalPanel } from "./local-panel.js";
+import { assertProjectWorkspacePath } from "./local-workspace.js";
 
 const executing = new Map<string, string>();
 const active = new Map<string, ActiveRun>();
+const activeJobIds = new Map<string, string>();
 let stopping = false;
 let quota: RateLimitWindow[] = [];
 let lastQuotaAt = 0;
@@ -25,6 +28,8 @@ const PROBE_SCHEMA = {
   }
 } as const;
 
+import { gitExecutable } from "./git-command.js";
+
 async function log(value: string): Promise<void> {
   const line = `[${new Date().toISOString()}] ${value.replace(/[\r\n]+/g, " ").slice(0, 4_000)}\n`;
   await mkdir(dirname(daemonLogPath()), { recursive: true });
@@ -32,11 +37,14 @@ async function log(value: string): Promise<void> {
 }
 
 function git(cwd: string, args: string[]): string {
-  return execFileSync("git", args, { cwd, encoding: "utf8", windowsHide: true, timeout: 8_000, stdio: ["ignore", "pipe", "ignore"] }).trim();
+  const bin = gitExecutable();
+  return execFileSync(bin, args, { cwd, encoding: "utf8", windowsHide: true, timeout: 8_000, stdio: ["ignore", "pipe", "ignore"] }).trim();
 }
 
 function probeGit(workspace: string): GitSnapshot | null {
   try {
+    const canonical = assertProjectWorkspacePath(realpathSync(workspace));
+    if (resolve(git(canonical, ["rev-parse", "--show-toplevel"])) !== canonical) return null;
     const headSha = git(workspace, ["rev-parse", "HEAD"]);
     if (!/^[0-9a-f]{40}$/i.test(headSha)) return null;
     return {
@@ -77,7 +85,7 @@ async function report(config: ClientConfig, job: AgentJob, body: Record<string, 
 async function executeJob(config: ClientConfig, job: AgentJob): Promise<void> {
   try {
     if (!job.leaseToken) throw new Error("Host 返回了无租约作业");
-    if (job.kind === "ALIGN_PLANS" || job.kind === "DESCRIBE_WORKSTREAM" || job.kind === "REVIEW_CHANGES") {
+    if (job.kind === "ASSESS_CHANGE" || job.kind === "PLAN_INTENT" || job.kind === "ALIGN_PLANS" || job.kind === "DESCRIBE_WORKSTREAM" || job.kind === "REVIEW_CHANGES") {
       const runtimeId = `audit-${process.pid}-${Date.now()}`;
       await report(config, job, { phase: "started", runtimeId });
       const result = await runAudit(String(job.payload.prompt ?? ""), job.payload.outputSchema, config.workspace, defaultCodexHome());
@@ -168,11 +176,11 @@ async function executeJob(config: ClientConfig, job: AgentJob): Promise<void> {
     if (job.kind === "RUN_TASK") {
       const requested = ["auto", "app-server", "cli"].includes(String(job.payload.transport)) ? String(job.payload.transport) as ClientConfig["workTransport"] : config.workTransport;
       const run = await startDevelopment(String(job.payload.prompt ?? ""), config.workspace, requested);
-      active.set(job.entityId, run);
+      active.set(job.entityId, run); activeJobIds.set(job.entityId, job.id);
       await report(config, job, { phase: "started", runtimeId: run.runtimeId });
       await heartbeat(config).catch(() => undefined);
       const result = await run.done;
-      active.delete(job.entityId);
+      if (active.get(job.entityId) === run) { active.delete(job.entityId); activeJobIds.delete(job.entityId); }
       await heartbeat(config).catch(() => undefined);
       await report(config, job, { phase: result.status === "completed" ? "completed" : result.status === "interrupted" ? "interrupted" : "failed", runtimeId: run.runtimeId, error: result.detail });
       return;
@@ -204,7 +212,12 @@ export async function runDaemon(): Promise<void> {
   await saveConfig(config);
   await log(`节点守护进程启动：${config.nodeId}`);
   let captain = false;
-  const panel = await startLocalPanel(config, { busy: () => executing.values().next().value ?? null, changed: async () => { contextCache = null; await heartbeat(config, undefined, captain); } });
+  const panel = await startLocalPanel(config, { beforeSwitch: async () => {
+    const data = await api<V20BootstrapPayload>(config, "/api/v1/bootstrap");
+    const task = data.tasks.find(task => !task.archived && task.assigneeNodeId === config.nodeId &&
+      (task.activeJobId || task.pauseRequested || ["IN_PROGRESS", "STARTING", "PREPARING_MOCK", "WAITING_CONFIRMATION", "WAITING_INTEGRATION", "PAUSED"].includes(task.status) || (task.executionMode === "external" && task.status === "BLOCKED")));
+    if (task) throw new Error(`任务尚未结束，不能切换工作区：${task.title}`);
+  }, busy: () => executing.values().next().value ?? null, changed: async () => { contextCache = null; await heartbeat(config, undefined, captain); } });
   await log(`本机面板已监听 127.0.0.1:${panel.port}`);
   captain = await api<{ viewer?: { role?: string } }>(config, "/api/v1/bootstrap").then((value) => value.viewer?.role === "captain").catch(() => false);
   const stop = () => { stopping = true; for (const run of active.values()) void run.interrupt(); };
@@ -218,8 +231,11 @@ export async function runDaemon(): Promise<void> {
         nextHeartbeat = Date.now() + 15_000;
       }
       try {
+        const requestedAt = Date.now();
         const job = await api<AgentJob | null>(config, "/api/v1/nodes/jobs/next", { method: "POST", body: "{}", headers: { "content-type": "application/json" } });
         if (job) { executing.set(job.id, job.entityId); while (panel.switching()) await new Promise(resolve => setTimeout(resolve, 25)); void executeJob({ ...config }, job).finally(() => executing.delete(job.id)); }
+        // 兼容错误地立即返回 204 的旧 Host，避免空转耗尽磁盘和 CPU。
+        else if (Date.now() - requestedAt < 1_000) await new Promise(resolve => setTimeout(resolve, 3_000));
       } catch (error) {
         await log(`获取作业失败：${error instanceof Error ? error.message : String(error)}`);
         await new Promise((resolve) => setTimeout(resolve, 3_000));

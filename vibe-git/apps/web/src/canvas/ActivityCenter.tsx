@@ -39,7 +39,7 @@ export function ActivityCenter({
                 key={n.id}
                 className="object-row"
                 onClick={() => {
-                  const c = data.pullRequests.find((c) => c.id === n.entityId);
+                  const c = data.pullRequests.find((c) => c.id === n.entityId) ?? data.coordination?.changes.find(c => c.id === n.entityId);
                   const t = data.tasks.find((t) => t.id === n.entityId);
                   const member = data.nodes.find(
                     (member) => member.id === n.entityId,

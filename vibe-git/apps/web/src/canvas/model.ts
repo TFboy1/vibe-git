@@ -4,7 +4,7 @@ import type {
   V20BootstrapPayload,
 } from "@vibe-git/protocol";
 export type CanvasMode = "topology" | "gantt";
-export type CanvasSurface = "guide" | "canvas" | "versions" | "advanced";
+export type CanvasSurface = "workbench" | "changes" | "guide" | "canvas" | "versions" | "advanced";
 export type InspectorTarget = {
   type: "member" | "module" | "package" | "task" | "change" | "project";
   id: string;

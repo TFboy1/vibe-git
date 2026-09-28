@@ -533,7 +533,7 @@ export function InspectorDrawer({
             <dl>
               <dt>工作区</dt>
               <dd>{member.workspaceReady ? "已就绪" : "未就绪"}</dd>
-              <dt>Codex 算力网</dt>
+              <dt>算力网</dt>
               <dd>
                 {codexState(member) === "available" ? "已接入" : "暂不可用"}
               </dd>

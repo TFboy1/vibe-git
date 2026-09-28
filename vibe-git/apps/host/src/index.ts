@@ -2,7 +2,7 @@ import { buildApp } from "./app.js";
 
 const port = Number(process.env.PORT ?? 8787);
 const host = process.env.HOST ?? "0.0.0.0";
-const app = await buildApp({ logger: true });
+const app = await buildApp({ logger: { level: "warn" } });
 await app.listen({ port, host });
 console.log(`Vibe-Git Host: http://localhost:${port}`);
 

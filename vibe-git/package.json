@@ -11,7 +11,13 @@
     "url": "https://github.com/TFboy1/vibe-git/issues"
   },
   "homepage": "https://github.com/TFboy1/vibe-git#readme",
-  "keywords": ["codex", "agents", "collaboration", "git", "cli"],
+  "keywords": [
+    "codex",
+    "agents",
+    "collaboration",
+    "git",
+    "cli"
+  ],
   "type": "module",
   "workspaces": [
     "apps/*",
@@ -40,6 +46,7 @@
     "reset": "node apps/host/scripts/reset.mjs"
   },
   "dependencies": {
+    "@deepseek-ai/dsh-host-directory-picker-native": "^0.1.0-rc.8",
     "@vibe-git/protocol": "^0.1.0",
     "fastify": "^5.6.0"
   },

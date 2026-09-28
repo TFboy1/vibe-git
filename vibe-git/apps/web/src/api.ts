@@ -83,7 +83,9 @@ export async function localCapabilities(): Promise<{ local: boolean; chat: boole
   catch { return { local: false, chat: false }; }
 }
 export const localFinalize = (taskId: string) => post<ExecutionDetail>(`/api/local/chat/${encodeURIComponent(taskId)}/finalize`);
-export const localProposalDraft = () => post<{ markdown: string }>("/api/local/proposal-draft");
+export interface IntentClarificationResult { status: "question" | "ready"; question: string; options?: Array<{ label: string; description: string }>; summary: string; title: string; content: string; acceptance: string[]; constraints: string }
+export const localProposalDraft = (params?: { prompt?: string | undefined; model?: string | undefined }) => post<{ markdown: string }>("/api/local/proposal-draft", params ?? {});
+export const localCodexModels = () => request<Array<{ id: string; name: string }>>("/api/local/codex/models");
 export async function localChat(taskId: string, message: string, onDelta: (value: string) => void): Promise<string> {
   const response = await fetch(`/api/local/chat/${encodeURIComponent(taskId)}`, { method: "POST", credentials: "same-origin",
     headers: { "content-type": "application/json" }, body: JSON.stringify({ message }) });
@@ -104,3 +106,22 @@ export async function localChat(taskId: string, message: string, onDelta: (value
   }
   return answer;
 }
+
+export const coordinationApi = {
+  saveIntent: (values: { title: string; content: string; acceptance: string[]; constraints: string; expectedRevision?: number }, id?: string) =>
+    id ? put<import("@vibe-git/protocol").IntentDraft>(`/api/v1/intents/${encodeURIComponent(id)}`, values) : post<import("@vibe-git/protocol").IntentDraft>("/api/v1/intents", values),
+  importPlan: (intentId: string, expectedRevision: number, plan: import("@vibe-git/protocol").QuickPlanInput) =>
+    post<AlignmentRun>(`/api/v1/intents/${encodeURIComponent(intentId)}/plan`, { expectedRevision, plan }),
+  generatePlan: (intentId: string, expectedRevision: number) => post<AlignmentRun>(`/api/v1/intents/${encodeURIComponent(intentId)}/generate`, { expectedRevision }),
+  taskPackage: (id: string) => request<import("@vibe-git/protocol").TaskExecutionPackage>(`/api/v1/tasks/${encodeURIComponent(id)}/package`),
+  externalStart: (id: string, expectedRevision: number) => post<import("@vibe-git/protocol").StageTask>(`/api/v1/tasks/${encodeURIComponent(id)}/external-start`, { expectedRevision }),
+  externalReport: (id: string, body: import("@vibe-git/protocol").ExternalTaskReport) => post<import("@vibe-git/protocol").StageTask>(`/api/v1/tasks/${encodeURIComponent(id)}/external-report`, body),
+  externalDone: (id: string, expectedRevision: number) => post<import("@vibe-git/protocol").StageTask>(`/api/v1/tasks/${encodeURIComponent(id)}/external-done`, { expectedRevision }),
+  ackChange: (id: string, expectedRevision: number, stopped: boolean) => post<import("@vibe-git/protocol").StageTask>(`/api/v1/tasks/${encodeURIComponent(id)}/ack-change`, { expectedRevision, stopped }),
+  ackContract: (id: string, expectedRevision: number) => post<InterfaceContract>(`/api/v1/coordination/contracts/${encodeURIComponent(id)}/ack`, { expectedRevision }),
+  submitChange: (body: { title: string; content: string; taskIds: string[]; contractIds: string[]; expectedRequirementRevision: number }) => post<import("@vibe-git/protocol").CoordinationChange>("/api/v1/changes", body),
+  suggestImpact: (id: string, expectedRevision: number) => post(`/api/v1/changes/${encodeURIComponent(id)}/suggest`, { expectedRevision }),
+  impact: (id: string) => request<import("@vibe-git/protocol").ChangeImpact>(`/api/v1/changes/${encodeURIComponent(id)}/impact`),
+  applyChange: (id: string, body: import("@vibe-git/protocol").ApplyCoordinationChange) => post(`/api/v1/changes/${encodeURIComponent(id)}/apply`, body),
+  rejectChange: (id: string, expectedRevision: number) => post(`/api/v1/changes/${encodeURIComponent(id)}/reject`, { expectedRevision }),
+};

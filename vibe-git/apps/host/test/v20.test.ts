@@ -76,6 +76,28 @@ async function completeAlignment(app: Awaited<ReturnType<typeof buildApp>>, capt
 }
 
 describe("Vibe-Git v0.20 Host", () => {
+  it("空闲作业轮询保持长连接，直到客户端断开", async () => {
+    const { app, captain } = await setup();
+    const controller = new AbortController();
+    try {
+      const address = await app.listen({ host: "127.0.0.1", port: 0 });
+      const pending = fetch(`${address}/api/v1/nodes/jobs/next`, {
+        method: "POST", headers: { authorization: `Bearer ${captain.nodeToken}`, "content-type": "application/json" },
+        body: "{}", signal: controller.signal
+      });
+      const outcome = await Promise.race([
+        pending.then(response => response.status, () => "aborted"),
+        new Promise<string>(resolveDelay => setTimeout(() => resolveDelay("pending"), 250))
+      ]);
+      expect(outcome).toBe("pending");
+      controller.abort();
+      await pending.catch(() => undefined);
+    } finally {
+      controller.abort();
+      await app.close();
+    }
+  });
+
   it("动态加入、邀请轮换、会话票据和撤销不会泄漏凭据", async () => {
     const { app, captain, invite, member } = await setup();
     const before = await bootstrap(app, captain.nodeToken);

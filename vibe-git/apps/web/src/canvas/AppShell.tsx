@@ -1,3 +1,4 @@
+import { Workbench } from "../workbench/Workbench";
 import { ActivityCenter } from "./ActivityCenter";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { V20BootstrapPayload } from "@vibe-git/protocol";
@@ -89,7 +90,7 @@ export function AppShell() {
   );
   const [surface, setSurfaceState] = useState<CanvasSurface | "auto">(() => {
     const section = new URLSearchParams(location.search).get("section");
-    return ["guide", "canvas", "versions", "advanced"].includes(section ?? "") ? section as CanvasSurface : readTarget() ? "canvas" : "auto";
+    return ["workbench", "changes", "guide", "canvas", "versions", "advanced"].includes(section ?? "") ? section as CanvasSurface : readTarget() ? "canvas" : "auto";
   });
   const [target, setTarget] = useState<InspectorTarget | null>(readTarget);
   const [visibleMode, setVisibleMode] = useState<CanvasMode>(mode);
@@ -258,7 +259,7 @@ export function AppShell() {
     const url = new URL(location.href);
     url.searchParams.set("view", nextMode);
     url.searchParams.set("section", nextSurface);
-    for (const key of ["object", "id", "tab"]) url.searchParams.delete(key);
+    for (const key of ["object", "id", "tab", "item"]) url.searchParams.delete(key);
     if (next) {
       url.searchParams.set("object", next.type);
       url.searchParams.set("id", next.id);
@@ -269,8 +270,14 @@ export function AppShell() {
   };
   const open = useCallback(
     (next: InspectorTarget) => {
+      if (next.type === "task" || (next.type === "change" && data?.coordination?.changes.some(change => change.id === next.id))) {
+        const nextSurface = next.type === "change" ? "changes" : "workbench";
+        setTarget(null); setActivity(false); setSurfaceState(nextSurface); historyState(mode, null, nextSurface);
+        const url = new URL(location.href); url.searchParams.set("item", `${next.type}:${next.id}`); history.replaceState(null, "", url);
+        window.dispatchEvent(new PopStateEvent("popstate")); return;
+      }
       if (!returnSurface.current && surface !== "canvas") {
-        returnSurface.current = surface === "auto" ? (data?.stages.length ? "canvas" : "guide") : surface;
+        returnSurface.current = surface === "auto" ? "workbench" : surface;
         openedBeforePublish.current = !data?.stages.length;
       }
       setTarget(next);
@@ -303,7 +310,7 @@ export function AppShell() {
       returnSurface.current = null;
       openedBeforePublish.current = false;
       const section = new URLSearchParams(location.search).get("section");
-      setSurfaceState(["guide", "canvas", "versions", "advanced"].includes(section ?? "") ? section as CanvasSurface : readTarget() ? "canvas" : "auto");
+      setSurfaceState(["workbench", "changes", "guide", "canvas", "versions", "advanced"].includes(section ?? "") ? section as CanvasSurface : readTarget() ? "canvas" : "auto");
     };
     window.addEventListener("popstate", pop);
     return () => window.removeEventListener("popstate", pop);
@@ -341,10 +348,10 @@ export function AppShell() {
   const tasks = liveTasks(data);
   const done = tasks.filter((t) => t.status === "DONE").length;
   const stage = data.stages.at(-1);
-  const currentSurface: CanvasSurface = surface === "auto" ? (data.stages.length ? "canvas" : "guide") : surface;
+  const currentSurface: CanvasSurface = surface === "auto" ? "workbench" : surface;
   const changeSurface = (next: CanvasSurface) => { returnSurface.current = null; openedBeforePublish.current = false; setSurfaceState(next); setTarget(null); historyState(mode, null, next); };
   return (
-    <div className="canvas-app">
+    <div className={`canvas-app wb-app ${currentSurface === "workbench" || currentSurface === "changes" ? "wb-active" : ""}`}>
       <a className="skip-link" href="#workspace-canvas">
         跳到协作画布
       </a>
@@ -367,6 +374,7 @@ export function AppShell() {
       />
       <div className={`canvas-body ${target ? "has-inspector" : ""}`}>
         <main id="workspace-canvas" className="workspace-canvas">
+          {(currentSurface === "workbench" || currentSurface === "changes") && <Workbench data={data} local={local} connected={sync !== "正在重连"} refresh={refresh} view={currentSurface} openLegacy={open} />}
           {currentSurface === "guide" && <JourneyPanel data={data} local={local} open={open} refresh={refresh} />}
           {currentSurface === "versions" && <VersionWorkbench data={data} open={open} />}
           {currentSurface === "advanced" && <AdvancedWorkspace data={data} open={open} refresh={refresh} />}

@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { backup, DatabaseSync } from "node:sqlite";
+import { homedir } from "node:os";
 import { extname, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import Fastify, { type FastifyInstance } from "fastify";
@@ -15,14 +16,14 @@ import { V20Service } from "./v20/service.js";
 const ROOT = resolve(fileURLToPath(new URL("../../..", import.meta.url)));
 
 function defaultDataRoot(): string {
-  return resolve(process.env.VIBE_GIT_DATA_DIR?.trim() || resolve(ROOT, "data"));
+  return resolve(process.env.VIBE_GIT_DATA_DIR?.trim() || resolve(homedir(), ".vibe-git", "development-host"));
 }
 
 export interface BuildAppOptions {
   dbPath?: string;
   dataDir?: string;
   staticDir?: string | false;
-  logger?: boolean;
+  logger?: boolean | { level: "warn" };
   cloudflareManager?: CloudflareManager;
   /** 仅为兼容旧测试调用；v0.20 永远不会写入演示数据。 */
   seedDemo?: boolean;

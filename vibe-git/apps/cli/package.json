@@ -3,11 +3,16 @@
   "version": "0.20.0",
   "private": true,
   "type": "module",
-  "bin": { "vibe-git": "dist/index.js" },
+  "bin": {
+    "vibe-git": "dist/index.js"
+  },
   "scripts": {
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "build": "tsc -p tsconfig.build.json",
     "test": "vitest run test"
   },
-  "dependencies": { "@vibe-git/protocol": "0.1.0" }
+  "dependencies": {
+    "@deepseek-ai/dsh-host-directory-picker-native": "^0.1.0-rc.8",
+    "@vibe-git/protocol": "0.1.0"
+  }
 }
