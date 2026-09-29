@@ -6,7 +6,7 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const hostApp = await buildApp({
   dbPath: resolve(root, "data/workspace.db"),
   dataDir: resolve(root, "data/v20"),
-  staticDir: resolve(root, "apps/web/dist"),
+  staticDir: false,
   logger: true
 });
 await hostApp.listen({ port: 8787, host: "127.0.0.1" });

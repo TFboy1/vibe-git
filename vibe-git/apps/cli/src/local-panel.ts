@@ -169,7 +169,7 @@ export async function startLocalPanel(config: ClientConfig, controls: { busy(): 
       const candidate = resolve(WEB_DIST, `.${decoded}`);
       if (candidate !== WEB_DIST && !candidate.startsWith(`${WEB_DIST}${sep}`)) return json(res, 404, { error: "不存在" });
       const path = existsSync(candidate) && (await stat(candidate)).isFile() ? candidate : resolve(WEB_DIST, "index.html");
-      if (!existsSync(path)) return json(res, 503, { error: "前端未构建，请运行 npm run build" });
+      if (!existsSync(resolve(WEB_DIST, "../package.json")) || !existsSync(path)) return json(res, 503, { error: "当前分支的前端正在重建，本机 API 保持可用" });
       res.writeHead(200, { "content-type": mime[extname(path)] ?? "application/octet-stream", "cache-control": "no-store" });
       res.end(req.method === "HEAD" ? undefined : await readFile(path));
     } catch (error) { if (!res.headersSent) json(res, 500, { error: error instanceof Error ? error.message : String(error) }); else res.end(); }

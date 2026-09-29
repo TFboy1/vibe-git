@@ -1,5 +1,0 @@
-{
- "extends":"./tsconfig.json",
- "include":["src/review-main.tsx","src/reviewFixture.ts","src/reviewActions.ts","review.vite.config.ts"],
- "exclude":[]
-}

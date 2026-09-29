@@ -2,7 +2,6 @@ import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "no
 import { backup, DatabaseSync } from "node:sqlite";
 import { homedir } from "node:os";
 import { extname, resolve, sep } from "node:path";
-import { fileURLToPath } from "node:url";
 import Fastify, { type FastifyInstance } from "fastify";
 import { openDatabase } from "./db/database.js";
 import { DomainError } from "./domain/errors.js";
@@ -13,8 +12,6 @@ import { ensureV20Runtime } from "./v20/runtime-secrets.js";
 import { registerV20Routes } from "./v20/routes.js";
 import { V20Service } from "./v20/service.js";
 
-const ROOT = resolve(fileURLToPath(new URL("../../..", import.meta.url)));
-
 function defaultDataRoot(): string {
   return resolve(process.env.VIBE_GIT_DATA_DIR?.trim() || resolve(homedir(), ".vibe-git", "development-host"));
 }
@@ -22,6 +19,7 @@ function defaultDataRoot(): string {
 export interface BuildAppOptions {
   dbPath?: string;
   dataDir?: string;
+  /** 默认只提供 API；重建前端后可显式传入构建目录。 */
   staticDir?: string | false;
   logger?: boolean | { level: "warn" };
   cloudflareManager?: CloudflareManager;
@@ -97,6 +95,6 @@ export async function buildApp(options: BuildAppOptions = {}) {
   });
 
   await registerV20Routes(app, service, cloudflareManager);
-  if (options.staticDir !== false) await registerStatic(app, options.staticDir ?? resolve(ROOT, "apps/web/dist"));
+  if (options.staticDir) await registerStatic(app, options.staticDir);
   return app;
 }

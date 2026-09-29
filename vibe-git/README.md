@@ -1,5 +1,7 @@
 # Vibe-Git 0.20
 
+当前 `codex/frontend-rebuild` 分支已清理旧前端，仅保留后端、CLI、Relay 与共享协议。`npm run dev` 只启动 Host，`npm run build` 只构建后端；前端重建前 `vibe-git open` 暂无页面可用。本机 API、会话与认证逻辑保留。详见[前端重建交接](docs/FRONTEND-REBUILD.md)，下文网页操作说明属于旧版功能。
+
 Vibe-Git 是一个 **CLI 主导、网页观察** 的多人 Codex 协作控制面。队长只启动一个 Host 和 Cloudflare Quick Tunnel；每位成员从自己的 Git 工作区连接，不需要填写项目名称、成员名字或固定 A/B/C 身份。
 
 ## 安装
