@@ -36,7 +36,8 @@ function deferred<T>(): Deferred<T> {
 export interface RunResult { status: "completed" | "failed" | "interrupted"; detail: string }
 export interface ActiveRun { runtimeId: string; transport: "app-server" | "cli"; done: Promise<RunResult>; interrupt(): Promise<RunResult> }
 
-export async function runAudit(prompt: string, schema: unknown, workspace: string, codexHome: string): Promise<unknown> {
+export async function runAudit(prompt: string, schema: unknown, workspace: string, codexHome: string, signal?: AbortSignal): Promise<unknown> {
+  if (signal?.aborted) throw new Error("Codex 修订生成已取消，已有草稿保留");
   await mkdir(codexHome, { recursive: true, mode: 0o700 });
   const temp = await mkdtemp(resolve(tmpdir(), "vibe-git-audit-"));
   const schemaPath = resolve(temp, "schema.json");
@@ -51,13 +52,19 @@ export async function runAudit(prompt: string, schema: unknown, workspace: strin
       ], { cwd: workspace, windowsHide: true, env: { ...process.env, CODEX_HOME: codexHome }, stdio: ["pipe", "pipe", "pipe"] });
       let stderr = "";
       let timedOut = false;
+      const abort = () => child.kill();
+      signal?.addEventListener("abort", abort, { once: true });
+      if (signal?.aborted) child.kill();
       const timeout = setTimeout(() => { timedOut = true; child.kill(); }, 25 * 60_000);
+      child.stdout.resume();
       child.stderr.setEncoding("utf8");
       child.stderr.on("data", (chunk: string) => { stderr = (stderr + chunk).slice(-32_000); });
-      child.once("error", (error) => { clearTimeout(timeout); fail(error); });
+      child.once("error", (error) => { clearTimeout(timeout); signal?.removeEventListener("abort", abort); fail(error); });
       child.once("close", (code) => {
         clearTimeout(timeout);
-        if (timedOut) fail(new Error("Codex 审核超过 25 分钟，作业已停止"));
+        signal?.removeEventListener("abort", abort);
+        if (signal?.aborted) fail(new Error("Codex 修订生成已取消或超时，已有草稿保留"));
+        else if (timedOut) fail(new Error("Codex 审核超过 25 分钟，作业已停止"));
         else if (code === 0) done();
         else fail(new Error(stderr.trim().slice(-4_000) || `Codex 审核退出码 ${code ?? "null"}`));
       });

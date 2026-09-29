@@ -2,7 +2,7 @@ import type { DatabaseSync } from "node:sqlite";
 import type {
   AgentJob, AlignmentRun, CollaborationNode, DevelopmentStage, ImpactReviewBatch,
   MarkdownDocument, Notification, RoomEvent, StageTask, VibePullRequest, Workstream, InterfaceContract,
-  RequirementVersion, AlignmentDraftVersion, AlignmentReadReceipt
+  RequirementVersion, AlignmentDraftVersion, AlignmentReadReceipt, CoordinationChange
 } from "@vibe-git/protocol";
 import { transaction } from "../db/database.js";
 
@@ -17,6 +17,31 @@ export class V20Repository {
   constructor(readonly db: DatabaseSync) {}
 
   tx<T>(work: () => T): T { return transaction(this.db, work); }
+
+  listAgileFlows(): import("@vibe-git/protocol").AgileFlow[] {
+    return (this.db.prepare("SELECT data FROM agile_flows ORDER BY created_at, rowid").all() as { data: string }[]).map(row => JSON.parse(row.data));
+  }
+  getAgileFlow(id: string): import("@vibe-git/protocol").AgileFlow | undefined {
+    return parse(this.db.prepare("SELECT data FROM agile_flows WHERE id = ?").get(id) as { data: string } | undefined);
+  }
+  putAgileFlow(value: import("@vibe-git/protocol").AgileFlow): void {
+    this.db.prepare("INSERT INTO agile_flows (id, created_at, data) VALUES (?, ?, ?) ON CONFLICT(id) DO UPDATE SET data = excluded.data").run(value.id, value.createdAt, JSON.stringify(value));
+  }
+  allTasks(): StageTask[] {
+    return (this.db.prepare("SELECT data FROM v20_stage_tasks ORDER BY stage_id, id").all() as { data: string }[]).map(row => JSON.parse(row.data));
+  }
+
+  listCoordinationChanges(): CoordinationChange[] {
+    return JSON.parse(this.getMeta("coordination_changes") ?? "[]") as CoordinationChange[];
+  }
+  getCoordinationChange(id: string): CoordinationChange | undefined {
+    return this.listCoordinationChanges().find(change => change.id === id);
+  }
+  putCoordinationChange(value: CoordinationChange): void {
+    const changes = this.listCoordinationChanges(), index = changes.findIndex(change => change.id === value.id);
+    if (index < 0) changes.push(value); else changes[index] = value;
+    this.setMeta("coordination_changes", JSON.stringify(changes));
+  }
 
   getMeta(key: string): string | undefined {
     return (this.db.prepare("SELECT value FROM meta WHERE key = ?").get(key) as { value: string } | undefined)?.value;

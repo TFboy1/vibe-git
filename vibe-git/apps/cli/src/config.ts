@@ -13,6 +13,9 @@ export interface ClientConfig {
   connectedAt: string;
   openaiApiKey?: string;
   openaiModel?: string;
+  openaiBaseUrl?: string;
+  aiProvider?: "codex" | "api";
+  apiConnection?: { signature: string; status: "passed" | "failed"; checkedAt: string; error?: string };
 }
 
 export const vibeHome = () => resolve(process.env.VIBE_GIT_HOME?.trim() || resolve(homedir(), ".vibe-git"));

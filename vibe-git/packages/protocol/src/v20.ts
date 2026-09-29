@@ -28,6 +28,7 @@ export interface RepositoryContext {
 }
 
 export interface CollaborationNode {
+  apiReady?: boolean;
   id: string;
   label: string;
   role: NodeRole;
@@ -267,6 +268,11 @@ export type StageTaskStatus =
   | "FAILED";
 
 export interface StageTask {
+  flow?: "agile";
+  packageRevision?: number;
+  requirementRevision?: number;
+  reworkOfTaskId?: string | null;
+  reportEvidence?: Array<{ reportId: string; taskRevision: number; requirementRevision: number; action: string; summary: string; evidence: string[]; createdAt: string }>;
   executionMode?: "external" | "codex";
   progressSummary?: string;
   externalEvidence?: import("./coordination.js").ExternalEvidence | null;
@@ -304,6 +310,8 @@ export interface StageTask {
 
 export type PullRequestStatus = "QUEUED" | "IN_REVIEW" | "APPLIED" | "REJECTED";
 export interface VibePullRequest {
+  flow?: "agile";
+  title?: string;
   id: string;
   submitterNodeId: string;
   documentId: string;
@@ -407,7 +415,7 @@ export interface ImpactReviewBatch {
   clearedNodeIds?: string[];
 }
 
-export type AgentJobKind = "ASSESS_CHANGE" | "PLAN_INTENT" | "ALIGN_PLANS" | "ALIGN_FINALIZE" | "DESCRIBE_WORKSTREAM" | "SUMMARIZE_PLAN" | "SUMMARIZE_CHANGE" | "IMPACT_INDEX" | "IMPACT_PROBE" | "REVIEW_CHANGES" | "PREPARE_MOCK" | "INTEGRATE_TASK" | "RUN_TASK" | "INTERRUPT_TASK" | "SYNC_NODE";
+export type AgentJobKind = import("./agile.js").AgilePhase | "ASSESS_CHANGE" | "PLAN_INTENT" | "ALIGN_PLANS" | "ALIGN_FINALIZE" | "DESCRIBE_WORKSTREAM" | "SUMMARIZE_PLAN" | "SUMMARIZE_CHANGE" | "IMPACT_INDEX" | "IMPACT_PROBE" | "REVIEW_CHANGES" | "PREPARE_MOCK" | "INTEGRATE_TASK" | "RUN_TASK" | "INTERRUPT_TASK" | "SYNC_NODE";
 export type AgentJobStatus = "QUEUED" | "LEASED" | "RUNNING" | "COMPLETED" | "FAILED" | "CANCELLED";
 export interface AgentJob {
   id: string;
@@ -444,6 +452,7 @@ export interface AuditPoolStatus {
 }
 
 export interface V20BootstrapPayload {
+  agile?: import("./agile.js").AgileSnapshot;
   coordination?: import("./coordination.js").CoordinationSnapshot;
   room: {
     id: string;
@@ -472,6 +481,7 @@ export interface V20BootstrapPayload {
 }
 
 export interface NodeHeartbeatInput {
+  apiReady?: boolean;
   workspaceReady: boolean;
   codex?: CapabilityStateV20;
   /** Legacy node input, read until the next unified heartbeat. */

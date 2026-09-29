@@ -250,6 +250,7 @@ export class CoordinationService {
   private task(taskId: string): StageTask { const task = this.repo.getTask(taskId); if (!task || task.archived) throw notFound("任务不存在或已归档"); return task; }
   private ownedTask(node: CollaborationNode, taskId: string, revision: unknown): StageTask {
     const task = this.task(taskId); if (task.assigneeNodeId !== node.id) throw forbidden("只能操作分配给自己的任务");
+    if (task.flow === "agile") throw invalidState("超敏捷任务请使用带任务包版本的 task report");
     checkRevision(task.revision, revision); return task;
   }
   private contracts(task: StageTask): InterfaceContract[] {
@@ -410,7 +411,7 @@ export class CoordinationService {
       if (!(taskId in suggestion.taskRevisions) || seen.has(taskId) || !["affected", "unaffected", "uncertain"].includes(String(finding.impact))) throw badRequest("影响建议引用无效任务或结论");
       const update = finding.update == null ? null : validateTaskUpdate(finding.update);
       if (update && (finding.impact !== "affected" || !contentChanged(taskContent(this.task(taskId)), update))) throw badRequest("任务修订草稿必须对应受影响任务，并包含具体变化");
-      if (finding.impact === "affected" && finding.update === null) throw badRequest("受影响任务需要具体修订草稿");
+      if (finding.impact === "affected" && update === null) throw badRequest("受影响任务需要具体修订草稿");
       seen.add(taskId); return { taskId, impact: finding.impact as "affected" | "unaffected" | "uncertain", reason: text(finding.reason, "影响理由", 1000), update };
     });
     this.putItem("changes", { ...change, suggestion: { ...suggestion, status: "READY", error: null, findings } });

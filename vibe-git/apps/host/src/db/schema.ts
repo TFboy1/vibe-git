@@ -159,4 +159,5 @@ CREATE TABLE IF NOT EXISTS idempotency (
   response TEXT NOT NULL,
   created_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS agile_flows (id TEXT PRIMARY KEY, created_at TEXT NOT NULL, data TEXT NOT NULL);
 `;

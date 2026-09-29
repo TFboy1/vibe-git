@@ -10,6 +10,7 @@ import { impactIndex, repositoryContext, worktreeFingerprint } from "./evidence.
 import { integrateWithReal, prepareMock } from "./mock.js";
 import { localPanelPath, startLocalPanel } from "./local-panel.js";
 import { assertProjectWorkspacePath } from "./local-workspace.js";
+import { computeStatus, runStructuredJob } from "./agile-ai.js";
 
 const executing = new Map<string, string>();
 const active = new Map<string, ActiveRun>();
@@ -70,6 +71,7 @@ async function heartbeat(config: ClientConfig, taskId?: string, captain = false)
     contextCache = { at: Date.now(), value: gitState ? await repositoryContext(config.workspace).catch(() => null) : null };
   }
   const input: NodeHeartbeatInput = {
+    apiReady: captain && computeStatus(config).ready,
     workspaceReady: Boolean(gitState), codex: normal.state,
     workTransport: config.workTransport, rateLimits: quota, git: gitState,
     currentTaskId: taskId ?? active.keys().next().value ?? null,
@@ -85,6 +87,14 @@ async function report(config: ClientConfig, job: AgentJob, body: Record<string, 
 async function executeJob(config: ClientConfig, job: AgentJob): Promise<void> {
   try {
     if (!job.leaseToken) throw new Error("Host 返回了无租约作业");
+    if (job.kind.startsWith("AGILE_")) {
+      const runtimeId = "agile-" + process.pid + "-" + Date.now();
+      await report(config, job, { phase: "started", runtimeId });
+      const result = await runStructuredJob(config, job.payload.provider === "api" ? "api" : "codex",
+        String(job.payload.prompt ?? ""), job.payload.outputSchema as Record<string, unknown>);
+      await report(config, job, { phase: "completed", runtimeId, result });
+      return;
+    }
     if (job.kind === "ASSESS_CHANGE" || job.kind === "PLAN_INTENT" || job.kind === "ALIGN_PLANS" || job.kind === "DESCRIBE_WORKSTREAM" || job.kind === "REVIEW_CHANGES") {
       const runtimeId = `audit-${process.pid}-${Date.now()}`;
       await report(config, job, { phase: "started", runtimeId });

@@ -1,4 +1,5 @@
 import { CoordinationService } from "./coordination-service.js";
+import { AgileService } from "./agile-service.js";
 import { createHash, randomUUID } from "node:crypto";
 import type {
   AgentJob, AlignmentIssue, AlignmentRun, AlignmentTaskDraft, BrowserTicketResponse, CollaborationNode,
@@ -21,7 +22,7 @@ const ONLINE_WINDOW_MS = 45_000;
 const FRESH_SYNC_MS = 60_000;
 const JOB_LEASE_MS = 30 * 60_000;
 const AUDIT_PROMPT_LIMIT = 48 * 1024;
-const MODEL_AUDIT_KINDS = new Set<AgentJob["kind"]>(["ASSESS_CHANGE", "PLAN_INTENT", "ALIGN_PLANS", "ALIGN_FINALIZE", "DESCRIBE_WORKSTREAM", "SUMMARIZE_PLAN", "SUMMARIZE_CHANGE", "IMPACT_PROBE", "REVIEW_CHANGES"]);
+const MODEL_AUDIT_KINDS = new Set<AgentJob["kind"]>(["AGILE_ANALYZE", "AGILE_DIALOGUE", "AGILE_REQUIREMENT", "AGILE_ALLOCATE", "ASSESS_CHANGE", "PLAN_INTENT", "ALIGN_PLANS", "ALIGN_FINALIZE", "DESCRIBE_WORKSTREAM", "SUMMARIZE_PLAN", "SUMMARIZE_CHANGE", "IMPACT_PROBE", "REVIEW_CHANGES"]);
 
 const now = () => new Date().toISOString();
 const id = (prefix: string) => `${prefix}-${randomUUID()}`;
@@ -165,6 +166,7 @@ interface ReviewAgentResult {
 
 export class V20Service {
   readonly coordination: CoordinationService;
+  readonly agile: AgileService;
   constructor(
     readonly repo: V20Repository,
     readonly hub: EventHub,
@@ -172,6 +174,11 @@ export class V20Service {
     private readonly cloudflare: CloudflareManager,
     private inviteToken: string
   ) {
+    this.agile = new AgileService(repo, {
+      event: (type, actor, entityType, entityId, payload) => this.event(type, actor, entityType, entityId, payload),
+      job: (kind, nodeId, entityId, payload) => this.newJob(kind, nodeId, entityId, payload, 1),
+      auditNode: () => this.selectAuditNode()!
+    });
     this.coordination = new CoordinationService(repo, {
       event: (type, actor, entityType, entityId, payload) => this.event(type, actor, entityType, entityId, payload),
       job: (kind, nodeId, entityId, payload) => this.newJob(kind, nodeId, entityId, payload, 1),
@@ -223,6 +230,7 @@ export class V20Service {
     const plans = this.latestPlans();
     const available = nodes.filter((node) => node.connected && (node.codex ?? node.auditCodex) === "available");
     return {
+      agile: this.agile.snapshot(),
       coordination: this.coordination.snapshot(viewer),
       room: {
         id: this.repo.room()!.id,
@@ -252,6 +260,7 @@ export class V20Service {
       : node.repositoryContext ?? null;
     const updated: CollaborationNode = {
       ...baseNode, connected: true, workspaceReady: Boolean(input.workspaceReady), codex, workTransport: input.workTransport, rateLimits: this.sanitizeRateLimits(input.rateLimits),
+      apiReady: node.role === "captain" && input.apiReady === true,
       git: this.sanitizeGit(input.git), currentTaskId: input.currentTaskId || null, lastSeenAt: now(), repositoryContext
     };
     this.repo.tx(() => {
@@ -702,6 +711,7 @@ export class V20Service {
 
   startTask(node: CollaborationNode, taskId: string, expectedTaskRevision?: number, expectedRequirementRevision?: number): AgentJob {
     const task = this.repo.getTask(taskId); if (!task) throw notFound("任务不存在");
+    if (task.flow === "agile") throw invalidState("超敏捷任务通过 Skill 传达和 task report 汇报");
     const stage = this.repo.getStage(task.stageId); if (!stage) throw notFound("任务阶段不存在");
     if (task.archived) throw invalidState("旧切片已被重编排，请领取新的工作主线");
     if (task.assigneeNodeId !== node.id) throw forbidden("只能启动分配给自己的任务");
@@ -759,6 +769,7 @@ export class V20Service {
 
   doneTask(node: CollaborationNode, taskId: string): StageTask {
     const task = this.repo.getTask(taskId); if (!task) throw notFound("任务不存在");
+    if (task.flow === "agile") throw invalidState("请携带任务包版本和验证证据使用 task report 汇报完成");
     if (task.assigneeNodeId !== node.id) throw forbidden("只能确认自己的任务完成");
     if (task.status !== "WAITING_CONFIRMATION") throw invalidState("Codex 轮次尚未正常结束，不能确认完成");
     if ((task.dependencyEdges ?? []).some((edge) => edge.mode === "CONTRACT") && !task.integrationEvidence)
@@ -1090,7 +1101,9 @@ export class V20Service {
       this.repo.putJob(updated);
       if (job.kind === "RUN_TASK") {
         const task = this.repo.getTask(job.entityId);
-        if (task?.activeJobId === job.id) this.repo.putTask({ ...task, status: "IN_PROGRESS", runtimeId, startedAt: task.startedAt ?? now(), revision: task.revision + 1, updatedAt: now() });
+        if (task?.activeJobId === job.id && task.flow !== "agile") this.repo.putTask({ ...task,
+          status: task.pauseRequested || task.status === "PAUSED" ? "PAUSED" : "IN_PROGRESS", runtimeId,
+          startedAt: task.startedAt ?? now(), revision: task.revision + 1, updatedAt: now() });
       }
       this.event("job.started", job.targetNodeId, "agent_job", job.id, { runtimeId });
     });
@@ -1101,7 +1114,8 @@ export class V20Service {
     const completed: AgentJob = { ...job, status: "COMPLETED", updatedAt: now(), error: null };
     this.repo.tx(() => {
       this.repo.putJob(completed);
-      if (job.kind === "ASSESS_CHANGE") this.coordination.completeImpact(job, result);
+      if (job.kind.startsWith("AGILE_")) this.agile.complete(job, result);
+      else if (job.kind === "ASSESS_CHANGE") this.coordination.completeImpact(job, result);
       else if (job.kind === "PLAN_INTENT") this.coordination.completePlan(job, result);
       else if (job.kind === "INTERRUPT_TASK" && job.payload.coordinationChangeId) this.coordination.interrupted(job, result);
       else if (job.kind === "ALIGN_PLANS" || job.kind === "ALIGN_FINALIZE") this.completeAlignment(job, result);
@@ -1147,8 +1161,10 @@ export class V20Service {
       else if (job.kind === "RUN_TASK") {
         const task = this.repo.getTask(job.entityId);
         if (task?.activeJobId === job.id) this.repo.putTask({ ...task,
-          status: (task.dependencyEdges ?? []).some((edge) => edge.mode === "CONTRACT") ? "WAITING_INTEGRATION" : "WAITING_CONFIRMATION",
-          activeJobId: null, finishedAt: now(), revision: task.revision + 1, updatedAt: now() });
+          ...(task.flow === "agile" || task.pauseRequested || task.status === "PAUSED" ? { runtimeId: null } : {
+            status: (task.dependencyEdges ?? []).some((edge) => edge.mode === "CONTRACT") ? "WAITING_INTEGRATION" as const : "WAITING_CONFIRMATION" as const,
+            finishedAt: now()
+          }), activeJobId: null, revision: task.revision + 1, updatedAt: now() });
       }
       this.event("job.completed", job.targetNodeId, "agent_job", job.id, { kind: job.kind });
     });
@@ -1157,6 +1173,11 @@ export class V20Service {
 
   private failJob(job: AgentJob, error: string): AgentJob {
     const safeError = error.slice(0, 4_000);
+    if (job.kind.startsWith("AGILE_")) {
+      const failed: AgentJob = { ...job, status: "FAILED", error: safeError, leaseToken: null, leaseExpiresAt: null, updatedAt: now() };
+      this.repo.tx(() => { this.repo.putJob(failed); this.agile.fail(job, safeError); this.event("job.failed", job.targetNodeId, "agent_job", job.id, { error: safeError }); });
+      return failed;
+    }
     if (job.kind === "ASSESS_CHANGE") {
       const failed: AgentJob = { ...job, status: "FAILED", error: safeError, leaseToken: null, updatedAt: now() };
       this.repo.tx(() => { this.repo.putJob(failed); this.coordination.failImpact(job, safeError); this.event("job.failed", job.targetNodeId, "agent_job", job.id, { error: safeError }); });
@@ -1240,8 +1261,9 @@ export class V20Service {
          }
       } else if (job.kind === "RUN_TASK" || job.kind === "PREPARE_MOCK" || job.kind === "INTEGRATE_TASK") {
         const task = this.repo.getTask(job.entityId); if (task?.activeJobId === job.id) this.repo.putTask({ ...task,
-          status: job.kind === "INTEGRATE_TASK" ? "WAITING_INTEGRATION" : "FAILED", activeJobId: null,
-          blockedReason: safeError, revision: task.revision + 1, updatedAt: now() });
+          ...(task.flow === "agile" || task.pauseRequested || task.status === "PAUSED" ? { runtimeId: null } : {
+            status: job.kind === "INTEGRATE_TASK" ? "WAITING_INTEGRATION" as const : "FAILED" as const, blockedReason: safeError
+          }), activeJobId: null, revision: task.revision + 1, updatedAt: now() });
       }
       this.event("job.failed", job.targetNodeId, "agent_job", job.id, { error: safeError });
     });
@@ -1441,6 +1463,7 @@ export class V20Service {
 
   integrateTask(node: CollaborationNode, taskId: string): AgentJob {
     const task = this.repo.getTask(taskId); if (!task) throw notFound("任务不存在");
+    if (task.flow === "agile") throw invalidState("超敏捷任务通过 task report 提交真实验证证据");
     if (task.assigneeNodeId !== node.id) throw forbidden("只能集成自己的切片");
     if (task.status !== "WAITING_INTEGRATION") throw invalidState("当前切片无需真实集成");
     if (task.activeJobId) throw invalidState("真实集成验证已经在运行");
@@ -1690,6 +1713,7 @@ export class V20Service {
     const pendingCoordination = JSON.parse(this.repo.getMeta("coordination_changes") ?? "[]") as Array<{ stageId: string; status: string }>;
     if (pendingCoordination.some(change => change.stageId === stageId && change.status === "PENDING")) return;
     const stage = this.repo.getStage(stageId); if (!stage || stage.status !== "ACTIVE") return;
+    if (stage.sourceAlignmentId.startsWith("AGILE-")) return;
     const tasks = this.repo.listTasks(stageId);
     if (!tasks.length || tasks.some((task) => task.status !== "DONE")) return;
     const pending = this.repo.listPullRequests().filter((change) => change.stageId === stageId && change.status === "QUEUED");
@@ -1708,6 +1732,7 @@ export class V20Service {
 
   private startReviewInternal(actorId: string, force: boolean): ImpactReviewBatch {
     const stage = this.repo.currentStage(); if (!stage) throw invalidState("当前没有活动开发阶段");
+    if (stage.sourceAlignmentId.startsWith("AGILE-")) throw invalidState("超敏捷房间请使用批量需求变更审核");
     if (["REVIEWING", "AWAITING_APPLY"].includes(stage.status)) throw invalidState("当前已有审核正在进行");
     const tasks = this.repo.listTasks(stage.id);
     const allDone = tasks.length > 0 && tasks.every((task) => task.status === "DONE");

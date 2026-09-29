@@ -1,4 +1,5 @@
 import { registerCoordinationRoutes } from "./coordination-routes.js";
+import { registerAgileRoutes } from "./agile-routes.js";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import type { CollaborationNode, JobResultInput, NodeHeartbeatInput, ProjectModule } from "@vibe-git/protocol";
 import { badRequest, forbidden, notFound, unavailable } from "../domain/errors.js";
@@ -53,7 +54,8 @@ async function tunnelOperation(work: () => Promise<unknown>): Promise<unknown> {
 }
 
 export async function registerV20Routes(app: FastifyInstance, service: V20Service, cloudflare: CloudflareManager): Promise<void> {
-  registerCoordinationRoutes(app, service.coordination, request => authenticate(request, service));
+  registerAgileRoutes(app, service.agile, request => authenticate(request, service));
+  registerCoordinationRoutes(app, service.coordination, request => authenticate(request, service), service.agile);
   app.get("/health", async () => ({ ok: true, service: "vibe-git-host", version: "0.20", time: new Date().toISOString() }));
 
   app.post<{ Body: { invite?: string } }>("/api/v1/join", async (request) => {
@@ -274,7 +276,7 @@ export async function registerV20Routes(app: FastifyInstance, service: V20Servic
 
   app.get<{ Querystring: { since?: string } }>("/api/v1/events", async (request, reply) => {
     const node = authenticate(request, service);
-    const since = Number(request.query.since ?? 0);
+    const since = Math.max(Number(request.query.since ?? 0), Number(firstHeader(request.headers["last-event-id"]) ?? 0));
     reply.hijack();
     reply.raw.writeHead(200, {
       "Content-Type": "text/event-stream; charset=utf-8", "Cache-Control": "no-cache, no-transform",

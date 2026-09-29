@@ -30,6 +30,19 @@ export interface TaskExecutionPackage {
 export interface TaskChangeContent {
   goal: string; boundary: string; acceptance: string[];
 }
+export interface TaskRevisionDraftInput {
+  expectedRevision: number; expectedRequirementRevision: number;
+  taskRevisions: Record<string, number>; taskIds: string[];
+}
+export interface TaskRevisionDraft {
+  changeId: string; changeRevision: number; requirementRevision: number;
+  taskRevisions: Record<string, number>;
+  updates: Array<{ taskId: string; update: TaskChangeContent }>;
+}
+export function taskContentChanged(before: TaskChangeContent, after: TaskChangeContent): boolean {
+  return before.goal.trim() !== after.goal.trim() || before.boundary.trim() !== after.boundary.trim() ||
+    JSON.stringify(before.acceptance.map(item => item.trim())) !== JSON.stringify(after.acceptance.map(item => item.trim()));
+}
 export interface TaskChangeSnapshot {
   taskId: string; title: string; beforeRevision: number; afterRevision: number;
   before: TaskChangeContent; after: TaskChangeContent;
@@ -37,7 +50,8 @@ export interface TaskChangeSnapshot {
 export interface CoordinationChange {
   suggestion?: { jobId: string; status: "QUEUED" | "READY" | "FAILED"; error: string | null; taskRevisions: Record<string, number>; findings: Array<{ taskId: string; impact: "affected" | "unaffected" | "uncertain"; reason: string; update?: TaskChangeContent | null }> };
   id: string; title: string; content: string; submitterNodeId: string; stageId: string;
-  baseRequirementRevision: number; revision: number; status: "PENDING" | "APPLIED" | "REJECTED";
+  baseRequirementRevision: number; revision: number; status: "PENDING" | "IN_REVIEW" | "APPLIED" | "REJECTED";
+  reviewId?: string | null;
   taskIds: string[]; contractIds: string[]; requirementRefs: string[];
   createdAt: string; decidedAt: string | null; affectedTaskIds: string[];
   taskChanges?: TaskChangeSnapshot[];

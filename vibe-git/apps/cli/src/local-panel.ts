@@ -11,9 +11,13 @@ import { probeCodex } from "./codex.js";
 import { chatWithCodex, draftProposalWithCodex, listCodexModels } from "./local-chat.js";
 import { clarifyIntentWithCodex, endIntentSession } from "./intent-clarifier.js";
 import { clarifyIntentWithOpenAI, openAIStatus, saveOpenAIConfig } from "./openai-intent.js";
+import { computeStatus, savePanelCompute, testCompute } from "./agile-ai.js";
+import { generateTaskRevisionDraft } from "./task-revision-draft.js";
+import type { TaskRevisionDraftInput } from "@vibe-git/protocol";
+import { api, ApiError } from "./api.js";
 import { saveConfig, vibeHome, writeJson, type ClientConfig } from "./config.js";
 
-const WEB_DIST = resolve(fileURLToPath(new URL("../../web/dist", import.meta.url)));
+const WEB_DIST = resolve(fileURLToPath(new URL("../../web/dist-agile", import.meta.url)));
 export const localPanelPath = () => resolve(vibeHome(), "local-panel.json");
 const mime: Record<string, string> = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8",
   ".css": "text/css; charset=utf-8", ".svg": "image/svg+xml", ".png": "image/png", ".ico": "image/x-icon" };
@@ -66,6 +70,33 @@ export async function startLocalPanel(config: ClientConfig, controls: { busy(): 
       if ((sessions.get(session) ?? 0) <= Date.now()) return json(res, 403, { error: "请先在本机运行 vibe-git open" });
       if (!["GET", "HEAD"].includes(req.method ?? "") && req.headers.origin !== origin) return json(res, 403, { error: "跨站请求被拒绝" });
       if (url.pathname === "/api/local/capabilities") return json(res, 200, { local: true, chat: probeCodex().appServer });
+      const revisionRoute = url.pathname.match(/^\/api\/local\/changes\/([^/]+)\/revision-draft$/);
+      if (revisionRoute && req.method === "POST") {
+        const controller = new AbortController(), timer = setTimeout(() => controller.abort(), 300_000);
+        res.once("close", () => { if (!res.writableEnded) controller.abort(); });
+        try {
+          const input = await body(req) as unknown as TaskRevisionDraftInput;
+          const result = await generateTaskRevisionDraft(config, decodeURIComponent(revisionRoute[1]!), input, controller.signal);
+          if (!res.destroyed) return json(res, 200, result);
+        } catch (error) {
+          if (!res.destroyed) return json(res, error instanceof ApiError ? error.status : 400, { error: error instanceof Error ? error.message : String(error) });
+        } finally { clearTimeout(timer); }
+        return;
+      }
+      if (url.pathname === "/api/local/compute" && req.method === "GET") return json(res, 200, computeStatus(config));
+      if (url.pathname === "/api/local/compute" && req.method === "POST") {
+        try {
+          const result = await savePanelCompute(config, await body(req), controls.changed);
+          return json(res, 200, result);
+        } catch (error) { return json(res, 400, { error: error instanceof Error ? error.message : String(error) }); }
+      }
+      if (url.pathname === "/api/local/compute/test" && req.method === "POST") {
+        try {
+          const state = await api<{ viewer: { role: string } }>(config, "/api/v1/bootstrap");
+          if (state.viewer.role !== "captain") return json(res, 403, { error: "只有队长可以测试协作 API" });
+          return json(res, 200, await testCompute(config));
+        } catch (error) { return json(res, 400, { error: error instanceof Error ? error.message : String(error) }); }
+      }
       if (url.pathname === "/api/local/workspace" && req.method === "GET") return json(res, 200, await workspace.get());
       if (["/api/local/workspace/pick", "/api/local/workspace/select", "/api/local/workspace/init"].includes(url.pathname) && req.method === "POST") {
         try { await controls.beforeSwitch?.(); } catch (error) { return json(res, 409, { error: error instanceof Error ? error.message : String(error) }); }

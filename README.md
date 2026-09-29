@@ -29,7 +29,7 @@
 
 ---
 
-当前 `codex/frontend-rebuild` 分支已移除旧应用前端与界面演示，保留后端、CLI、Relay 和共享协议。`vibe-git/` 中的启动与构建命令现在只处理后端；前端重建入口和接入说明见[前端重建交接](vibe-git/docs/FRONTEND-REBUILD.md)。下文网页操作说明属于旧版功能。
+当前 `codex/frontend-rebuild` 分支已重建 Vue 超敏捷工作台：多人计划 → 冲突裁决 → 可编辑需求 MD → 分工与任务包；开发中的内部 PR 支持批量审核和新版派发。后端、CLI、Relay 及历史流程保留。运行步骤与接口说明见[超敏捷协作](vibe-git/docs/AGILE-WORKFLOW.md)，下文保留历史版本的介绍。
 
 ## Git 记录代码，Vibe-Git 记录团队决定
 

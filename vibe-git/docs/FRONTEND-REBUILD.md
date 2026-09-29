@@ -1,5 +1,7 @@
 # 前端重建交接
 
+本文件记录重建起点。Vue 超敏捷前端及配套轻量后端现已实现，当前运行与验收入口见[超敏捷协作](AGILE-WORKFLOW.md)；以下保留移除旧前端时的历史记录。
+
 分支：`codex/frontend-rebuild`，基于 `codex/intent-workbench` 的 `6c6ccdc51e0e6ad1b830b0b055c6cd2557d2ee89`。
 
 ## 当前状态

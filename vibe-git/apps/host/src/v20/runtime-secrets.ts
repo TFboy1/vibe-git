@@ -35,6 +35,7 @@ export async function ensureV20Runtime(repo: V20Repository, dataDir: string): Pr
     repo.setRequirementRevision(0);
     repo.setRequirementMarkdown("");
     repo.setMeta("v20_schema_version", "20");
+    repo.setMeta("flow_mode", "agile");
   }
 
   let captain = await readJson<CaptainCredentialFile>(captainPath);

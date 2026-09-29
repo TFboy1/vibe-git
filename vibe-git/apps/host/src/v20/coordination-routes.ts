@@ -1,15 +1,19 @@
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import type { CollaborationNode } from "@vibe-git/protocol";
 import type { CoordinationService } from "./coordination-service.js";
+import type { AgileService } from "./agile-service.js";
 
 type Id = { id: string };
 type Version = { expectedRevision: number };
-export function registerCoordinationRoutes(app: FastifyInstance, service: CoordinationService, auth: (request: FastifyRequest) => CollaborationNode) {
+export function registerCoordinationRoutes(app: FastifyInstance, service: CoordinationService, auth: (request: FastifyRequest) => CollaborationNode, agile: AgileService) {
   app.post<{ Body: unknown }>("/api/v1/intents", async request => service.saveIntent(auth(request), request.body));
   app.put<{ Params: Id; Body: unknown }>("/api/v1/intents/:id", async request => service.saveIntent(auth(request), request.body, request.params.id));
   app.post<{ Params: Id; Body: unknown }>("/api/v1/intents/:id/plan", async request => service.importPlan(auth(request), request.params.id, request.body));
   app.post<{ Params: Id; Body: Version }>("/api/v1/intents/:id/generate", async request => service.generate(auth(request), request.params.id, request.body?.expectedRevision));
-  app.get<{ Params: Id }>("/api/v1/tasks/:id/package", async request => { auth(request); return service.executionPackage(request.params.id); });
+  app.get<{ Params: Id }>("/api/v1/tasks/:id/package", async request => {
+    const viewer = auth(request);
+    return agile.repo.getTask(request.params.id)?.flow === "agile" ? agile.package(viewer, request.params.id) : service.executionPackage(request.params.id);
+  });
   app.post<{ Params: Id; Body: Version }>("/api/v1/tasks/:id/external-start", async request => service.startExternal(auth(request), request.params.id, request.body?.expectedRevision));
   app.post<{ Params: Id; Body: unknown }>("/api/v1/tasks/:id/external-report", async request => service.reportExternal(auth(request), request.params.id, request.body));
   app.post<{ Params: Id; Body: Version }>("/api/v1/tasks/:id/external-done", async request => service.finishExternal(auth(request), request.params.id, request.body?.expectedRevision));

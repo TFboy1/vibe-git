@@ -1,4 +1,4 @@
-# UTF-8. Frontend rebuild branch: check and build backend workspaces only.
+# UTF-8. Backend regression tests and production builds; no frontend interaction checks.
 $ErrorActionPreference = 'Stop'
 $Root = Split-Path -Parent $PSScriptRoot
 $Node = (Get-Command node -ErrorAction Stop).Source
@@ -18,10 +18,12 @@ try {
         Write-Host "Typecheck: $Project"
         Invoke-NodeStep -CliArgs @($Tsc, '-p', "$Project/tsconfig.json", '--noEmit')
     }
-    Invoke-NodeStep -CliArgs @($Vitest, 'run', 'apps/host/test/v20.test.ts', 'apps/host/test/v21-contract.test.ts', 'apps/host/test/coordination.test.ts', 'apps/cli/test', 'apps/relay/test')
+    Invoke-NodeStep -CliArgs @($Vitest, 'run', 'apps/host/test/v20.test.ts', 'apps/host/test/v21-contract.test.ts', 'apps/host/test/coordination.test.ts', 'apps/host/test/agile.test.ts', 'apps/cli/test', 'apps/relay/test')
     Invoke-NodeStep -CliArgs @($Tsc, '-p', 'apps/host/tsconfig.build.json')
     Invoke-NodeStep -CliArgs @($Tsc, '-p', 'apps/relay/tsconfig.build.json')
     Invoke-NodeStep -CliArgs @($Tsc, '-p', 'apps/cli/tsconfig.build.json')
-    Write-Host 'PASS: backend typecheck, tests and production builds.'
+    Invoke-NodeStep -CliArgs @('node_modules/vue-tsc/bin/vue-tsc.js', '-p', 'apps/web/tsconfig.json', '--noEmit')
+    Invoke-NodeStep -CliArgs @('node_modules/vite/bin/vite.js', 'build', 'apps/web')
+    Write-Host 'PASS: backend typecheck and regression tests, backend and Vue production builds.'
 }
 finally { Pop-Location }

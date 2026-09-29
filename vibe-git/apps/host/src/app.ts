@@ -32,12 +32,12 @@ export interface BuildAppOptions {
 
 async function backupBeforeSchemaUpgrade(dbPath: string, dataDir: string): Promise<void> {
   if (dbPath === ":memory:" || !existsSync(dbPath)) return;
-  const marker = resolve(dataDir, ".v021-database-backed-up");
+  const marker = resolve(dataDir, ".v022-database-backed-up");
   if (existsSync(marker)) return;
   const backupDir = resolve(dataDir, "backups");
   mkdirSync(backupDir, { recursive: true });
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-  const destination = resolve(backupDir, `workspace-pre-v021-${stamp}.db`);
+  const destination = resolve(backupDir, `workspace-pre-v022-${stamp}.db`);
   const source = new DatabaseSync(dbPath);
   try { await backup(source, destination); }
   finally { source.close(); }
@@ -76,7 +76,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
   if (options.backupDatabase !== false) await backupBeforeSchemaUpgrade(dbPath, dataDir);
   const db = openDatabase(dbPath);
   const repo = new V20Repository(db);
-  repo.setMeta("schema_version", "21");
+  repo.setMeta("schema_version", "22");
   const runtime = await ensureV20Runtime(repo, dataDir);
   const hub = new EventHub();
   const cloudflareManager = options.cloudflareManager ?? new CloudflareTunnelManager(resolve(dataRoot, "tools/cloudflared.exe"));

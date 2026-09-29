@@ -2,6 +2,7 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { notificationResource, workspaceChanges } from "@vibe-git/protocol";
 import type { AlignmentRun, CloudflareTunnelStatus, QuickPlanInput, StageTask } from "@vibe-git/protocol";
 import { buildApp } from "../src/app.js";
 import type { V20Service } from "../src/v20/service.js";
@@ -33,10 +34,54 @@ async function setup() {
     { key: "report", title: "报告", goal: "生成报告", boundary: "只改 report", acceptance: ["报告可读取"], assigneeNodeId: member.id, dependencies: [], requirementRefs: ["## 报告"] }
   ], contracts: [], issues: [] };
   const publish = () => { const draft = c.importPlan(captain, intent.id, { expectedRevision: intent.revision, plan }); const stage = service.publishAlignment(captain, draft.id); return plan.tasks.map(draft => service.repo.listTasks(stage.id).find(task => task.title === draft.title)!); };
-  return { app, service, captain, member, c, intent, plan, publish, beat, captainToken: captainFile.nodeToken as string };
+  return { app, service, captain, member, c, intent, plan, publish, beat, captainToken: captainFile.nodeToken as string, memberToken: joined.nodeToken };
 }
 
 describe("共享需求与可选执行", () => {
+  it("历史房间已发布需求后仍可创建和更新个人计划，保持原流程和作者权限", async () => {
+    const { app, service, captainToken, memberToken, captain, publish } = await setup();
+    service.repo.setMeta("flow_mode", "legacy"); publish();
+    const originalRequirement = service.repo.requirementMarkdown();
+    const headers = { authorization: "Bearer " + captainToken };
+    const created = await app.inject({ method: "POST", url: "/api/v1/plans", headers, payload: { filename: "个人计划.md", content: "# 新的个人计划\n\n目标：梳理范围。" } });
+    expect(created.statusCode).toBe(200);
+    const plan = created.json(); expect(plan.ownerNodeId).toBe(captain.id); expect(plan.revision).toBe(1);
+    const update = { expectedRevision: 1, filename: plan.filename, content: "# 个人计划修订\n\n验收：保留正式需求。" };
+    const denied = await app.inject({ method: "PUT", url: "/api/v1/plans/" + plan.id, headers: { authorization: "Bearer " + memberToken }, payload: update });
+    expect(denied.statusCode).toBe(403);
+    const updated = await app.inject({ method: "PUT", url: "/api/v1/plans/" + plan.id, headers, payload: update });
+    expect(updated.statusCode).toBe(200); expect(updated.json().revision).toBe(2);
+    const snapshot = (await app.inject({ method: "GET", url: "/api/v1/bootstrap", headers })).json();
+    expect(snapshot.agile.enabled).toBe(false); expect(snapshot.plans[0].content).toBe(update.content);
+    expect(service.repo.requirementMarkdown()).toBe(originalRequirement); expect(service.repo.requirementRevision()).toBe(1);
+  });
+  it("历史变更、原有 PR 与通知通过同一记录关联，已采纳事件不再显示为当前待审核", async () => {
+    const { app, service, captain, memberToken, captainToken, c, publish } = await setup();
+    service.repo.setMeta("flow_mode", "legacy"); publish();
+    const memberHeaders = { authorization: "Bearer " + memberToken }, headers = { authorization: "Bearer " + captainToken };
+    const changeResponse = await app.inject({ method: "POST", url: "/api/v1/changes", headers: memberHeaders,
+      payload: { title: "补充历史说明", content: "保留需求变更的原始记录", expectedRequirementRevision: 1 } });
+    expect(changeResponse.statusCode).toBe(200); const change = changeResponse.json();
+    const prResponse = await app.inject({ method: "POST", url: "/api/v1/pull-requests", headers: memberHeaders,
+      payload: { filename: "历史PR.md", content: "# 原有流程 PR\n\n增加文档索引。" } });
+    expect(prResponse.statusCode).toBe(200); const pr = prResponse.json();
+    const before = (await app.inject({ method: "GET", url: "/api/v1/bootstrap", headers })).json();
+    expect(workspaceChanges(before).map(item => item.id)).toEqual(expect.arrayContaining([change.id, pr.id]));
+    const oldEvent = before.notifications.find((item: { entityId: string }) => item.entityId === change.id);
+    expect(oldEvent.title).toBe("待审核需求变更");
+    expect(notificationResource(oldEvent, before)).toEqual({ kind: "change", id: change.id, status: "待审核" });
+    const impact = c.impact(change.id);
+    c.applyChange(captain, change.id, { expectedRevision: 1, expectedRequirementRevision: 1,
+      decisions: impact.tasks.map(item => ({ taskId: item.taskId, expectedRevision: item.revision, affected: false })) });
+    const after = (await app.inject({ method: "GET", url: "/api/v1/bootstrap", headers })).json();
+    const records = workspaceChanges(after);
+    expect(records.find(item => item.id === change.id)).toMatchObject({ source: "legacy_change", status: "APPLIED", title: change.title, content: change.content });
+    expect(records.find(item => item.id === pr.id)).toMatchObject({ source: "legacy_pr", status: "QUEUED", documentId: pr.documentId });
+    expect(records.filter(item => ["PENDING", "QUEUED"].includes(item.status))).toHaveLength(1);
+    expect(after.notifications.find((item: { id: string }) => item.id === oldEvent.id)).toEqual(oldEvent);
+    expect(notificationResource(oldEvent, after)).toEqual({ kind: "change", id: change.id, status: "已采纳" });
+    expect(after.room.requirementRevision).toBe(2);
+  });
   it("无需 Codex、全员提案或队长仓库摘要即可导入并发布；离线成员不阻塞独立任务", async () => {
     const { service, captain, member, c, publish } = await setup();
     service.repo.putNode({ ...service.repo.getNode(member.id)!, lastSeenAt: null });
@@ -230,6 +275,20 @@ describe("共享需求与可选执行", () => {
       ] } });
       expect(result.status).toBe("FAILED"); expect(result.error).toContain(changedScope ? "任务范围已变化" : "具体变化");
       expect(c.change(change.id).suggestion!.status).toBe("FAILED"); expect(service.repo.getTask(room!.id)).toEqual(room);
+    }
+  });
+  it("受影响任务缺失 update 或返回 null 时不能作为可发布的修订草稿", async () => {
+    for (const missing of [true, false]) {
+      const { c, captain, publish, service, beat } = await setup();
+      const tasks = publish(); service.heartbeat(captain, { ...beat, codex: "available" });
+      const change = c.submitChange(captain, { title: "调整房间规则", content: "支持暂停", expectedRequirementRevision: 1 });
+      c.suggestImpact(captain, change.id, change.revision); const job = service.claimJob(captain)!;
+      const result = service.reportJob(captain, job.id, { leaseToken: job.leaseToken!, phase: "completed", result: { findings: tasks.map(task => ({
+        taskId: task.id, impact: "affected", reason: "需要修订", ...(missing ? {} : { update: null })
+      })) } });
+      expect(result.status).toBe("FAILED"); expect(result.error).toContain("具体修订草稿");
+      expect(c.change(change.id).suggestion?.status).toBe("FAILED");
+      tasks.forEach(task => expect(service.repo.getTask(task.id)).toEqual(task));
     }
   });
 

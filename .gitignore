@@ -5,3 +5,4 @@ apikey.txt
 .agentgit/
 node_modules/
 test-results/
+**/dist-agile/

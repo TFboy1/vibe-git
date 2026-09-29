@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { handleCoordinationCommand, COORDINATION_USAGE } from "./coordination-command.js";
+import { handleAgileCommand, AGILE_USAGE } from "./agile-command.js";
 import { spawn } from "node:child_process";
 import { closeSync, existsSync, openSync } from "node:fs";
 import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
@@ -54,6 +55,9 @@ function usage(): string {
   vibe-git work list | pull <workstream-id> [output]
   vibe-git task start <task-id> | integrate <task-id> | sync [task-id] | done <task-id>
   vibe-git pr submit <任意文件.md> | list
+超敏捷主线
+${AGILE_USAGE}
+兼容原有需求流程
 ${COORDINATION_USAGE}`;
 }
 
@@ -154,7 +158,8 @@ async function hostStart(workspacePath?: string): Promise<void> {
   const config: ClientConfig = {
     hostUrl: LOCAL_HOST, nodeId: captain.nodeId, nodeToken: captain.nodeToken, workspace: selected.path,
     workTransport: previous?.nodeId === captain.nodeId ? previous.workTransport : "auto", daemonPid: null, connectedAt: new Date().toISOString(),
-    ...(previous?.nodeId === captain.nodeId ? { openaiApiKey: previous.openaiApiKey, openaiModel: previous.openaiModel } : {})
+    ...(previous?.nodeId === captain.nodeId ? { openaiApiKey: previous.openaiApiKey, openaiModel: previous.openaiModel,
+      openaiBaseUrl: previous.openaiBaseUrl, aiProvider: previous.aiProvider, apiConnection: previous.apiConnection } : {})
   };
   await saveConfig(config);
   await spawnDaemon(config);
@@ -274,6 +279,7 @@ async function main(): Promise<void> {
   if (group === "daemon") { await runDaemon(); return; }
   if (!group || group === "help" || group === "--help" || group === "-h") { out(usage()); return; }
 
+  if (await handleAgileCommand(args, bootstrap, out)) return;
   if (await handleCoordinationCommand(args, bootstrap, out)) return;
 
   if (group === "host") {
