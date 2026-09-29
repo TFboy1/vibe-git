@@ -6,6 +6,8 @@ import Icon from "./Icon.vue";
 import TaskChangeComparison from "./TaskChangeComparison.vue";
 const props = defineProps<{ flow: AgileFlow }>(), store = useWorkspace();
 const tasks = ref<AgileTaskDraft[]>([]), removed = ref<string[]>([]), dirty = ref(false), expanded = ref("");
+const selectedKeys = ref<string[]>([]), assignee = ref("");
+const availableMembers = computed(() => store.data?.nodes.filter(node => !node.revoked) ?? []);
 const changedIds = computed(() => new Set([...props.flow.affectedTaskIds, ...tasks.value.map(task => task.sourceTaskId).filter(Boolean), ...removed.value]));
 const preserved = computed(() => props.flow.taskSnapshot.filter(task => !changedIds.value.has(task.id)));
 const original = (task: AgileTaskDraft) => props.flow.taskSnapshot.find(before => before.id === task.sourceTaskId);
@@ -14,6 +16,12 @@ watch(() => [props.flow.id, props.flow.allocationDraftRevision, JSON.stringify(p
     if (!dirty.value) { tasks.value = JSON.parse(JSON.stringify(props.flow.tasks)); removed.value = [...props.flow.removedTaskIds];
       if (!tasks.value.some(task => task.key === expanded.value)) expanded.value = tasks.value.find(task => task.sourceTaskId)?.key ?? tasks.value[0]?.key ?? ""; }
 }, { immediate: true });
+watch(tasks, values => { selectedKeys.value = selectedKeys.value.filter(key => values.some(task => task.key === key)); }, { deep: true });
+function assignSelected() {
+  if (!selectedKeys.value.length || !availableMembers.value.some(node => node.id === assignee.value)) return;
+  tasks.value.forEach(task => { if (selectedKeys.value.includes(task.key)) task.assigneeNodeId = assignee.value; });
+  dirty.value = true; store.notice = "负责人已调整，保存分工后统一派发";
+}
 function add() {
   const key = "task-" + crypto.randomUUID();
   tasks.value.push({ key, sourceTaskId: null, title: "", goal: "", boundary: "", acceptance: [""],
@@ -23,6 +31,7 @@ function add() {
 function remove(task: AgileTaskDraft) {
   if (task.sourceTaskId && !removed.value.includes(task.sourceTaskId)) removed.value.push(task.sourceTaskId);
   tasks.value = tasks.value.filter(item => item.key !== task.key);
+  selectedKeys.value = selectedKeys.value.filter(key => key !== task.key);
   tasks.value.forEach(item => { item.dependencies = item.dependencies.filter(key => key !== task.key); }); dirty.value = true;
 }
 function lines(task: AgileTaskDraft, field: "acceptance" | "ownedPaths" | "excludedPaths" | "requirementRefs", event: Event) {
@@ -37,6 +46,7 @@ async function save(): Promise<AgileFlow | null> {
   return saved;
 }
 async function publish() {
+  if (!store.checkRequirementDraft(props.flow)) return;
   const saved = await save(); if (!saved) return;
   await store.mutate("/api/v1/agile/flows/" + saved.id + "/publish", { expectedRevision: saved.revision }, "正式需求与任务包已向全员派发");
 }
@@ -44,10 +54,12 @@ async function publish() {
 <template>
   <section class="paper allocation-paper">
     <header class="section-head"><div><span class="eyebrow">ALLOCATION PREVIEW / 分工预览</span><h2>把共同目标交给具体的人。</h2><p class="muted">基于需求草稿 v{{ flow.draftRevision }}。调整目标、负责人、边界和验收后，统一派发。</p></div><span class="tag mint">{{ tasks.length + preserved.filter(t => t.status !== 'DONE').length }} 项工作</span></header>
+    <div class="allocation-bulk-bar"><label class="inline-check"><input type="checkbox" :checked="!!tasks.length && selectedKeys.length === tasks.length" :indeterminate="!!selectedKeys.length && selectedKeys.length < tasks.length" @change="selectedKeys = ($event.target as HTMLInputElement).checked ? tasks.map(task => task.key) : []" />选择任务 <span class="count">{{ selectedKeys.length }}</span></label><label class="sr-only" for="allocation-assignee">批量分配负责人</label><select id="allocation-assignee" v-model="assignee" class="input"><option value="">选择负责人</option><option v-for="node in availableMembers" :key="node.id" :value="node.id">{{ node.label }} · {{ node.id.slice(-4) }}</option></select><button class="btn small" :disabled="!selectedKeys.length || !assignee || store.busy" @click="assignSelected">分配选中任务</button><span class="muted small-text">草稿确认后统一派发。</span></div>
     <article v-for="(task, index) in tasks" :key="task.key" class="allocation-row">
+      <label class="allocation-select"><input v-model="selectedKeys" type="checkbox" :value="task.key" :disabled="store.busy" /><span class="sr-only">选择任务 {{ task.title }}</span></label>
       <button class="allocation-summary" :aria-expanded="expanded === task.key" @click="expanded = expanded === task.key ? '' : task.key"><span class="task-index">{{ String(index + 1).padStart(2, '0') }}</span><span><strong>{{ task.title || '填写任务标题' }}</strong><small>{{ task.sourceTaskId ? flow.taskSnapshot.find(t => t.id === task.sourceTaskId)?.status === 'DONE' ? '关联返工 · 原完成记录保留' : '修订现有任务' : '新任务' }} · {{ store.name(task.assigneeNodeId) }}</small></span><span class="acceptance-count">{{ task.acceptance.length }} 项验收</span><Icon name="chevron" :class="{ rotate: expanded === task.key }" /></button>
       <div v-if="expanded === task.key" class="allocation-fields" @input="dirty = true" @change="dirty = true">
-        <div class="form-grid"><label class="field">任务标题<input v-model="task.title" class="input" maxlength="160" /></label><label class="field">负责人<select v-model="task.assigneeNodeId" class="input"><option v-for="node in store.data?.nodes" :key="node.id" :value="node.id">{{ node.label }} · {{ node.id.slice(-4) }}</option></select></label></div>
+        <div class="form-grid"><label class="field">任务标题<input v-model="task.title" class="input" maxlength="160" /></label><label class="field">负责人<select v-model="task.assigneeNodeId" class="input"><option v-for="node in availableMembers" :key="node.id" :value="node.id">{{ node.label }} · {{ node.id.slice(-4) }}</option></select></label></div>
         <label class="field">具体目标<textarea v-model="task.goal" class="input" rows="3"></textarea></label><label class="field">职责边界<textarea v-model="task.boundary" class="input" rows="2"></textarea></label>
         <label class="field">验收要求 <small>每行一项</small><textarea :value="task.acceptance.join('\n')" class="input" rows="3" @input="lines(task, 'acceptance', $event)"></textarea></label>
         <div class="form-grid"><label class="field">负责路径 <small>已知的相对路径，可留空</small><textarea :value="task.ownedPaths.join('\n')" class="input mono" rows="2" @input="lines(task, 'ownedPaths', $event)"></textarea></label><label class="field">排除路径<textarea :value="task.excludedPaths.join('\n')" class="input mono" rows="2" @input="lines(task, 'excludedPaths', $event)"></textarea></label></div>

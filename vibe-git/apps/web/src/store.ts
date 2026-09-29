@@ -4,8 +4,13 @@ import { workspaceChanges } from "@vibe-git/protocol";
 import type { AgileFlow, LocalComputeStatus, LocalCodexStatus, RoomEvent, V20BootstrapPayload } from "@vibe-git/protocol";
 import { request } from "./api";
 
+export interface LocalProject {
+  name: string; path: string; branch: string; headSha: string; dirty: boolean; valid: boolean; error?: string; runningTask: string | null;
+}
+
 export const useWorkspace = defineStore("workspace", () => {
   const data = ref<V20BootstrapPayload | null>(null), ready = ref(false), local = ref(false), connected = ref(false);
+  const project = ref<LocalProject | null>(null), projectError = ref(""), chatAvailable = ref(false);
   const error = ref(""), notice = ref(""), pending = ref(0);
   const compute = ref<LocalComputeStatus | null>(null), computeError = ref(""), codex = ref<LocalCodexStatus | null>(null);
   const captain = computed(() => data.value?.viewer.role === "captain");
@@ -44,9 +49,12 @@ export const useWorkspace = defineStore("workspace", () => {
     try { await refreshPromise; } finally { refreshPromise = null; }
   }
   async function start() {
+    stop();
     try {
       await refresh();
-      try { local.value = (await request<{ local: boolean }>("/api/local/capabilities")).local; } catch { local.value = false; }
+      try { const capabilities = await request<{ local: boolean; chat: boolean }>("/api/local/capabilities"); local.value = capabilities.local; chatAvailable.value = capabilities.chat; }
+      catch { local.value = false; chatAvailable.value = false; }
+      if (local.value) await refreshProject();
       if (local.value && captain.value) await refreshCompute();
       ready.value = true;
       events = new EventSource("/api/v1/events?since=" + data.value!.room.seq);
@@ -62,11 +70,18 @@ export const useWorkspace = defineStore("workspace", () => {
       };
     } catch (e) { error.value = message(e); ready.value = true; }
   }
+  async function refreshProject() {
+    try { project.value = await request<LocalProject>("/api/local/workspace"); projectError.value = ""; }
+    catch (e) { projectError.value = message(e); }
+  }
   async function refreshCompute(includeCodex = false) {
     try { compute.value = await request<LocalComputeStatus>("/api/local/compute"); computeError.value = ""; }
     catch (e) { computeError.value = message(e); }
     if (includeCodex) {
-      try { codex.value = await request<LocalCodexStatus>("/api/local/codex"); }
+      try {
+        codex.value = await request<LocalCodexStatus>("/api/local/codex");
+        const capabilities = await request<{ chat: boolean }>("/api/local/capabilities"); chatAvailable.value = capabilities.chat;
+      }
       catch (e) { computeError.value = message(e); }
     }
   }
@@ -84,7 +99,22 @@ export const useWorkspace = defineStore("workspace", () => {
   }
   const mutate = <T = AgileFlow>(path: string, body: unknown, success = "", method = "POST") =>
     perform(() => request<T>(path, body, method), success);
+  function checkRequirementDraft(value: AgileFlow): boolean {
+    try {
+      const raw = localStorage.getItem("vibe-requirement:" + data.value?.room.id + ":" + value.id);
+      const saved = raw ? JSON.parse(raw) as { markdown?: unknown } : null;
+      if (saved && typeof saved.markdown === "string" && saved.markdown !== value.draftMarkdown) {
+        error.value = "需求文档还有本机未保存的修改。请先到 Wiki 保存并核对需求，再生成分工或派发任务。"; return false;
+      }
+    } catch { /* Server revisions remain authoritative when local storage is unavailable. */ }
+    return true;
+  }
+  async function generateAllocation() {
+    const current = flow.value;
+    if (!canManage.value || !current || current.status !== "DRAFT" || !checkRequirementDraft(current)) return null;
+    return mutate("/api/v1/agile/flows/" + current.id + "/allocate", { expectedRevision: current.revision }, "AI 正在生成任务分工，完成后可在 Projects 确认并派发");
+  }
   function name(id: string) { return data.value?.nodes.find(n => n.id === id)?.label ?? id.slice(-6); }
   return { data, ready, local, connected, error, notice, captain, canManage, agileEnabled, batchReviewEnabled, reviewStage, flow, changes, pendingChanges, pendingPRs, busy,
-    compute, codex, computeError, provider, computeLabel, computeAvailable, refreshCompute, start, stop, refresh, perform, mutate, name };
+    project, projectError, chatAvailable, refreshProject, compute, codex, computeError, provider, computeLabel, computeAvailable, refreshCompute, start, stop, refresh, perform, mutate, checkRequirementDraft, generateAllocation, name };
 });

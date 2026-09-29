@@ -10,9 +10,9 @@
 @import "@milkdown/crepe/theme/common/table.css" layer(milkdown);
 @import "@milkdown/crepe/theme/frame.css" layer(milkdown);
 @layer base {
-  :root { --bg: #f3f3ed; --paper: #fffefa; --ink: #243c32; --muted: #768178; --line: #dedfd6; --green: #264e3c; --mint: #b9ffd8; --soft-mint: #e5f4e9; --amber: #fff1cd; --danger: #a1483b; --body: "DM Sans", "Source Han Sans SC", "Microsoft YaHei", sans-serif; --mono: "IBM Plex Mono", monospace; --serif: Georgia, "Noto Serif SC", "Songti SC", "SimSun", serif; font-family: var(--body); color: var(--ink); background: var(--bg); font-synthesis: none; }
+  :root { --bg: #ffffff; --paper: #ffffff; --ink: #1f2328; --muted: #656d76; --line: #d1d9e0; --green: #1f883d; --mint: #dafbe1; --soft-mint: #dafbe1; --amber: #fff8c5; --danger: #cf222e; --body: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, "Microsoft YaHei", sans-serif; --mono: ui-monospace, "SFMono-Regular", Consolas, "Liberation Mono", monospace; --serif: var(--body); font-family: var(--body); color: var(--ink); background: var(--bg); font-synthesis: none; }
   * { box-sizing: border-box; }
-  body { margin: 0; font-size: 14px; line-height: 1.7; }
+  body { margin: 0; font-size: 14px; line-height: 1.5; }
   button, input, textarea, select { font: inherit; color: inherit; }
   button, a, input, select, textarea { -webkit-tap-highlight-color: transparent; }
   button { cursor: pointer; }
@@ -21,13 +21,13 @@
   fieldset { padding: 0; border: 0; min-width: 0; }
   a { color: inherit; text-decoration: none; }
   p, h1, h2, h3 { margin: 0; }
-  h1, h2, h3 { font-weight: 500; }
-  h1 { font-family: var(--serif); font-size: 36px; line-height: 1.3; letter-spacing: -.8px; }
+  h1, h2, h3 { font-weight: 600; }
+  h1 { font-family: var(--body); font-size: 24px; line-height: 1.4; letter-spacing: -.3px; }
   h2 { font-size: 22px; letter-spacing: -.4px; line-height: 1.5; }
   h3 { font-size: 15px; }
   code, .mono { font-family: var(--mono); }
-  :focus-visible { outline: 2px solid #418765; outline-offset: 3px; }
-  ::selection { background: #c4ead2; }
+  :focus-visible { outline: 2px solid #0969da; outline-offset: 3px; }
+  ::selection { background: #b6e3ff; }
   input[type="checkbox"], input[type="radio"] { accent-color: var(--green); width: 15px; height: 15px; flex-shrink: 0; }
   .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
 }

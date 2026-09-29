@@ -12,7 +12,7 @@ function source(id: string) {
   const plan = props.flow.planSnapshot.find(doc => doc.id === id);
   if (plan) return store.name(plan.ownerNodeId) + " · " + plan.filename;
   const pr = props.flow.changeSnapshot.find(pr => pr.id === id || pr.document.id === id);
-  if (pr) return store.name(pr.submitterNodeId) + " · 变更 PR";
+  if (pr) return store.name(pr.submitterNodeId) + " · 变更 Issue";
   const task = props.flow.taskSnapshot.find(task => task.id === id);
   return task?.title ?? id;
 }
