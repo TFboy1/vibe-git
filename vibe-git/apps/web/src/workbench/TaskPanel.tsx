@@ -1,9 +1,10 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { StageTask, V20BootstrapPayload } from "@vibe-git/protocol";
 import { ArrowUpRight, Copy, Download } from "lucide-react";
 import { api, coordinationApi } from "../api";
 import { label } from "../canvas/model";
 import { Feedback, Sheet, downloadText, useAction } from "./shared";
+import { TaskChangeDiff, taskContentChanged } from "./TaskChangeDiff";
 
 export function taskLabel(task: StageTask) {
   if (task.pauseRequested) return "暂停待确认";
@@ -19,10 +20,15 @@ export function TaskPanel({ task, data, local, refresh, close, navigate }: {
   const [summary, setSummary] = useState(""), [reportKind, setReportKind] = useState<"progress" | "blocked" | "ready">("progress");
   const [reportRevision, setReportRevision] = useState(task.revision), [integrationConfirmed, setIntegrationConfirmed] = useState(false);
   const [completeConfirm, setCompleteConfirm] = useState(false), [stopped, setStopped] = useState(false);
+  useEffect(() => { setStopped(false); }, [task.pendingChangeId]);
   const ready = data.coordination?.readiness[task.id];
   const owner = data.nodes.find(node => node.id === task.assigneeNodeId);
   const contracts = data.contracts.filter(contract => contract.stageId === task.stageId && contract.status !== "SUPERSEDED" && (contract.providerTaskId === task.id || contract.consumerTaskIds.includes(task.id)));
   const external = task.executionMode === "external";
+  const pendingChange = data.coordination?.changes.find(change => change.id === task.pendingChangeId);
+  const latestChange = pendingChange ?? data.coordination?.changes.filter(change => change.status === "APPLIED" && change.taskChanges?.some(item => item.taskId === task.id))
+    .sort((a, b) => (b.decidedAt ?? "").localeCompare(a.decidedAt ?? ""))[0];
+  const taskChange = latestChange?.taskChanges?.find(item => item.taskId === task.id);
   const canReport = external && ["IN_PROGRESS", "BLOCKED", "WAITING_INTEGRATION", "WAITING_CONFIRMATION"].includes(task.status) && !task.pendingChangeId;
   const copyPackage = () => action.run(async () => { const pack = await coordinationApi.taskPackage(task.id); await navigator.clipboard.writeText(pack.markdown); }, "执行包已复制");
   const start = () => action.run(async () => {
@@ -30,15 +36,19 @@ export function TaskPanel({ task, data, local, refresh, close, navigate }: {
     else await api.taskStart(task.id, task.revision, data.stages.find(stage => stage.id === task.stageId)?.requirementRevision);
     setStarting(false);
   }, mode === "external" ? "已确认自行开工" : "已请求 Codex 开工");
-  return <Sheet title={task.title} close={close} dirty={!!summary}>
+  return <Sheet title={task.title} wide={!!taskChange} close={close} dirty={!!summary}>
     <div className="wb-meta"><span>{owner?.label ?? "负责人"}</span><span className="wb-status">{taskLabel(task)}</span><span>任务 v{task.revision}</span></div>
     <Feedback error={action.error} notice={action.notice} />
     {!local && <p className="wb-message">当前为只读视图。请在本机运行 vibe-git open 操作。</p>}
     {task.pendingChangeId && <section className="wb-callout">
-      <h3>先确认这次变化</h3><p className="wb-preserve">{task.changeNotes?.at(-1) ?? "任务要求已更新，请重新阅读。"}</p>
+      <h3>先核对这次任务变化</h3><p>{pendingChange?.title ?? "任务要求已更新，请重新阅读。"}</p>
+      {taskChange && <><p className="wb-muted">{taskContentChanged(taskChange.before, taskChange.after) ? "左侧为原任务，右侧为已发布任务。红色标出修改行，减号表示删除，加号表示新增。" : "任务正文保持原样，本次修订了关联接口，请核对下方接口约定。"}</p>
+        <TaskChangeDiff before={taskChange.before} after={taskChange.after} beforeLabel={`原任务 · v${taskChange.beforeRevision}`} afterLabel={`已发布 · v${taskChange.afterRevision}`} />
+      </>}
       {task.pauseRequested && <label className="wb-check"><input type="checkbox" checked={stopped} onChange={event => setStopped(event.target.checked)} />我已停止旧版本任务的执行</label>}
-      {own && <button className="wb-primary" disabled={!local || action.busy || (task.pauseRequested && !stopped)} onClick={() => void action.run(() => coordinationApi.ackChange(task.id, task.revision, stopped), "已确认变化，可重新开工")}>确认新要求</button>}
+      {own && <button className="wb-primary" disabled={!local || action.busy || (task.pauseRequested && !stopped)} onClick={() => void action.run(() => coordinationApi.ackChange(task.id, task.revision, stopped), "已确认变化，可重新开工")}>已核对差异，确认新要求</button>}
     </section>}
+    {!task.pendingChangeId && taskChange && <details className="wb-disclosure"><summary>最近任务变化：{latestChange?.title}</summary><TaskChangeDiff before={taskChange.before} after={taskChange.after} beforeLabel={`原任务 · v${taskChange.beforeRevision}`} afterLabel={`已发布 · v${taskChange.afterRevision}`} /></details>}
     <section><h3>目标</h3><p className="wb-preserve">{task.goal}</p><h3>验收</h3><ul className="wb-acceptance">{task.acceptance.map((item, i) => <li key={i}>{item}</li>)}</ul></section>
     <section><h3>职责边界</h3><p className="wb-preserve">{task.boundary}</p>
       {!!task.brief?.excludedPaths.length && <p className="wb-muted">不修改：{task.brief.excludedPaths.join("、")}</p>}

@@ -1157,8 +1157,16 @@ export class V20Service {
 
   private failJob(job: AgentJob, error: string): AgentJob {
     const safeError = error.slice(0, 4_000);
-    if (job.kind === "ASSESS_CHANGE") { const failed: AgentJob = { ...job, status: "FAILED", error: safeError, leaseToken: null, updatedAt: now() }; this.repo.putJob(failed); this.coordination.failImpact(job, safeError); return failed; }
-    if (job.kind === "PLAN_INTENT") { const failed: AgentJob = { ...job, status: "FAILED", error: safeError, leaseToken: null, updatedAt: now() }; this.repo.putJob(failed); const alignment = this.repo.getAlignment(job.entityId); if (alignment?.agentJobId === job.id) this.repo.putAlignment({ ...alignment, status: "FAILED", error: safeError }); return failed; }
+    if (job.kind === "ASSESS_CHANGE") {
+      const failed: AgentJob = { ...job, status: "FAILED", error: safeError, leaseToken: null, updatedAt: now() };
+      this.repo.tx(() => { this.repo.putJob(failed); this.coordination.failImpact(job, safeError); this.event("job.failed", job.targetNodeId, "agent_job", job.id, { error: safeError }); });
+      return failed;
+    }
+    if (job.kind === "PLAN_INTENT") {
+      const failed: AgentJob = { ...job, status: "FAILED", error: safeError, leaseToken: null, updatedAt: now() };
+      this.repo.tx(() => { this.repo.putJob(failed); const alignment = this.repo.getAlignment(job.entityId); if (alignment?.agentJobId === job.id) this.repo.putAlignment({ ...alignment, status: "FAILED", error: safeError }); this.event("job.failed", job.targetNodeId, "agent_job", job.id, { error: safeError }); });
+      return failed;
+    }
     if (job.kind === "REVIEW_CHANGES" && /版本|重新取证/.test(safeError)) {
       const failed: AgentJob = { ...job, status: "FAILED", error: safeError, leaseToken: null, leaseExpiresAt: null, updatedAt: now() };
       this.repo.putJob(failed);

@@ -135,11 +135,63 @@
 .wb-file-button { position:relative; border:1px solid var(--line); border-radius:7px; padding:7px 12px; cursor:pointer; font-size:13px; }
 .wb-file-button input { position:absolute; width:1px; height:1px; opacity:0; }
 .wb-file-button:focus-within { outline:2px solid #67a6ff; outline-offset:3px; }
+.wb-ai-impact { padding:18px; border:1px solid #3c5878; border-radius:9px; background:#141e2c; box-shadow:inset 0 1px 0 #ffffff0b, 0 10px 28px #0002; }
+.wb-ai-impact-heading, .wb-ai-impact-heading>div { display:flex; align-items:center; gap:10px; }
+.wb-ai-impact-heading { justify-content:space-between; flex-wrap:wrap; gap:10px 14px; }
+.wb-ai-impact-heading h3 { margin:0; color:#eef5ff; }
+.wb-ai-impact-mark { width:8px; height:8px; flex:none; border-radius:2px; background:#83b9ff; box-shadow:0 0 0 4px #83b9ff20; }
+.wb-ai-impact-note { padding:2px 8px; border:1px solid #3d5b7f; border-radius:99px; color:#a7c9f4; font-size:11px; white-space:nowrap; }
+.wb-ai-impact-findings { margin:16px -18px -18px; }
+.wb-ai-impact-finding { padding:14px 18px 16px; border-top:1px solid #34465c; }
+.wb-ai-impact-finding-head { display:flex; justify-content:space-between; align-items:flex-start; gap:8px 12px; }
+.wb-ai-impact-finding strong { min-width:0; font-size:13px; font-weight:600; line-height:1.5; overflow-wrap:anywhere; }
+.wb-ai-impact-finding p { margin:7px 0 0; color:#c9d5e4; font-size:13px; line-height:1.6; white-space:pre-wrap; overflow-wrap:anywhere; }
+.wb-ai-impact-tag { flex:none; padding:2px 7px; border:1px solid; border-radius:4px; font-size:11px; line-height:1.45; white-space:nowrap; }
+.wb-ai-impact-tag--affected { color:#ffb6a8; border-color:#7f504c; background:#382825; }
+.wb-ai-impact-tag--unaffected { color:#96dfc2; border-color:#426c61; background:#1c302d; }
+.wb-ai-impact-tag--uncertain { color:#f1d599; border-color:#75623f; background:#342e23; }
+.wb-ai-impact-state { display:grid; justify-items:start; gap:12px; padding-top:14px; }
+.wb-ai-impact-state p, .wb-ai-impact-empty { margin:0; color:#c9d5e4; font-size:13px; overflow-wrap:anywhere; }
+.wb-ai-impact-empty { margin-top:14px; }
+.wb-sheet .wb-ai-impact-state button { border:1px solid #5278a4; background:#213650; color:#eef5ff; }
+.wb-sheet .wb-ai-impact-state button:hover:not(:disabled) { background:#2b4666; }
 .wb-impact-row { display:grid; grid-template-columns:minmax(0,1fr) 110px; align-items:center; gap:10px 16px; padding:14px 0; border-bottom:1px solid var(--line); }
 .wb-impact-row>div { display:grid; gap:4px; }
 .wb-impact-row strong { font-size:14px; font-weight:500; }
 .wb-impact-row>details { grid-column:1/-1; color:var(--muted); font-size:12px; }
 .wb-impact-row summary { cursor:pointer; }
+.wb-impact-row>.wb-impact-content { grid-column:1/-1; display:block; padding:16px; border:1px solid var(--line); border-radius:8px; background:var(--bg); }
+.wb-diff-title { display:flex; justify-content:space-between; align-items:center; gap:12px; }
+.wb-diff-title { margin-bottom:14px; }
+.wb-diff-title h4 { margin:0; font-size:13px; font-weight:500; }
+.wb-diff-required { color:#ffb3bd; font-size:13px; line-height:1.6; overflow-wrap:anywhere; }
+.wb-task-diff { margin:14px 0; overflow-x:auto; border:1px solid var(--line); border-radius:7px; background:var(--panel); }
+.wb-task-diff:focus-visible { outline:2px solid #67a6ff; outline-offset:3px; }
+.wb-split-diff { table-layout:fixed; border-collapse:collapse; width:100%; min-width:720px; font-size:12px; line-height:1.7; }
+.wb-diff-gutter { width:38px; }
+.wb-diff-symbol { width:20px; }
+.wb-split-diff th { padding:10px 12px; text-align:left; font-weight:500; background:var(--surface); }
+.wb-split-diff thead th { color:var(--text); border-bottom:1px solid var(--line); }
+.wb-split-diff .wb-diff-divider { border-right:1px solid var(--line); }
+.wb-diff-section th { padding:7px 12px; color:var(--muted); background:#1c2230; border-top:1px solid var(--line); border-bottom:1px solid var(--line); }
+.wb-diff-section span { margin-left:10px; font-family:Consolas,monospace; color:#ffb3bd; }
+.wb-diff-section small { float:right; font-size:11px; font-weight:400; }
+.wb-diff-cell { padding:3px 0; vertical-align:top; }
+.wb-diff-number, .wb-diff-sign { color:var(--muted); font-family:Consolas,monospace; font-variant-numeric:tabular-nums; user-select:none; }
+.wb-diff-number { padding-left:4px; padding-right:7px; text-align:right; }
+.wb-diff-sign { text-align:center; }
+.wb-diff-code { padding-right:12px; white-space:pre-wrap; overflow-wrap:anywhere; }
+.wb-diff-cell--removed, .wb-diff-cell--added { background:#ff617719; }
+.wb-diff-cell--removed.wb-diff-sign, .wb-diff-cell--added.wb-diff-sign { color:#ffb3bd; }
+.wb-diff-code mark { color:#ffd3d9; background:#ff617740; border-radius:2px; }
+.wb-diff-cell--gap { background:#191e28; }
+.wb-diff-empty { padding:8px 12px; color:var(--muted); }
+.wb-sr-only { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip-path:inset(50%); white-space:nowrap; border:0; }
+.wb-task-publications { margin:24px 0 32px; }
+.wb-impact-edit { margin-top:16px; border-top:1px solid var(--line); font-size:13px; }
+.wb-impact-edit>summary { padding:12px 0; color:var(--text); }
+.wb-applied-task-change { margin:18px 0 26px; }
+.wb-task-title>.wb-task-revised { color:#ffb3bd; }
 .wb-root button:focus-visible, .wb-sheet button:focus-visible, .wb-sheet summary:focus-visible, .wb-sheet input:focus-visible, .wb-sheet select:focus-visible, .wb-sheet textarea:focus-visible { outline:2px solid #67a6ff; outline-offset:3px; }
 @media (max-width:1000px) {
   .wb-content { padding:28px 24px 48px; }

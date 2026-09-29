@@ -86,7 +86,8 @@ describe("共享需求与可选执行", () => {
     const change = c.submitChange(member, { title: "暂停房间", content: "增加暂停", taskIds: [a.id], expectedRequirementRevision: 1 });
     const impact = c.impact(change.id);
     c.applyChange(captain, change.id, { expectedRevision: 1, expectedRequirementRevision: 1,
-      decisions: impact.tasks.map(item => ({ taskId: item.taskId, expectedRevision: item.revision, affected: item.taskId === a.id })) });
+      decisions: impact.tasks.map(item => ({ taskId: item.taskId, expectedRevision: item.revision, affected: item.taskId === a.id,
+        ...(item.taskId === a.id ? { update: { goal: "实现支持暂停的房间状态机", boundary: a.boundary, acceptance: [...a.acceptance, "主持人可以暂停房间"] } } : {}) })) });
     const revised = service.repo.getTask(a.id)!;
     expect(revised.status).toBe("IN_PROGRESS"); expect(revised.pauseRequested).toBe(true);
     expect(service.repo.getTask(b.id)).toEqual(b);
@@ -96,6 +97,74 @@ describe("共享需求与可选执行", () => {
     expect(ack.status).toBe("PUBLISHED"); expect(c.executionPackage(a.id).changes).toHaveLength(1);
     const report = c.reportExternal(member, b.id, { expectedRevision: b.revision, action: "ready", summary: "passed" });
     expect(c.finishExternal(member, b.id, report.revision).status).toBe("DONE");
+  });
+  it("只标记受影响、原样提交或空验收不能应用，失败时保留需求和任务", async () => {
+    const { c, captain, publish, service } = await setup();
+    const [room, report] = publish();
+    const change = c.submitChange(captain, { title: "暂停房间", content: "主持人可以暂停房间", taskIds: [room!.id], expectedRequirementRevision: 1 });
+    const decisions = c.impact(change.id).tasks.map(item => ({ taskId: item.taskId, expectedRevision: item.revision, affected: item.taskId === room!.id }));
+    const input = { expectedRevision: change.revision, expectedRequirementRevision: 1, decisions };
+    expect(() => c.applyChange(captain, change.id, input)).toThrow("还没有具体修订");
+    const update = { goal: room!.goal, boundary: room!.boundary, acceptance: room!.acceptance };
+    expect(() => c.applyChange(captain, change.id, { ...input, decisions: decisions.map(item => item.affected ? { ...item, update } : item) })).toThrow("还没有具体修订");
+    expect(() => c.applyChange(captain, change.id, { ...input, decisions: decisions.map(item => item.affected ? { ...item, update: { ...update, goal: "新增暂停能力", acceptance: [] } } : item) })).toThrow("修订验收");
+    expect(c.change(change.id).status).toBe("PENDING"); expect(service.repo.requirementRevision()).toBe(1);
+    expect(service.repo.getTask(room!.id)).toEqual(room); expect(service.repo.getTask(report!.id)).toEqual(report);
+  });
+  it("确认应用的是人工核对后的草稿，保存不可变对比，负责人确认和后续修订不丢失记录", async () => {
+    const { c, captain, member, publish, service, beat, app, captainToken } = await setup();
+    const [room, report] = publish();
+    const change = c.submitChange(member, { title: "暂停房间", content: "主持人可以暂停和恢复房间", taskIds: [room!.id], expectedRequirementRevision: 1 });
+    service.heartbeat(captain, { ...beat, codex: "available" });
+    const queued = c.suggestImpact(captain, change.id, change.revision), job = service.claimJob(captain)!;
+    expect(job.id).toBe(queued.suggestion!.jobId);
+    expect(JSON.stringify(job.payload.outputSchema)).toContain('"update"');
+    const draft = { goal: "实现支持暂停的状态机", boundary: room!.boundary, acceptance: ["状态测试通过", "主持人可暂停房间"] };
+    service.reportJob(captain, job.id, { leaseToken: job.leaseToken!, phase: "completed", result: { findings: [
+      { taskId: room!.id, impact: "affected", reason: "新增暂停状态", update: draft },
+      { taskId: report!.id, impact: "unaffected", reason: "报告不受影响", update: null }
+    ] } });
+    expect(c.change(change.id).suggestion!.findings[0]!.update).toEqual(draft);
+    expect(service.repo.getTask(room!.id)).toEqual(room);
+    const reviewed = { goal: "实现支持暂停与恢复的状态机", boundary: "只改 room，保留原有房间流程", acceptance: ["状态测试通过", "主持人可暂停并恢复房间", "普通成员不能修改暂停状态"] };
+    const impact = c.impact(change.id);
+    const appliedResponse = await app.inject({ method: "POST", url: `/api/v1/changes/${change.id}/apply`, headers: { authorization: `Bearer ${captainToken}` }, payload: {
+      expectedRevision: impact.changeRevision, expectedRequirementRevision: impact.requirementRevision,
+      decisions: impact.tasks.map(item => ({ taskId: item.taskId, expectedRevision: item.revision, affected: item.taskId === room!.id,
+        ...(item.taskId === room!.id ? { update: { ...reviewed, goal: `  ${reviewed.goal}  ` } } : {}) }))
+    } });
+    expect(appliedResponse.statusCode).toBe(200);
+    const snapshot = appliedResponse.json().taskChanges[0];
+    expect(snapshot).toEqual({ taskId: room!.id, title: room!.title, beforeRevision: room!.revision, afterRevision: room!.revision + 1,
+      before: { goal: room!.goal, boundary: room!.boundary, acceptance: room!.acceptance }, after: reviewed });
+    const revised = service.repo.getTask(room!.id)!;
+    expect(revised).toMatchObject(reviewed); expect(revised.brief?.deliverables).toEqual(reviewed.acceptance);
+    expect(c.executionPackage(room!.id)).toMatchObject(reviewed); expect(c.executionPackage(room!.id).markdown).toContain(reviewed.goal);
+    expect(service.repo.getTask(report!.id)).toEqual(report);
+    const ack = c.acknowledgeChange(captain, room!.id, { expectedRevision: revised.revision });
+    expect(ack).toMatchObject({ ...reviewed, pendingChangeId: null, status: "PUBLISHED" });
+    const next = c.submitChange(captain, { title: "暂停时长", content: "记录暂停时长", taskIds: [room!.id], expectedRequirementRevision: 2 });
+    const nextImpact = c.impact(next.id);
+    c.applyChange(captain, next.id, { expectedRevision: nextImpact.changeRevision, expectedRequirementRevision: 2,
+      decisions: nextImpact.tasks.map(item => ({ taskId: item.taskId, expectedRevision: item.revision, affected: item.taskId === room!.id,
+        ...(item.taskId === room!.id ? { update: { ...reviewed, acceptance: [...reviewed.acceptance, "记录每次暂停时长"] } } : {}) })) });
+    expect(c.change(change.id).taskChanges![0]).toEqual(snapshot);
+    expect(c.change(next.id).taskChanges![0]!.before).toEqual(reviewed);
+  });
+  it("只修订接口时允许相关任务正文保持原样，并拒绝未变化的接口", async () => {
+    const { c, captain, plan, publish, service } = await setup();
+    plan.contracts = [{ key: "api", providerTaskKey: "room", consumerTaskKeys: ["report"], kind: "http", name: "Room API", signature: "GET /rooms", behavior: ["返回房间"], examples: [], errors: [], testCommand: "npm test", handoff: "Git SHA" }];
+    const tasks = publish(), contract = service.repo.listContracts()[0]!;
+    const change = c.submitChange(captain, { title: "接口增加状态", content: "返回暂停状态", contractIds: [contract.id], expectedRequirementRevision: 1 });
+    const impact = c.impact(change.id), input = { expectedRevision: 1, expectedRequirementRevision: 1,
+      decisions: impact.tasks.map(item => ({ taskId: item.taskId, expectedRevision: item.revision, affected: true })) };
+    const update = { contractId: contract.id, expectedRevision: contract.revision, signature: contract.signature, behavior: contract.behavior, testCommand: contract.testCommand };
+    expect(() => c.applyChange(captain, change.id, { ...input, contractUpdates: [update] })).toThrow("尚未修改");
+    const applied = c.applyChange(captain, change.id, { ...input, contractUpdates: [{ ...update, behavior: ["返回房间和暂停状态"] }] });
+    expect(applied.taskChanges).toHaveLength(2);
+    for (const snapshot of applied.taskChanges!) expect(snapshot.after).toEqual(snapshot.before);
+    expect(service.repo.getContract(contract.id)).toMatchObject({ behavior: ["返回房间和暂停状态"], revision: 2, status: "DRAFT", acknowledgedNodeIds: [] });
+    for (const task of tasks) expect(service.repo.getTask(task.id)).toMatchObject({ goal: task.goal, boundary: task.boundary, acceptance: task.acceptance, pendingChangeId: change.id });
   });
   it("影响不明确时要求人工确认；重复应用和旧需求上的审核被拒绝", async () => {
     const { c, captain, publish } = await setup(); publish();
@@ -131,8 +200,8 @@ describe("共享需求与可选执行", () => {
     const claimed = service.claimJob(captain)!;
     expect(claimed.id).toBe(job.id);
     service.reportJob(captain, job.id, { leaseToken: claimed.leaseToken!, phase: "completed", result: { findings: [
-      { taskId: room!.id, impact: "affected", reason: "变更直接改写房间状态规则" },
-      { taskId: report!.id, impact: "unaffected", reason: "报告生成不依赖暂停行为" }
+      { taskId: room!.id, impact: "affected", reason: "变更直接改写房间状态规则", update: { goal: "实现支持暂停的房间状态机", boundary: room!.boundary, acceptance: [...room!.acceptance, "主持人可以暂停房间"] } },
+      { taskId: report!.id, impact: "unaffected", reason: "报告生成不依赖暂停行为", update: null }
     ] } });
     expect(c.impact(change.id).tasks.find(item => item.taskId === room!.id)?.suggested).toBe(true);
     expect(service.repo.getTask(room!.id)?.status).toBe("PUBLISHED");
@@ -146,6 +215,44 @@ describe("共享需求与可选执行", () => {
     ] } });
     expect(outcome.status).toBe("FAILED"); expect(c.change(second.id).suggestion?.status).toBe("FAILED");
     expect(service.repo.getTask(room!.id)?.pendingChangeId).toBeUndefined();
+  });
+  it("AI 草稿无实际变化或任务范围改变时拒绝结果，不修改正式任务", async () => {
+    for (const changedScope of [false, true]) {
+      const { c, captain, publish, service, beat } = await setup();
+      const [room, report] = publish();
+      const change = c.submitChange(captain, { title: "暂停房间", content: "支持暂停", taskIds: [room!.id], expectedRequirementRevision: 1 });
+      service.heartbeat(captain, { ...beat, codex: "available" });
+      c.suggestImpact(captain, change.id, change.revision); const job = service.claimJob(captain)!;
+      if (changedScope) service.repo.putTask({ ...report!, archived: true });
+      const result = service.reportJob(captain, job.id, { leaseToken: job.leaseToken!, phase: "completed", result: { findings: [
+        { taskId: room!.id, impact: "affected", reason: "支持暂停", update: { goal: room!.goal, boundary: room!.boundary, acceptance: room!.acceptance } },
+        { taskId: report!.id, impact: "unaffected", reason: "报告不变", update: null }
+      ] } });
+      expect(result.status).toBe("FAILED"); expect(result.error).toContain(changedScope ? "任务范围已变化" : "具体变化");
+      expect(c.change(change.id).suggestion!.status).toBe("FAILED"); expect(service.repo.getTask(room!.id)).toEqual(room);
+    }
+  });
+
+  it("需求规划或影响建议失败时发布事件，页面能结束分析中状态", async () => {
+    const planning = await setup();
+    planning.service.heartbeat(planning.captain, { ...planning.beat, codex: "available" });
+    const alignment = planning.c.generate(planning.captain, planning.intent.id, planning.intent.revision);
+    const planJob = planning.service.claimJob(planning.captain)!;
+    const planSeq = planning.service.repo.lastSeq();
+    planning.service.reportJob(planning.captain, planJob.id, { leaseToken: planJob.leaseToken!, phase: "failed", error: "模型暂不可用" });
+    expect(planning.service.repo.getAlignment(alignment.id)?.status).toBe("FAILED");
+    expect(planning.service.repo.eventsSince(planSeq)).toEqual(expect.arrayContaining([expect.objectContaining({ type: "job.failed", entityId: planJob.id })]));
+
+    const impact = await setup();
+    impact.publish();
+    impact.service.heartbeat(impact.captain, { ...impact.beat, codex: "available" });
+    const change = impact.c.submitChange(impact.member, { title: "测试变更", content: "仅验证建议流程", expectedRequirementRevision: 1 });
+    impact.c.suggestImpact(impact.captain, change.id, change.revision);
+    const impactJob = impact.service.claimJob(impact.captain)!;
+    const impactSeq = impact.service.repo.lastSeq();
+    impact.service.reportJob(impact.captain, impactJob.id, { leaseToken: impactJob.leaseToken!, phase: "failed", error: "模型暂不可用" });
+    expect(impact.c.change(change.id).suggestion?.status).toBe("FAILED");
+    expect(impact.service.repo.eventsSince(impactSeq)).toEqual(expect.arrayContaining([expect.objectContaining({ type: "job.failed", entityId: impactJob.id })]));
   });
 
 });

@@ -47,7 +47,7 @@ async function finishJob(app: App, service: V20Service, tokens: Map<string, stri
   expect(response.statusCode, response.body).toBe(200);
   return service.repo.getJob(queued.id)!;
 }
-async function richAlignment(ctx: Awaited<ReturnType<typeof setup>>) {
+async function richAlignment(ctx: Pick<Awaited<ReturnType<typeof setup>>, "app" | "captain" | "member" | "service">) {
   const { app, captain, member, service } = ctx;
   const tokens = new Map([[captain.nodeId, captain.nodeToken], [member.node.id, member.nodeToken]]);
   await post(app, member.nodeToken, "/api/v1/plans", { filename: "feature.md", content: "# 需求\n提供核心接口与 UI，要求可测试" });

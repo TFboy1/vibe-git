@@ -27,12 +27,20 @@ export interface TaskExecutionPackage {
   ownedPaths: string[]; excludedPaths: string[]; progress: string;
   changes: string[]; nextStep: string; markdown: string;
 }
+export interface TaskChangeContent {
+  goal: string; boundary: string; acceptance: string[];
+}
+export interface TaskChangeSnapshot {
+  taskId: string; title: string; beforeRevision: number; afterRevision: number;
+  before: TaskChangeContent; after: TaskChangeContent;
+}
 export interface CoordinationChange {
-  suggestion?: { jobId: string; status: "QUEUED" | "READY" | "FAILED"; error: string | null; taskRevisions: Record<string, number>; findings: Array<{ taskId: string; impact: "affected" | "unaffected" | "uncertain"; reason: string }> };
+  suggestion?: { jobId: string; status: "QUEUED" | "READY" | "FAILED"; error: string | null; taskRevisions: Record<string, number>; findings: Array<{ taskId: string; impact: "affected" | "unaffected" | "uncertain"; reason: string; update?: TaskChangeContent | null }> };
   id: string; title: string; content: string; submitterNodeId: string; stageId: string;
   baseRequirementRevision: number; revision: number; status: "PENDING" | "APPLIED" | "REJECTED";
   taskIds: string[]; contractIds: string[]; requirementRefs: string[];
   createdAt: string; decidedAt: string | null; affectedTaskIds: string[];
+  taskChanges?: TaskChangeSnapshot[];
 }
 export interface ChangeImpact {
   changeId: string; changeRevision: number; requirementRevision: number;
@@ -47,7 +55,7 @@ export interface ExternalTaskReport {
 }
 export interface ApplyCoordinationChange {
   expectedRevision: number; expectedRequirementRevision: number;
-  decisions: Array<{ taskId: string; expectedRevision: number; affected: boolean; update?: { goal: string; boundary: string; acceptance: string[] } }>;
+  decisions: Array<{ taskId: string; expectedRevision: number; affected: boolean; update?: TaskChangeContent }>;
   contractUpdates?: Array<{ contractId: string; expectedRevision: number; signature: string; behavior: string[]; testCommand: string }>;
 }
 export type QuickAlignment = AlignmentRun & { quickIntentId: string; quickIntentRevision: number; quickPlan: QuickPlanInput };

@@ -8,6 +8,7 @@ import { TaskPanel, taskLabel } from "./TaskPanel";
 import { IntentComposer } from "./IntentComposer";
 import { PlanEditor } from "./PlanEditor";
 import { ChangeComposer, ChangePanel } from "./ChangePanel";
+import { TaskChangePublisher } from "./TaskChangePublisher";
 import { Empty, Feedback, Sheet, useAction } from "./shared";
 
 const getPanel = () => new URLSearchParams(location.search).get("item") ?? "";
@@ -25,6 +26,7 @@ export function Workbench({ data, local, connected, refresh, view, openLegacy }:
   const currentStage = activeStage ?? data.stages.at(-1);
   const currentIntent = coordination?.intents.find(intent => intent.publishedStageId === currentStage?.id);
   const intents = (coordination?.intents ?? []).filter(intent => !intent.publishedStageId).slice().reverse();
+  const pendingTaskChanges = (coordination?.changes ?? []).filter(change => change.status === "PENDING" && change.stageId === activeStage?.id).slice().reverse();
   const title = currentIntent?.title ?? currentStage?.requirementMarkdown.match(/^#\s+(.+)$/m)?.[1] ?? "当前需求";
   const switchScope = (value: string) => { setScope(value); try { localStorage.setItem(scopeKey, value); } catch {} };
   const navigate = (next: string, replace = false) => {
@@ -47,9 +49,10 @@ export function Workbench({ data, local, connected, refresh, view, openLegacy }:
   const counts = { ready: tasks.filter(task => group(task) === "可开工").length, running: tasks.filter(task => ["IN_PROGRESS", "STARTING", "PREPARING_MOCK"].includes(task.status) && !task.pendingChangeId).length };
   const taskRow = (task: StageTask) => {
     const rowGroup = group(task), own = task.assigneeNodeId === data.viewer.id;
+    const taskChange = coordination?.changes.find(change => change.id === task.pendingChangeId)?.taskChanges?.find(item => item.taskId === task.id);
     const reason = rowGroup === "等待" ? task.blockedReason ?? coordination?.readiness[task.id]?.reasons.filter(reason => !reason.includes("当前状态")).join("；") : task.pauseRequested ? "请确认旧版本执行已停止" : "";
     return <div className="wb-task-row" key={task.id}>
-      <button className="wb-task-title" onClick={() => navigate(`task:${task.id}`)}><strong>{task.title}</strong>{reason && <span>{reason}</span>}</button>
+      <button className="wb-task-title" onClick={() => navigate(`task:${task.id}`)}><strong>{task.title}</strong>{task.pendingChangeId && <span className="wb-task-revised">要求已更新{taskChange ? ` · v${taskChange.beforeRevision} → v${taskChange.afterRevision}` : ""} · 查看差异</span>}{reason && <span>{reason}</span>}</button>
       <span className="wb-owner">{data.nodes.find(node => node.id === task.assigneeNodeId)?.label ?? "未知成员"}</span>
       <span className={`wb-status ${rowGroup === "可开工" ? "ready" : rowGroup === "进行中" ? "running" : rowGroup === "等待" || task.pendingChangeId ? "waiting" : ""}`}><i aria-hidden="true" />{rowGroup === "可开工" ? "可开工" : taskLabel(task)}</span>
       <button className="wb-row-action" onClick={() => navigate(`task:${task.id}`)}>{own && rowGroup === "可开工" ? "开工" : own && rowGroup === "待我处理" ? "处理" : "查看"}<ArrowRight size={14} /></button>
@@ -60,12 +63,36 @@ export function Workbench({ data, local, connected, refresh, view, openLegacy }:
   const selectedAlignment = panel.startsWith("plan:") ? data.alignments.find(alignment => alignment.id === panel.slice(5)) : undefined;
   const planningIntent = selectedAlignment ? coordination?.intents.find(intent => intent.id === selectedAlignment.quickIntentId) : panel.startsWith("import:") ? coordination?.intents.find(intent => intent.id === panel.slice(7)) : undefined;
   const selectedChange = panel.startsWith("change:") ? coordination?.changes.find(change => change.id === panel.slice(7)) : undefined;
+  const selectedPublication = panel.startsWith("publish-change:") ? coordination?.changes.find(change => change.id === panel.slice(15)) : undefined;
   const changes = (coordination?.changes ?? []).filter(change => {
     if (changeFilter === "pending") return change.status === "PENDING";
-    if (changeFilter === "mine") return change.submitterNodeId === data.viewer.id || [...change.taskIds, ...change.affectedTaskIds].some(id => data.tasks.find(task => task.id === id)?.assigneeNodeId === data.viewer.id) || change.contractIds.some(id => {
-      const contract = data.contracts.find(contract => contract.id === id); return contract && [contract.providerTaskId, ...contract.consumerTaskIds].some(id => data.tasks.find(task => task.id === id)?.assigneeNodeId === data.viewer.id);
+    if (changeFilter !== "mine") return true;
+    if (change.submitterNodeId === data.viewer.id) return true;
+
+    const mine = new Set(data.tasks.filter(task => task.assigneeNodeId === data.viewer.id).map(task => task.id));
+    const relatedTaskIds = new Set([...change.taskIds, ...change.affectedTaskIds]);
+    change.contractIds.forEach(id => {
+      const contract = data.contracts.find(item => item.id === id);
+      if (contract) [contract.providerTaskId, ...contract.consumerTaskIds].forEach(taskId => relatedTaskIds.add(taskId));
     });
-    return true;
+    if (change.suggestion?.status === "READY") {
+      change.suggestion.findings.filter(finding => finding.impact !== "unaffected").forEach(finding => relatedTaskIds.add(finding.taskId));
+    }
+    data.tasks.filter(task => (task.brief?.requirementRefs ?? []).some(ref => change.requirementRefs.includes(ref)))
+      .forEach(task => relatedTaskIds.add(task.id));
+
+    // 与影响分析保持一致：上游任务受影响时，依赖它的下游任务也需要看到这条变更。
+    let expanded = true;
+    while (expanded) {
+      expanded = false;
+      data.tasks.forEach(task => {
+        if (!relatedTaskIds.has(task.id) && task.dependencies.some(id => relatedTaskIds.has(id))) {
+          relatedTaskIds.add(task.id);
+          expanded = true;
+        }
+      });
+    }
+    return [...relatedTaskIds].some(taskId => mine.has(taskId));
   }).slice().reverse();
   return <div className="wb-root"><div className="wb-content">
     {!connected && <div className="wb-message wb-warning" role="status">连接中断，状态可能过期。<button onClick={() => void refresh()}>重试</button></div>}
@@ -90,6 +117,11 @@ export function Workbench({ data, local, connected, refresh, view, openLegacy }:
           })}
         </>}
       </section>}
+      {captain && pendingTaskChanges.length > 0 && <section className="wb-task-publications"><div className="wb-section-heading"><h2>待发布的任务变更<span>{pendingTaskChanges.length}</span></h2></div>
+        {pendingTaskChanges.map(change => <div className="wb-intent-row" key={change.id}><div><button className="wb-task-title" onClick={() => navigate(`change:${change.id}`)}><strong>{change.title}</strong></button><span className="wb-muted">需求 v{change.baseRequirementRevision} · {change.suggestion?.status === "QUEUED" ? "正在分析影响" : change.suggestion?.status === "READY" ? "影响分析已就绪" : "待核对任务"}</span></div>
+          <button onClick={() => navigate(`publish-change:${change.id}`)}>核对并发布<ArrowRight size={14} /></button>
+        </div>)}
+      </section>}
       {tasks.length > 0 && <><div className="wb-list-toolbar"><div className="wb-segment" aria-label="任务范围"><button aria-pressed={scope === "mine"} onClick={() => switchScope("mine")}>我的任务</button><button aria-pressed={scope === "all"} onClick={() => switchScope("all")}>全队</button></div>
         <label className="wb-search"><Search size={15} /><input aria-label="搜索任务" placeholder="搜索任务" value={query} onChange={event => setQuery(event.target.value)} /></label></div>
         {!visible.length && <Empty title={query ? "没有匹配的任务" : "暂时没有分配给你的任务"}>{!query && <button onClick={() => switchScope("all")}>查看全队</button>}</Empty>}
@@ -111,7 +143,8 @@ export function Workbench({ data, local, connected, refresh, view, openLegacy }:
     {(panel === "new-intent" || selectedIntent) && <IntentComposer key={selectedIntent?.id ?? "new"} intent={selectedIntent} local={writable && (!selectedIntent || captain || selectedIntent.ownerNodeId === data.viewer.id)} refresh={refresh} close={close} saved={() => close()} />}
     {planningIntent && <PlanEditor key={selectedAlignment?.id ?? planningIntent.id} intent={planningIntent} alignment={selectedAlignment} data={data} local={writable} refresh={refresh} close={close} saved={id => navigate(`plan:${id}`, true)} />}
     {panel === "new-change" && <ChangeComposer data={data} local={writable} refresh={refresh} close={close} />}
-    {selectedChange && <ChangePanel key={selectedChange.id} change={selectedChange} data={data} local={writable} refresh={refresh} close={close} taskOpen={id => navigate(`task:${id}`)} />}
+    {selectedChange && <ChangePanel key={selectedChange.id} change={selectedChange} data={data} local={writable} refresh={refresh} close={close} taskOpen={id => navigate(`task:${id}`)} publish={() => navigate(`publish-change:${selectedChange.id}`)} />}
+    {selectedPublication && <TaskChangePublisher key={selectedPublication.id} change={selectedPublication} data={data} local={writable} refresh={refresh} close={close} taskOpen={id => navigate(`task:${id}`)} changeOpen={() => navigate(`change:${selectedPublication.id}`)} />}
     {panel === "requirement" && currentStage && <Sheet title="当前需求" wide close={close}><div className="wb-meta">需求 v{currentStage.requirementRevision}</div><Markdown>{currentStage.requirementMarkdown}</Markdown></Sheet>}
   </div>;
 }
