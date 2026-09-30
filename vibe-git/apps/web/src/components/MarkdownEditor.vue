@@ -10,8 +10,8 @@ import { linkTooltip } from "@milkdown/crepe/feature/link-tooltip";
 import { table } from "@milkdown/crepe/feature/table";
 import { replaceAll } from "@milkdown/utils";
 import Icon from "./Icon.vue";
-const props = withDefaults(defineProps<{ modelValue: string; readonly?: boolean; filename?: string; outline?: boolean; compact?: boolean }>(),
-  { readonly: false, filename: "requirements.md", outline: true, compact: false });
+const props = withDefaults(defineProps<{ modelValue: string; readonly?: boolean; filename?: string; outline?: boolean; compact?: boolean; tools?: boolean }>(),
+  { readonly: false, filename: "requirements.md", outline: true, compact: false, tools: true });
 const emit = defineEmits<{ "update:modelValue": [value: string]; error: [value: string] }>();
 const root = ref<HTMLElement>(), file = ref<HTMLInputElement>(), loading = ref(true);
 const headings = ref<Array<{ title: string; level: number; id: string }>>([]);
@@ -66,7 +66,7 @@ function jump(id: string) { root.value?.querySelector("#" + id)?.scrollIntoView(
 <template>
   <div class="markdown-workspace" :class="{ compact, 'without-outline': !outline }">
     <div class="markdown-main">
-      <div class="editor-tools"><span class="muted small-text">{{ readonly ? 'Markdown 文档' : '直接编辑正文 · 支持 Markdown 快捷输入' }}</span><div>
+      <div v-if="tools" class="editor-tools"><span class="muted small-text">{{ readonly ? 'Markdown 文档' : '直接编辑正文 · 支持 Markdown 快捷输入' }}</span><div>
         <button v-if="!readonly" class="btn quiet small" @click="file?.click()"><Icon name="upload" :size="15" /> 导入 MD</button>
         <button class="btn quiet small" @click="download"><Icon name="download" :size="15" /> 导出 MD</button>
         <input ref="file" type="file" accept=".md,text/markdown" class="sr-only" aria-label="导入 Markdown" @change="importFile" />

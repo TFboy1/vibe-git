@@ -3,12 +3,11 @@ import { computed, ref, watch } from "vue";
 import { useRoute } from "vue-router";
 import type { MarkdownDocument } from "@vibe-git/protocol";
 import { useWorkspace } from "../store";
-import { request } from "../api";
 import MarkdownEditor from "../components/MarkdownEditor.vue";
 import PlanWizard from "../components/PlanWizard.vue";
 import FlowStatus from "../components/FlowStatus.vue";
 import Icon from "../components/Icon.vue";
-const store = useWorkspace(), name = ref(store.data?.viewer.label ?? ""), selected = ref("mine"), value = ref(""), skip = ref<string[]>([]), invitation = ref("");
+const store = useWorkspace(), selected = ref("mine"), value = ref(""), skip = ref<string[]>([]);
 const route = useRoute();
 watch(() => route.query.plan, id => { if (typeof id === "string") selected.value = id === store.data?.viewer.id ? "mine" : id; }, { immediate: true });
 const current = computed(() => store.data?.plans.find(plan => plan.ownerNodeId === store.data?.viewer.id));
@@ -35,23 +34,12 @@ async function submit() {
   if (saved) { value.value = saved.content; lastRevision = saved.revision; try { localStorage.removeItem(cacheKey.value); } catch { /* no persistent cache */ } }
 }
 function createPlan() { edit("# 我的计划\n\n## 目标\n\n说明希望解决的问题。\n\n## 范围\n\n写下本轮要完成的内容。\n\n## 验收\n\n- 如何确认这轮工作完成？\n"); }
-async function invite() {
-  const result = await store.perform(() => request<{ command: string }>("/api/v1/invite"));
-  if (!result) return;
-  invitation.value = result.command;
-  try { await navigator.clipboard.writeText(result.command); store.notice = "邀请命令已复制，请发给你的队友"; }
-  catch { store.notice = "已生成邀请命令，可以在下方手动复制"; }
-}
-async function rename() {
-  await store.mutate("/api/v1/agile/profile", { label: name.value }, "显示名字已更新", "PUT");
-}
 </script>
 <template>
-  <div class="intro-line"><p>先把每个人的想法放在一起。<span>计划可以简短，但请写清目标、范围和验收。</span></p><button v-if="store.canManage" class="btn" :disabled="store.busy" @click="invite"><Icon name="link" /> 邀请队友</button></div>
-  <div v-if="invitation" class="invite-command"><code>{{ invitation }}</code><p>队友运行邀请命令连接自己的项目，再运行 vibe-git open。邀请仅发送给预期成员。</p><button class="icon-btn" aria-label="收起邀请命令" @click="invitation = ''"><Icon name="close" :size="16" /></button></div>
+  <div class="intro-line"><p>先把每个人的想法放在一起。<span>计划可以简短，但请写清目标、范围和验收。</span></p></div>
   <FlowStatus v-if="initialFlow" :flow="initialFlow" />
   <PlanWizard v-if="initialFlow" :flow="initialFlow" />
-  <div v-if="initialFlow && ['DRAFT', 'READY'].includes(initialFlow.status)" class="next-action"><div><strong>{{ initialFlow.status === 'READY' ? '分工草稿已经准备好。' : '共同需求已经写成文档。' }}</strong><p>{{ initialFlow.status === 'READY' ? '审核负责人、目标和验收后即可派发。' : '队长可以直接编辑正文，确认后开始分工。' }}</p></div><RouterLink class="btn primary" :to="initialFlow.status === 'READY' ? '/tasks' : '/requirements'">{{ initialFlow.status === 'READY' ? '查看分工' : '查看需求文档' }}<Icon name="arrow" /></RouterLink></div>
+  <div v-if="initialFlow && ['DRAFT', 'READY'].includes(initialFlow.status)" class="next-action"><div><strong>{{ initialFlow.status === 'READY' ? '分工草稿已经准备好。' : '共同需求已经写成文档。' }}</strong><p>{{ initialFlow.status === 'READY' ? '审核负责人、目标和验收后即可派发。' : '队长可以直接编辑正文，确认后开始分工。' }}</p></div><RouterLink class="btn primary" :to="initialFlow.status === 'READY' ? '/projects' : '/requirements'">{{ initialFlow.status === 'READY' ? '查看分工' : '查看需求文档' }}<Icon name="arrow" /></RouterLink></div>
   <div class="room-grid">
     <section class="paper plans-paper">
       <header class="section-head"><div><span class="eyebrow">PERSONAL PLAN / 个人计划</span><h2>{{ selected === 'mine' ? store.data?.room.requirementRevision ? '你的个人计划' : '你的第一轮计划' : store.name(selected) + '的计划' }}</h2></div><button v-if="selected === 'mine' && canSubmit && !current && !value.trim()" class="btn small" @click="createPlan"><Icon name="plus" :size="15" />开始创建计划</button><span v-else-if="selected === 'mine'" class="tag" :class="{ mint: current && !dirty }">{{ current ? dirty ? '有未提交修改' : '已提交 · v' + current.revision : '待提交' }}</span></header>
@@ -62,7 +50,6 @@ async function rename() {
     </section>
     <aside class="room-aside">
       <section class="team-panel"><header class="section-head"><span class="eyebrow">THE TEAM</span><span class="count">{{ store.data?.nodes.length }}</span></header><h2>一起开工的人</h2><div v-for="node in store.data?.nodes" :key="node.id" class="member-row"><span class="avatar" :class="{ captain: node.role === 'captain' }">{{ node.label.slice(0, 1).toUpperCase() }}</span><div><strong>{{ node.label }}<small>{{ node.role === 'captain' ? '队长' : node.id.slice(-4) }}</small></strong><span><i class="presence" :class="{ online: node.connected }"></i>{{ node.connected ? '在线' : '离线' }} · {{ store.data?.plans.some(plan => plan.ownerNodeId === node.id) ? '计划已提交' : '等待计划' }}</span><label v-if="store.canManage && !store.flow && !store.data?.room.requirementRevision && missing.some(n => n.id === node.id)" class="inline-check skip-label"><input v-model="skip" :value="node.id" type="checkbox" /> 本轮暂不参与</label></div><Icon v-if="store.data?.plans.some(plan => plan.ownerNodeId === node.id)" name="check" :size="15" /></div>
-        <form v-if="store.local && store.data?.agile" class="profile-form" @submit.prevent="rename"><label class="field">你的显示名字<input v-model="name" class="input" maxlength="40" placeholder="队友怎么称呼你" /></label><button class="text-button" :disabled="store.busy || name.trim() === store.data?.viewer.label || !name.trim()">保存名字 <Icon name="arrow" :size="13" /></button></form>
       </section>
       <section v-if="!store.data?.room.requirementRevision && !store.flow" class="round-action"><span class="eyebrow">NEXT UP</span><h3>{{ missing.filter(n => !skip.includes(n.id)).length ? '等想法到齐。' : '开始找出共同方向。' }}</h3><p>{{ missing.filter(n => !skip.includes(n.id)).length ? '收齐本轮参与者的计划后，队长启动整合。暂时不能参与的人可以明确跳过。' : 'AI 会整理所有计划，只为真实冲突提问，由队长统一确认。' }}</p><button v-if="store.canManage && store.data?.agile?.enabled" class="btn primary full-width" :disabled="store.busy || missing.some(n => !skip.includes(n.id)) || skip.length === store.data?.nodes.length" @click="store.mutate('/api/v1/agile/initial', { expectedRequirementRevision: 0, skipMissingNodeIds: skip })">整合本轮计划 <Icon name="arrow" /></button></section>
       <div v-if="store.flow?.kind === 'review'" class="round-action"><span class="eyebrow">REVIEW IN PROGRESS</span><h3>正在审核需求变更</h3><p>本轮个人计划已保留，修订将在需求变更页统一处理。</p><RouterLink to="/changes" class="text-button">查看审核 <Icon name="arrow" :size="14" /></RouterLink></div>

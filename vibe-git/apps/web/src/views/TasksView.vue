@@ -1,19 +1,21 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
 import { useRoute } from "vue-router";
-import type { StageTask, TaskExecutionPackage } from "@vibe-git/protocol";
+import type { TaskExecutionPackage } from "@vibe-git/protocol";
 import { useWorkspace } from "../store";
 import { request } from "../api";
 import { taskStatus } from "../team";
-import TaskAllocation from "../components/TaskAllocation.vue";
 import MarkdownEditor from "../components/MarkdownEditor.vue";
 import FlowStatus from "../components/FlowStatus.vue";
 import Icon from "../components/Icon.vue";
 const store = useWorkspace(), filter = ref("active"), selected = ref(""), pack = ref<TaskExecutionPackage | null>(null), loading = ref(false), detailError = ref("");
 const route = useRoute();
 const statusNames = taskStatus;
+const query = computed(() => typeof route.query.q === "string" ? route.query.q.trim().toLowerCase() : "");
 const all = computed(() => [...(store.data?.tasks ?? []), ...(store.data?.agile?.archivedTasks ?? [])].filter(task => store.captain || task.assigneeNodeId === store.data?.viewer.id));
-const filtered = computed(() => all.value.filter(task => filter.value === "archive" ? task.archived : !task.archived && (filter.value === "done" ? task.status === "DONE" : filter.value === "all" || task.status !== "DONE")));
+const filtered = computed(() => all.value.filter(task =>
+  (filter.value === "archive" ? task.archived : !task.archived && (filter.value === "done" ? task.status === "DONE" : task.status !== "DONE")) &&
+  (!query.value || [task.id, task.title, task.goal, task.progressSummary, store.name(task.assigneeNodeId)].join(" ").toLowerCase().includes(query.value))));
 const task = computed(() => all.value.find(task => task.id === selected.value));
 const content = computed(() => task.value?.archived ? ["# " + task.value.title, "此任务在需求修订后归档。原记录保留。", "## 原目标", task.value.goal, "## 原边界", task.value.boundary,
   "## 验收", task.value.acceptance.map(v => "- " + v).join("\n"), "## 进度与证据", task.value.progressSummary ?? "", ...(task.value.reportEvidence ?? []).map(r => r.summary + "\n" + r.evidence.join("\n"))].join("\n\n") : pack.value?.markdown ?? "");
@@ -34,12 +36,12 @@ watch(() => [selected.value, task.value?.packageRevision, task.value?.revision, 
 </script>
 <template>
   <div class="intro-line"><p>{{ store.captain ? '让每个人拿到清楚、可执行的工作。' : '你的目标、边界和验收都在这里。' }}<span>{{ store.captain ? '先审核分工，再统一派发。' : '通过 Vibe-Git Skill 向开发 AI 传达开工和进度即可。' }}</span></p><span v-if="store.data?.room.requirementRevision" class="tag mint">当前需求 R{{ store.data.room.requirementRevision }}</span></div>
-  <FlowStatus v-if="store.flow" :flow="store.flow" />
-  <TaskAllocation v-if="store.canManage && store.flow?.status === 'READY'" :flow="store.flow" />
+  <FlowStatus v-if="store.flow" :flow="store.flow" readonly />
+  <div v-if="store.canManage && store.flow?.status === 'READY'" class="next-action"><div><strong>分工草稿已就绪</strong><p>任务包视图保留已派发记录；新分工在任务看板审核并派发。</p></div><RouterLink :to="{ path: '/projects', query: query ? { q: route.query.q } : {} }" class="btn">查看分工 <Icon name="arrow" :size="15" /></RouterLink></div>
   <section v-else-if="!all.length" class="paper empty-state large"><span class="empty-number">03</span><h2>{{ store.flow?.draftMarkdown ? '确认需求后，再开始分工。' : '任务包将在队长派发后到达。' }}</h2><p>{{ store.captain ? '先审核完整的需求 MD。AI 生成分工后，可以调整负责人和任务内容，再统一派发。' : '你不需要领取或确认。派发后，任务包会自动出现在这里。' }}</p><RouterLink v-if="store.captain" to="/requirements" class="btn">查看需求文档 <Icon name="arrow" /></RouterLink></section>
-  <div v-if="all.length" class="task-workspace" :class="{ 'after-allocation': store.flow?.status === 'READY' && store.canManage }">
+  <div v-if="all.length" class="task-workspace">
     <aside class="task-list-panel paper"><header class="section-head"><span class="eyebrow">{{ store.captain ? 'TEAM TASKS' : 'MY TASKS' }}</span><span class="count">{{ all.filter(t => !t.archived).length }}</span></header><h2>{{ store.captain ? '团队任务' : '我的任务' }}</h2><div class="task-filter" aria-label="任务筛选"><button v-for="item in [{ value: 'active', text: '进行中' }, { value: 'done', text: '完成' }, { value: 'archive', text: '归档' }]" :key="item.value" :class="{ active: filter === item.value }" @click="filter = item.value">{{ item.text }}</button></div>
-      <div v-if="!filtered.length" class="empty-state small">这个分类还没有任务。</div><button v-for="item in filtered" :key="item.id" class="task-list-row" :class="{ selected: selected === item.id }" @click="selected = item.id"><span class="task-state-dot" :class="item.status.toLowerCase()"></span><span><strong>{{ item.title }}</strong><small>{{ store.name(item.assigneeNodeId) }} · {{ item.archived ? '已归档' : statusNames[item.status] ?? item.status }}</small></span><Icon name="chevron" :size="15" /></button>
+      <div v-if="!filtered.length" class="empty-state small">{{ query ? '当前分类没有匹配的任务，请调整顶栏搜索或切换分类。' : '这个分类还没有任务。' }}</div><button v-for="item in filtered" :key="item.id" class="task-list-row" :class="{ selected: selected === item.id }" @click="selected = item.id"><span class="task-state-dot" :class="item.status.toLowerCase()"></span><span><strong>{{ item.title }}</strong><small>{{ store.name(item.assigneeNodeId) }} · {{ item.archived ? '已归档' : statusNames[item.status] ?? item.status }}</small></span><Icon name="chevron" :size="15" /></button>
       <p class="task-list-note">{{ store.agileEnabled ? '无需在网页开工。让 AI 调用 Skill 同步任务包。' : '历史任务保留原有状态和执行流程，调用 Skill 核对最新版任务包。' }}</p>
     </aside>
     <section class="paper task-document">

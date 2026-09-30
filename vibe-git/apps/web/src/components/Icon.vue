@@ -29,7 +29,7 @@ const paths: Record<string, string> = {
   chevron: "M9 5l7 7-7 7", menu: "M4 6h16M4 12h16M4 18h16",
   link: "M9 15l6-6M7 13l-2 2a4 4 0 0 0 6 6l2-2M11 5l2-2a4 4 0 0 1 6 6l-2 2",
   clock: "M12 8v5l3 2M22 12a10 10 0 1 1-20 0 10 10 0 0 1 20 0",
-  pause: "M8 5v14M16 5v14"
+  pause: "M8 5v14M16 5v14", more: "M5 12h.01M12 12h.01M19 12h.01"
 };
 </script>
 <template><svg :width="size" :height="size" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path :d="paths[name] ?? paths.document" /></svg></template>

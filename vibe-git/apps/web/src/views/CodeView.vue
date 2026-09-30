@@ -1,14 +1,14 @@
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
-import { useRoute } from "vue-router";
+import { computed, ref } from "vue";
+import { useRoute, useRouter } from "vue-router";
 import { useWorkspace } from "../store";
 import { useRepository } from "../repository";
 import { currentWork, relativeTime, taskStatus } from "../team";
 import Icon from "../components/Icon.vue";
 import MarkdownEditor from "../components/MarkdownEditor.vue";
-const store = useWorkspace(), repository = useRepository(), route = useRoute();
-const query = ref(""), branch = ref(""), refreshing = ref(false);
-watch(() => route.query.q, value => { query.value = typeof value === "string" ? value : ""; }, { immediate: true });
+const store = useWorkspace(), repository = useRepository(), route = useRoute(), router = useRouter();
+const query = computed(() => typeof route.query.q === "string" ? route.query.q : "");
+const branch = ref(""), refreshing = ref(false);
 const members = computed(() => (store.data?.nodes ?? []).filter(node => !node.revoked));
 const branches = computed(() => [...new Set(members.value.map(node => node.git?.branch).filter((value): value is string => !!value))]);
 const rows = computed(() => members.value.map(node => ({ node, ...currentWork(node, store.data?.tasks ?? []) })).filter(row =>
@@ -19,6 +19,11 @@ const blocked = computed(() => store.data?.tasks.filter(task => ["PAUSED", "BLOC
 const completed = computed(() => store.data?.tasks.filter(task => task.status === "DONE" && !task.archived).length ?? 0);
 const latestGit = computed(() => [...members.value].filter(node => node.git).sort((a, b) => b.git!.observedAt.localeCompare(a.git!.observedAt))[0]);
 const requirement = computed(() => store.data?.room.currentRequirementMarkdown ?? "");
+function clearFilters() {
+  branch.value = "";
+  const query = { ...route.query }; delete query.q;
+  void router.replace({ path: route.path, query, hash: route.hash });
+}
 async function refresh() {
   refreshing.value = true;
   try { await Promise.all([store.refresh(), store.local ? store.refreshProject() : Promise.resolve()]); }
@@ -32,10 +37,8 @@ async function refresh() {
       <div class="repo-toolbar">
         <label class="branch-picker"><Icon name="branch" :size="18" /><select v-model="branch" aria-label="按 Git 分支筛选成员"><option value="">所有分支</option><option v-for="name in branches" :key="name" :value="name">{{ name }}</option></select></label>
         <span class="toolbar-stat"><Icon name="branch" :size="17" /><b>{{ branches.length }}</b> 个分支</span>
-        <RouterLink to="/plans" class="toolbar-stat"><Icon name="people" :size="17" /><b>{{ members.length }}</b> 位成员</RouterLink>
-        <label class="table-search"><Icon name="search" :size="16" /><input v-model="query" placeholder="搜索成员或工作" aria-label="搜索成员或工作" /></label>
+        <span class="toolbar-stat"><Icon name="people" :size="17" /><b>{{ members.length }}</b> 位成员</span>
         <button class="btn toolbar-refresh" :disabled="refreshing" @click="refresh"><Icon name="activity" :size="17" /><span class="sr-only">刷新工作情况</span></button>
-        <RouterLink to="/plans" class="btn primary"><Icon name="plus" :size="17" />提交个人计划</RouterLink>
       </div>
       <section class="paper team-code-panel">
         <header class="team-code-header"><span class="avatar mini">{{ (latestGit?.label ?? repository.owner).slice(0, 1).toUpperCase() }}</span><strong>团队工作情况</strong><span class="muted">{{ working }} 项进行中<span v-if="blocked"> · {{ blocked }} 项暂停或受阻</span></span><span class="team-code-sync"><Icon name="clock" :size="16" />{{ relativeTime(latestGit?.git?.observedAt) }}同步</span></header>
@@ -46,16 +49,16 @@ async function refresh() {
             <td class="git-cell"><template v-if="row.node.git"><span><Icon name="branch" :size="14" />{{ row.node.git.branch }}</span><small><code :title="row.node.git.headSha">{{ row.node.git.headSha.slice(0, 7) }}</code><span :class="{ 'dirty-git': row.node.git.dirty }">{{ row.node.git.dirty ? '有未提交修改' : '工作区干净' }}</span></small></template><span v-else class="muted">等待 Git 同步</span></td>
             <td class="last-sync"><time :title="row.node.lastSeenAt ? new Date(row.node.lastSeenAt).toLocaleString('zh-CN') : ''">{{ relativeTime(row.node.lastSeenAt) }}</time><small><i class="presence" :class="{ online: row.node.connected }"></i>{{ row.node.connected ? '在线' : '离线' }}</small></td>
           </tr>
-          <tr v-if="!rows.length"><td colspan="4" class="empty-state">没有匹配的成员。<button class="text-button" @click="query = ''; branch = ''">清空筛选</button></td></tr>
+          <tr v-if="!rows.length"><td colspan="4" class="empty-state">没有匹配的成员。<button class="text-button" @click="clearFilters">清空筛选</button></td></tr>
         </tbody></table></div>
         <footer class="table-footnote"><Icon name="activity" :size="14" />工作情况来自任务汇报与本机 Git 同步。Skill 提交后，分支和提交标识会在这里更新。</footer>
       </section>
-      <section class="paper repository-readme"><header class="readme-heading"><div><Icon name="book" :size="18" /><strong>README</strong><span class="muted">/ 团队需求</span></div><RouterLink to="/requirements" class="btn small">{{ store.canManage && store.flow?.draftMarkdown ? '编辑需求' : '查看完整文档' }}<Icon name="arrow" :size="15" /></RouterLink></header><MarkdownEditor v-if="requirement" :model-value="requirement" readonly compact :outline="false" filename="requirements.md" @error="store.error = $event" /><div v-else class="readme-empty"><h2>从每个人的计划开始</h2><p>提交个人计划，解决需求冲突，再把任务分给具体的人。</p><RouterLink to="/plans" class="text-button">进入个人计划 <Icon name="arrow" :size="14" /></RouterLink></div></section>
+      <section class="paper repository-readme"><header class="readme-heading"><div><Icon name="book" :size="18" /><strong>README</strong><span class="muted">/ 团队需求</span></div><RouterLink v-if="requirement || store.flow?.draftMarkdown" to="/requirements" class="btn small">{{ store.canManage && store.flow?.draftMarkdown ? '编辑需求' : '查看完整文档' }}<Icon name="arrow" :size="15" /></RouterLink></header><MarkdownEditor v-if="requirement" :model-value="requirement" readonly compact :outline="false" :tools="false" filename="requirements.md" @error="store.error = $event" /><div v-else class="readme-empty"><h2>{{ store.flow?.draftMarkdown ? '共同需求草稿已就绪' : '从每个人的计划开始' }}</h2><p>{{ store.flow?.draftMarkdown ? '审核并保存共同需求后，即可生成分工。' : '提交个人计划，解决需求冲突，再把任务分给具体的人。' }}</p><RouterLink v-if="!store.flow?.draftMarkdown" to="/plans" class="text-button">进入个人计划 <Icon name="arrow" :size="14" /></RouterLink></div></section>
     </div>
     <aside class="repository-about">
-      <section><header><h2>About</h2><RouterLink to="/settings" class="icon-btn" aria-label="项目设置"><Icon name="settings" :size="18" /></RouterLink></header><p>共同确定需求，让每位队友知道现在做什么、下一步做什么。</p><a v-if="repository.url" :href="repository.url.href" target="_blank" rel="noopener noreferrer" class="about-repo-link"><Icon name="link" :size="17" />{{ repository.url.host + repository.url.pathname }}</a><RouterLink to="/requirements"><Icon name="book" :size="17" />需求文档<span>R{{ store.data?.room.requirementRevision ?? 0 }}</span></RouterLink><RouterLink to="/plans"><Icon name="people" :size="17" />个人计划<span>{{ store.data?.plans.length ?? 0 }} / {{ members.length }}</span></RouterLink><RouterLink to="/issues"><Icon name="issue" :size="17" />待审需求 Issues<span>{{ store.pendingChanges.length }}</span></RouterLink><RouterLink to="/projects"><Icon name="project" :size="17" />任务进度<span>{{ completed }} / {{ store.data?.tasks.filter(task => !task.archived).length ?? 0 }}</span></RouterLink><small class="room-id">Room {{ store.data?.room.id.slice(0, 8) }}</small></section>
-      <section><header><h2>Members <span class="count">{{ members.length }}</span></h2></header><div class="contributor-avatars"><RouterLink v-for="node in members" :key="node.id" :to="{ path: '/plans', query: { plan: node.id } }" class="avatar" :title="node.label + ' · ' + node.id.slice(-4)">{{ node.label.slice(0, 1).toUpperCase() }}<i class="presence" :class="{ online: node.connected }"></i></RouterLink></div><RouterLink to="/plans" class="text-button">邀请队友加入 <Icon name="arrow" :size="13" /></RouterLink></section>
-      <section><header><h2>Agent connection</h2></header><p class="connection-summary"><i class="presence" :class="{ online: store.computeAvailable }"></i>{{ store.computeLabel }}</p><RouterLink to="/agents" class="text-button">打开 Codex 对话 <Icon name="arrow" :size="13" /></RouterLink><RouterLink to="/settings" class="text-button">额度与 API 设置 <Icon name="settings" :size="13" /></RouterLink></section>
+      <section><header><h2>About</h2></header><p>共同确定需求，让每位队友知道现在做什么、下一步做什么。</p><a v-if="repository.url" :href="repository.url.href" target="_blank" rel="noopener noreferrer" class="about-repo-link"><Icon name="link" :size="17" />{{ repository.url.host + repository.url.pathname }}</a><dl class="repository-stats"><div><dt><Icon name="book" :size="17" />需求版本</dt><dd>R{{ store.data?.room.requirementRevision ?? 0 }}</dd></div><div><dt><Icon name="people" :size="17" />已提交计划</dt><dd>{{ store.data?.plans.length ?? 0 }} / {{ members.length }}</dd></div><div><dt><Icon name="issue" :size="17" />待审 Issues</dt><dd>{{ store.pendingChanges.length }}</dd></div><div><dt><Icon name="project" :size="17" />已完成任务</dt><dd>{{ completed }} / {{ store.data?.tasks.filter(task => !task.archived).length ?? 0 }}</dd></div></dl><small class="room-id">Room {{ store.data?.room.id.slice(0, 8) }}</small></section>
+      <section><header><h2>Members <span class="count">{{ members.length }}</span></h2></header><div class="contributor-avatars"><span v-for="node in members" :key="node.id" class="avatar" :title="node.label + ' · ' + node.id.slice(-4)">{{ node.label.slice(0, 1).toUpperCase() }}<i class="presence" :class="{ online: node.connected }"></i></span></div></section>
+      <section><header><h2>Agent connection</h2></header><p class="connection-summary"><i class="presence" :class="{ online: store.computeAvailable }"></i>{{ store.computeLabel }}</p></section>
     </aside>
   </div>
 </template>
