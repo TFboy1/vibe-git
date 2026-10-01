@@ -6,3 +6,5 @@ apikey.txt
 node_modules/
 test-results/
 **/dist-agile/
+docs/.vitepress/dist/
+docs/.vitepress/cache/

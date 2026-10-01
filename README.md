@@ -46,22 +46,21 @@ Vibe-Git 在现有 Git 工作区之上管理**提案 → 对齐 → 任务 → �
 
 ## 快速开始
 
-需要 **Node.js 24+、Git、Codex CLI**。先安装 Skill，再手动安装 CLI：
+新版工作台需要 **Node.js 24+、Git**，协作分析可选择 Codex 或自定义 API。当前 npm `0.20.0` 仍是旧流程；体验新版请构建 `codex/frontend-rebuild` 源码，并按[完整安装教程](https://tfboy1.github.io/vibe-git/guide/install.html)检查能力：
 
 ```powershell
-npx skills add TFboy1/vibe-git-skill --skill vibe-git
-npm install -g @vibe-git/vibe-git
+git clone --branch codex/frontend-rebuild --recurse-submodules https://github.com/TFboy1/vibe-git.git
+cd vibe-git/vibe-git
+npm.cmd ci
+npm.cmd run build
+npm.cmd link
 vibe-git --help
 ```
 
-也可以从源码构建 CLI，构建入口在仓库的 `vibe-git/` 子目录：
+确认帮助包含“超敏捷主线”后，在自己的产品工作区安装并加载 Skill：
 
 ```powershell
-git clone --recurse-submodules https://github.com/TFboy1/vibe-git.git
-cd vibe-git/vibe-git
-npm ci
-npm run build
-npm link
+npx.cmd skills add TFboy1/vibe-git-skill --skill vibe-git
 ```
 
 队长进入**自己的项目 Git 工作区**，启动房间并复制命令输出中的成员加入链接：
@@ -78,7 +77,7 @@ vibe-git connect "https://xxxx.trycloudflare.com/join/xxxxx"
 vibe-git plan submit .\proposal.md
 ```
 
-对齐与审核前，可在各节点运行 `vibe-git codex bind`，绑定独立的 Codex 审核池。队长随后使用 `vibe-git align start` 开始对齐；裁决、指派与发布命令见[完整使用手册](vibe-git/README.md)。加入链接含注册密钥，只交给预期成员。
+队长在 Settings 配置协作算力，收齐个人计划后使用新版整合、裁决、需求编辑和任务包派发。成员通过 Skill 读取 `task inbox` 并以 `task report` 汇报实际执行结果。完整步骤见[新版使用文档](https://tfboy1.github.io/vibe-git/guide.html)。加入链接含注册密钥，只交给预期成员；下方工作流表保留历史流程说明。
 
 ## 工作流
 
