@@ -70,7 +70,7 @@ async function allocate() {
 onBeforeUnmount(() => { clearTimeout(timer); if (dirty.value && !saving.value) void save(); });
 </script>
 <template>
-  <div class="intro-line"><p>一份所有人遵循的需求。<span>{{ liveDraft ? '队长直接修改正文，确认无误后生成分工。' : '正式版本会与任务包一起发布，并保留完整历史。' }}</span></p></div>
+  <div class="intro-line"><p>一份所有人遵循的需求。<span>{{ liveDraft ? '队长直接修改正文，确认无误后生成分工。' : '正式版本会与任务包一起发布，并保留完整历史。' }}</span></p><RouterLink v-if="store.captain && !current" to="/plans#integrate-plans" class="btn primary">整合计划形成需求 <Icon name="arrow" /></RouterLink></div>
   <FlowStatus v-if="current" :flow="current" />
   <section v-if="!displayed && !liveDraft" class="paper empty-state large"><Icon name="book" :size="35" /><h2>需求文档会在计划对齐后出现。</h2><p>先提交本轮计划，再由队长处理冲突。没有冲突时，AI 会直接生成需求草稿。</p><RouterLink to="/plans" class="btn">前往个人计划 <Icon name="arrow" /></RouterLink></section>
   <section v-else class="paper requirements-paper">

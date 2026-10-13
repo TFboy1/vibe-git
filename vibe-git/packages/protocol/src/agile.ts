@@ -48,6 +48,7 @@ export interface AgileFlow {
 export interface AgileSnapshot {
   enabled: boolean; compute: { provider: AgileProvider; executorNodeId: string | null };
   batchReviewEnabled?: boolean;
+  planIntegrationEnabled?: boolean;
   flows: AgileFlow[]; activeFlow: AgileFlow | null; archivedTasks: StageTask[];
 }
 export interface AgileTaskReport {

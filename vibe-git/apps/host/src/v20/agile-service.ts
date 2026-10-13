@@ -55,7 +55,7 @@ export class AgileService {
   }
   snapshot(): AgileSnapshot {
     const flows = this.repo.listAgileFlows();
-    return { enabled: this.enabled(), batchReviewEnabled: true, compute: this.compute(), flows,
+    return { enabled: this.enabled(), batchReviewEnabled: true, planIntegrationEnabled: true, compute: this.compute(), flows,
       activeFlow: flows.find(flow => !terminal.has(flow.status)) ?? null,
       archivedTasks: this.repo.allTasks().filter(task => task.flow === "agile" && task.archived) };
   }
@@ -99,16 +99,42 @@ export class AgileService {
     captain(node); this.requireEnabled(); this.active(); const input = record(raw);
     version(this.repo.requirementRevision(), input.expectedRequirementRevision);
     if (this.repo.requirementRevision() !== 0 || this.repo.currentStage()) throw invalidState("正式需求已发布，后续需求请提交变更 PR");
+    const flow = { ...this.newFlow("initial"), ...this.collectPlans(input) };
+    return this.repo.tx(() => this.queue(flow, "AGILE_ANALYZE", node.id));
+  }
+  private collectPlans(input: Record<string, unknown>): Pick<AgileFlow, "participantNodeIds" | "planSnapshot"> {
     const nodes = this.repo.listNodes().filter(n => !n.revoked);
     const skip = input.skipMissingNodeIds === undefined ? [] : list(input.skipMissingNodeIds, "跳过成员");
-    if (skip.some(id => !nodes.some(n => n.id === id))) throw badRequest("跳过成员不存在");
+    if (new Set(skip).size !== skip.length || skip.some(id => !nodes.some(n => n.id === id))) throw badRequest("跳过成员不存在或重复");
     const participants = nodes.filter(n => !skip.includes(n.id));
     if (!participants.length) throw badRequest("至少需要一位参与者");
     const plans = participants.map(n => this.repo.getMeta("v20_plan_withdrawn_" + n.id) ? undefined : this.repo.latestDocument(n.id, "plan", null));
     const missing = participants.filter((_n, i) => !plans[i]);
     if (missing.length) throw invalidState("请收齐计划，或明确跳过暂不参与的成员", { missingNodeIds: missing.map(n => n.id) });
-    const flow = { ...this.newFlow("initial"), participantNodeIds: participants.map(n => n.id), planSnapshot: plans as MarkdownDocument[] };
-    return this.repo.tx(() => this.queue(flow, "AGILE_ANALYZE", node.id));
+    return { participantNodeIds: participants.map(n => n.id), planSnapshot: plans as MarkdownDocument[] };
+  }
+  startPlanIntegration(node: CollaborationNode, raw: unknown): AgileFlow {
+    captain(node); this.active(); const input = record(raw);
+    version(this.repo.requirementRevision(), input.expectedRequirementRevision);
+    if (!this.repo.requirementRevision()) return this.startInitial(node, input);
+    const plans = this.collectPlans(input), stage = this.stageForReview();
+    return this.repo.tx(() => {
+      const changeIds = plans.planSnapshot.map(plan => {
+        const pending = this.repo.listPullRequests().find(pr => pr.sourcePlanDocumentId === plan.id && pr.stageId === stage.id &&
+          pr.baseRequirementRevision === this.repo.requirementRevision() && pr.status === "QUEUED" && !pr.reviewId);
+        if (pending) return pending.id;
+        const id = uid("PR"), at = now(), document: MarkdownDocument = {
+          ...plan, id: uid("DOC"), kind: "change", entityId: id, revision: 1, createdAt: at
+        };
+        const pr: VibePullRequest = { id, flow: "agile", sourcePlanDocumentId: plan.id, title: "整合计划 · " + this.repo.getNode(plan.ownerNodeId)!.label,
+          submitterNodeId: plan.ownerNodeId, documentId: document.id, stageId: stage.id,
+          baseRequirementRevision: this.repo.requirementRevision(), status: "QUEUED", reviewId: null, createdAt: at, decidedAt: null };
+        this.repo.putDocument(document); this.repo.putPullRequest(pr);
+        return id;
+      });
+      const flow = this.reviewFlow(node, { expectedRequirementRevision: input.expectedRequirementRevision, changeIds }, plans);
+      return this.queueReview(node, flow);
+    });
   }
   submitPR(node: CollaborationNode, raw: unknown): VibePullRequest {
     this.requireEnabled(); const input = record(raw);
@@ -129,12 +155,20 @@ export class AgileService {
     return pr;
   }
   startReview(node: CollaborationNode, raw: unknown): AgileFlow {
-    captain(node); this.active(); const input = record(raw);
-    version(this.repo.requirementRevision(), input.expectedRequirementRevision);
-    if (!this.repo.requirementRevision()) throw invalidState("请先发布正式需求");
+    const flow = this.reviewFlow(node, raw);
+    return this.repo.tx(() => this.queueReview(node, flow));
+  }
+  private stageForReview(): DevelopmentStage {
     const stage = this.repo.currentStage() ?? [...this.repo.listStages()].reverse().find(item => item.requirementRevision === this.repo.requirementRevision());
     if (!stage) throw invalidState("当前没有可审核的需求阶段");
     if (stage.reviewId || ["REVIEWING", "AWAITING_APPLY"].includes(stage.status)) throw invalidState("当前阶段已有审核，请先完成或取消");
+    return stage;
+  }
+  private reviewFlow(node: CollaborationNode, raw: unknown, plans?: Pick<AgileFlow, "participantNodeIds" | "planSnapshot">): AgileFlow {
+    captain(node); this.active(); const input = record(raw);
+    version(this.repo.requirementRevision(), input.expectedRequirementRevision);
+    if (!this.repo.requirementRevision()) throw invalidState("请先发布正式需求");
+    const stage = this.stageForReview();
     const pending = [
       ...this.repo.listPullRequests().filter(pr => pr.stageId === stage.id && pr.status === "QUEUED" && !pr.reviewId),
       ...this.repo.listCoordinationChanges().filter(change => change.stageId === stage.id && change.status === "PENDING" && !change.reviewId)
@@ -161,26 +195,28 @@ export class AgileService {
     });
     const flow: AgileFlow = { ...this.newFlow("review"), stageId: stage.id,
       stageSnapshot: { status: stage.status, completedAt: stage.completedAt },
-      participantNodeIds: this.repo.listNodes().filter(n => !n.revoked).map(n => n.id),
-      planSnapshot: this.repo.listNodes().filter(n => !n.revoked).map(n => this.repo.latestDocument(n.id, "plan", null)).filter((d): d is MarkdownDocument => !!d),
+      participantNodeIds: plans?.participantNodeIds ?? this.repo.listNodes().filter(n => !n.revoked).map(n => n.id),
+      planSnapshot: plans?.planSnapshot ?? this.repo.listNodes().filter(n => !n.revoked).map(n => this.repo.latestDocument(n.id, "plan", null)).filter((d): d is MarkdownDocument => !!d),
       changeSnapshot,
       taskSnapshot: tasks, taskDigests: Object.fromEntries(tasks.map(task => [task.id, formal(task)])) };
-    return this.repo.tx(() => {
-      this.repo.putStage({ ...stage, status: "REVIEWING", reviewId: flow.id });
-      for (const snapshot of changeSnapshot) {
-        if (snapshot.source === "legacy_change") {
-          const change = this.repo.getCoordinationChange(snapshot.id)!;
-          this.repo.putCoordinationChange({ ...change, status: "IN_REVIEW", reviewId: flow.id, revision: snapshot.sourceRevision!,
-            ...(change.suggestion?.status === "QUEUED" ? { suggestion: { ...change.suggestion, status: "FAILED" as const, error: "单独分析已取消，改由本批统一分析" } } : {}) });
-          if (change.suggestion?.status === "QUEUED") {
-            const job = this.repo.getJob(change.suggestion.jobId);
-            if (job && ["QUEUED", "LEASED", "RUNNING"].includes(job.status)) this.repo.putJob({ ...job, status: "CANCELLED", leaseToken: null, leaseExpiresAt: null, updatedAt: now() });
-          }
-        } else this.repo.putPullRequest({ ...this.repo.getPullRequest(snapshot.id)!, status: "IN_REVIEW", reviewId: flow.id });
-      }
-      this.hooks.event("agile.review_started", node.id, "agile", flow.id, { changeIds: requested });
-      return this.queue(flow, "AGILE_ANALYZE", node.id);
-    });
+    return flow;
+  }
+  private queueReview(node: CollaborationNode, flow: AgileFlow): AgileFlow {
+    const stage = this.repo.getStage(flow.stageId!)!;
+    this.repo.putStage({ ...stage, status: "REVIEWING", reviewId: flow.id });
+    for (const snapshot of flow.changeSnapshot) {
+      if (snapshot.source === "legacy_change") {
+        const change = this.repo.getCoordinationChange(snapshot.id)!;
+        this.repo.putCoordinationChange({ ...change, status: "IN_REVIEW", reviewId: flow.id, revision: snapshot.sourceRevision!,
+          ...(change.suggestion?.status === "QUEUED" ? { suggestion: { ...change.suggestion, status: "FAILED" as const, error: "单独分析已取消，改由本批统一分析" } } : {}) });
+        if (change.suggestion?.status === "QUEUED") {
+          const job = this.repo.getJob(change.suggestion.jobId);
+          if (job && ["QUEUED", "LEASED", "RUNNING"].includes(job.status)) this.repo.putJob({ ...job, status: "CANCELLED", leaseToken: null, leaseExpiresAt: null, updatedAt: now() });
+        }
+      } else this.repo.putPullRequest({ ...this.repo.getPullRequest(snapshot.id)!, status: "IN_REVIEW", reviewId: flow.id });
+    }
+    this.hooks.event("agile.review_started", node.id, "agile", flow.id, { changeIds: flow.changeSnapshot.map(change => change.id) });
+    return this.queue(flow, "AGILE_ANALYZE", node.id);
   }
   private flow(node: CollaborationNode, id: string, expected: unknown): AgileFlow {
     captain(node); const flow = this.repo.getAgileFlow(id); if (!flow) throw notFound("整合流程不存在");

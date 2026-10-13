@@ -14,14 +14,33 @@ const props = withDefaults(defineProps<{ modelValue: string; readonly?: boolean;
   { readonly: false, filename: "requirements.md", outline: true, compact: false, tools: true });
 const emit = defineEmits<{ "update:modelValue": [value: string]; error: [value: string] }>();
 const root = ref<HTMLElement>(), file = ref<HTMLInputElement>(), loading = ref(true);
-const headings = ref<Array<{ title: string; level: number; id: string }>>([]);
-const prefix = "heading-" + Math.random().toString(36).slice(2);
+const headings = ref<Array<{ title: string; level: number }>>([]);
+const headingSelector = ".ProseMirror h1, .ProseMirror h2, .ProseMirror h3, .ProseMirror h4";
 let crepe: CrepeBuilder | null = null, observer: MutationObserver | null = null, destroyed = false, syncing = false, mounted = false;
+let outlineFrame: number | null = null;
 function refreshOutline() {
-  headings.value = [...(root.value?.querySelectorAll<HTMLElement>(".ProseMirror h1, .ProseMirror h2, .ProseMirror h3, .ProseMirror h4") ?? [])].map((heading, index) => {
-    const id = prefix + "-" + index; heading.id = id;
-    return { title: heading.textContent ?? "", level: Number(heading.tagName.slice(1)), id };
-  });
+  if (destroyed || !props.outline) return;
+  // ProseMirror owns the editor DOM, including heading IDs. The outline only reads it.
+  const next = [...(root.value?.querySelectorAll<HTMLElement>(headingSelector) ?? [])].map(heading =>
+    ({ title: heading.textContent ?? "", level: Number(heading.tagName.slice(1)) }));
+  if (next.length !== headings.value.length || next.some((heading, index) =>
+    heading.title !== headings.value[index]?.title || heading.level !== headings.value[index]?.level)) headings.value = next;
+}
+function scheduleOutline() {
+  if (destroyed || !props.outline || outlineFrame !== null) return;
+  outlineFrame = requestAnimationFrame(() => { outlineFrame = null; refreshOutline(); });
+}
+function stopOutline() {
+  observer?.disconnect(); observer = null;
+  if (outlineFrame !== null) cancelAnimationFrame(outlineFrame);
+  outlineFrame = null;
+}
+function observeOutline() {
+  stopOutline();
+  if (destroyed || !mounted || !root.value || !props.outline) { headings.value = []; return; }
+  refreshOutline();
+  observer = new MutationObserver(scheduleOutline);
+  observer.observe(root.value, { childList: true, subtree: true, characterData: true });
 }
 onMounted(async () => {
   try {
@@ -36,17 +55,17 @@ onMounted(async () => {
     }));
     await crepe.create();
     if (destroyed) { await crepe.destroy(); return; }
-    mounted = true; loading.value = false; refreshOutline();
-    observer = new MutationObserver(refreshOutline); observer.observe(root.value!, { childList: true, subtree: true, characterData: true });
+    mounted = true; loading.value = false; observeOutline();
     if (crepe.getMarkdown() !== props.modelValue) { syncing = true; crepe.editor.action(replaceAll(props.modelValue)); syncing = false; }
   } catch (e) { loading.value = false; emit("error", e instanceof Error ? e.message : String(e)); }
 });
 watch(() => props.modelValue, async value => {
   if (!crepe || !mounted || value === crepe.getMarkdown()) return;
-  syncing = true; crepe.editor.action(replaceAll(value)); await nextTick(); syncing = false; refreshOutline();
+  syncing = true; crepe.editor.action(replaceAll(value)); await nextTick(); syncing = false; scheduleOutline();
 });
 watch(() => props.readonly, value => crepe?.setReadonly(value));
-onBeforeUnmount(() => { destroyed = true; observer?.disconnect(); if (mounted) void crepe?.destroy(); });
+watch(() => props.outline, observeOutline);
+onBeforeUnmount(() => { destroyed = true; stopOutline(); if (mounted) void crepe?.destroy(); });
 async function importFile(event: Event) {
   const input = event.target as HTMLInputElement, selected = input.files?.[0];
   try {
@@ -61,7 +80,7 @@ function download() {
   const blob = new Blob([props.modelValue], { type: "text/markdown;charset=utf-8" }), url = URL.createObjectURL(blob), anchor = document.createElement("a");
   anchor.href = url; anchor.download = props.filename; anchor.click(); setTimeout(() => URL.revokeObjectURL(url), 100);
 }
-function jump(id: string) { root.value?.querySelector("#" + id)?.scrollIntoView({ behavior: "smooth", block: "start" }); }
+function jump(index: number) { root.value?.querySelectorAll<HTMLElement>(headingSelector)[index]?.scrollIntoView({ behavior: "smooth", block: "start" }); }
 </script>
 <template>
   <div class="markdown-workspace" :class="{ compact, 'without-outline': !outline }">
@@ -75,6 +94,6 @@ function jump(id: string) { root.value?.querySelector("#" + id)?.scrollIntoView(
       <div ref="root" class="markdown-root" :class="{ 'is-readonly': readonly }"></div>
       <div v-if="!loading && readonly && !modelValue" class="empty-document">文档尚未生成。</div>
     </div>
-    <aside v-if="outline" class="document-outline"><span class="eyebrow">ON THIS PAGE</span><h3>文档大纲</h3><nav aria-label="文档大纲"><button v-for="heading in headings" :key="heading.id" :style="{ paddingLeft: (heading.level - 1) * 12 + 'px' }" @click="jump(heading.id)">{{ heading.title || '未命名章节' }}</button><p v-if="!headings.length" class="muted small-text">写下标题后，章节会出现在这里。</p></nav></aside>
+    <aside v-if="outline" class="document-outline"><span class="eyebrow">ON THIS PAGE</span><h3>文档大纲</h3><nav aria-label="文档大纲"><button v-for="(heading, index) in headings" :key="index" :style="{ paddingLeft: (heading.level - 1) * 12 + 'px' }" @click="jump(index)">{{ heading.title || '未命名章节' }}</button><p v-if="!headings.length" class="muted small-text">写下标题后，章节会出现在这里。</p></nav></aside>
   </div>
 </template>

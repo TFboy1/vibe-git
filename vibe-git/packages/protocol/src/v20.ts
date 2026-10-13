@@ -310,6 +310,7 @@ export interface StageTask {
 
 export type PullRequestStatus = "QUEUED" | "IN_REVIEW" | "APPLIED" | "REJECTED";
 export interface VibePullRequest {
+  sourcePlanDocumentId?: string;
   flow?: "agile";
   title?: string;
   id: string;

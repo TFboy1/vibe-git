@@ -8,6 +8,7 @@ export function registerAgileRoutes(app: FastifyInstance, service: AgileService,
   app.put<{ Body: unknown }>("/api/v1/agile/compute", async request => service.setCompute(auth(request), request.body));
   app.put<{ Body: unknown }>("/api/v1/agile/plan", async request => service.savePlan(auth(request), request.body));
   app.post<{ Body: unknown }>("/api/v1/agile/initial", async request => service.startInitial(auth(request), request.body));
+  app.post<{ Body: unknown }>("/api/v1/agile/plan-integrations", async request => service.startPlanIntegration(auth(request), request.body));
   app.post<{ Body: unknown }>("/api/v1/agile/pull-requests", async request => service.submitPR(auth(request), request.body));
   app.post<{ Body: unknown }>("/api/v1/agile/reviews", async request => service.startReview(auth(request), request.body));
   app.get("/api/v1/agile/inbox", async request => service.inbox(auth(request)));
