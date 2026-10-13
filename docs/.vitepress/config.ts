@@ -53,8 +53,8 @@ export default defineConfig({
           { text: '成员加入房间', link: '/guide/member.html' },
         ] },
         { text: '完成第一轮协作', items: [
-          { text: '每人提交计划', link: '/guide/plans.html' },
-          { text: '整合计划与裁决', link: '/guide/alignment.html' },
+          { text: '补充想法（可选）', link: '/guide/plans.html' },
+          { text: '补齐需求与确认方案', link: '/guide/alignment.html' },
           { text: '需求、分工与派发', link: '/guide/dispatch.html' },
           { text: '开发与任务汇报', link: '/guide/execution.html' },
           { text: '需求变更与重新派发', link: '/guide/changes.html' },

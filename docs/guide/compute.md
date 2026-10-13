@@ -1,6 +1,6 @@
 ---
 title: 配置协作算力
-description: 在 Settings 连接本机 Codex，或配置支持原生 Responses 和 JSON Schema 的 API。
+description: 在 设置 连接本机 Codex，或配置支持原生 Responses 和 JSON Schema 的 API。
 ---
 
 # 配置协作算力
@@ -9,7 +9,7 @@ description: 在 Settings 连接本机 Codex，或配置支持原生 Responses �
 
 ## 步骤 1：选择分析方式
 
-> **操作人**：队长。**前置条件**：已[创建房间](./captain.md)，从本机 `vibe-git open` 进入。**入口**：Settings → 算力与 API。
+> **操作人**：队长。**前置条件**：已[创建房间](./captain.md)，从本机 `vibe-git open` 进入。**入口**：设置 → 算力与 API。
 
 选择 **“Codex 节点池”** 或 **“自定义 API”**。前者使用在线且可用的节点，后者使用队长电脑保存的 Base URL、模型和 Key。开发任务由成员当前 Agent 执行，成员无需获得队长 API Key。
 
@@ -17,7 +17,7 @@ description: 在 Settings 连接本机 Codex，或配置支持原生 Responses �
 
 ## 步骤 2：连接本机 Codex
 
-> **操作人**：使用 Codex 的队长或成员。**前置条件**：本机已安装 Codex CLI。**入口**：各自的 Settings → Codex 连接与额度。
+> **操作人**：使用 Codex 的队长或成员。**前置条件**：本机已安装 Codex CLI。**入口**：各自的 设置 → Codex 连接与额度。
 
 1. 点击 **“刷新状态与额度”**。
 2. 需要登录时点击 **“连接本机 Codex”**。
@@ -41,7 +41,7 @@ vibe-git codex status
 
 ## 步骤 3：保存并测试 API
 
-> **操作人**：队长。**前置条件**：服务支持原生 Responses 与严格 JSON Schema 输出。**入口**：队长本机 Settings → 算力与 API → 自定义 API。
+> **操作人**：队长。**前置条件**：服务支持原生 Responses 与严格 JSON Schema 输出。**入口**：队长本机 设置 → 算力与 API → 自定义 API。
 
 1. **Base URL** 填基础地址。`https://api.openai.com/v1` 会请求 `https://api.openai.com/v1/responses`；程序只追加 `/responses`，不补 `/v1`。不要把 `/responses` 填进基础地址。
 2. **模型名** 填服务及账户实际支持的名称。
@@ -55,7 +55,7 @@ vibe-git codex status
 
 ## 步骤 4：确认分析前状态
 
-> **操作人**：队长。**前置条件**：已配置选定方式。**入口**：Settings → 算力与 API。
+> **操作人**：队长。**前置条件**：已配置选定方式。**入口**：设置 → 算力与 API。
 
 刷新状态。Codex 方式确认至少一个在线可用节点，API 方式确认最近测试通过。分析失败时回答和草稿会保留，修复后可[重试](./troubleshooting.md#analysis-failed)。
 

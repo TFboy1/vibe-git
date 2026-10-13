@@ -106,12 +106,12 @@ export class AgileService {
     const nodes = this.repo.listNodes().filter(n => !n.revoked);
     const skip = input.skipMissingNodeIds === undefined ? [] : list(input.skipMissingNodeIds, "跳过成员");
     if (new Set(skip).size !== skip.length || skip.some(id => !nodes.some(n => n.id === id))) throw badRequest("跳过成员不存在或重复");
-    const participants = nodes.filter(n => !skip.includes(n.id));
-    if (!participants.length) throw badRequest("至少需要一位参与者");
-    const plans = participants.map(n => this.repo.getMeta("v20_plan_withdrawn_" + n.id) ? undefined : this.repo.latestDocument(n.id, "plan", null));
-    const missing = participants.filter((_n, i) => !plans[i]);
-    if (missing.length) throw invalidState("请收齐计划，或明确跳过暂不参与的成员", { missingNodeIds: missing.map(n => n.id) });
-    return { participantNodeIds: participants.map(n => n.id), planSnapshot: plans as MarkdownDocument[] };
+    const plans = nodes.filter(n => !skip.includes(n.id)).flatMap(n => {
+      const plan = this.repo.getMeta("v20_plan_withdrawn_" + n.id) ? undefined : this.repo.latestDocument(n.id, "plan", null);
+      return plan ? [plan] : [];
+    });
+    if (!plans.length) throw invalidState("至少提交一份目标或想法，再生成需求");
+    return { participantNodeIds: plans.map(plan => plan.ownerNodeId), planSnapshot: plans };
   }
   startPlanIntegration(node: CollaborationNode, raw: unknown): AgileFlow {
     captain(node); this.active(); const input = record(raw);
@@ -149,7 +149,7 @@ export class AgileService {
     this.repo.tx(() => {
       this.repo.putDocument({ ...document, entityId: pr.id }); this.repo.putPullRequest(pr);
       const leader = this.repo.listNodes().find(n => n.role === "captain")!;
-      this.notify(leader.id, "REVIEW", "收到需求变更 PR", node.label + "：" + title, pr.id);
+      this.notify(leader.id, "REVIEW", "收到需求变更", node.label + "：" + title, pr.id);
       this.hooks.event("agile.pr_submitted", node.id, "pull_request", pr.id, { baseRequirementRevision: pr.baseRequirementRevision });
     });
     return pr;
@@ -360,7 +360,7 @@ export class AgileService {
         pausedTaskReasons[id] = task.blockedReason ?? null;
         this.repo.putTask({ ...task, status: "PAUSED", pauseRequested: true, blockedReason: "需求变更审核中，等待队长统一派发",
           updatedAt: now(), revision: task.revision + 1 });
-        this.notify(task.assigneeNodeId, "CHANGE", "任务暂时暂停", "请在本次 Skill 同步后停止旧版本任务：" + task.title, flow.id);
+        this.notify(task.assigneeNodeId, "CHANGE", "已请求暂停任务", "请在本次 Skill 同步后停止旧版本任务：" + task.title, flow.id);
       }
       const updated = { ...flow, issues, affectedTaskIds, decisions, pausedTaskStates: paused, pausedTaskReasons, summary, status: "DECIDING" as const, agentJobId: null };
       if (!issues.length && flow.kind === "initial") this.queue(updated, "AGILE_REQUIREMENT", job.targetNodeId);
@@ -652,10 +652,10 @@ export class AgileService {
   }
   private prompt(flow: AgileFlow): string {
     const instructions: Record<AgilePhase, string> = {
-      AGILE_ANALYZE: "分析各成员计划的真实冲突。审核阶段将本批选中的所有 PR 作为一个整体联合分析，识别 PR 相互矛盾、PR 与现有正式需求和任务之间的矛盾，不能把独立的单 PR 分析简单拼接。给每个 PR 采纳/退回建议并明确全部受影响任务（包括已完成任务）。未选中与后来提交的 PR 不在本批范围。不需要代码或 Git 取证，不要求成员在线。只为阻碍实施的真实冲突提问，无冲突 issues=[]。每个问题恰好三个有意义的解决方案，用户另有自定义入口。证据 sourceId 引用资料中的 DOC/PR/CHANGE/TASK 标识或 REQ-版本。",
-      AGILE_DIALOGUE: "检查队长最新回答是否留下必须确认的新矛盾。仅必要时返回一个 followUp，每题恰好三个方案，并引用真实来源；答案已足够明确时 followUp=null。不要重复已回答的问题，也不要重复已有待答问题。自定义回答也是正式裁决。",
+      AGILE_ANALYZE: (flow.kind === "initial" ? "从队长的简述目标和成员可选意见出发，识别阻碍形成可执行需求的关键缺口（目标、范围、约束或验收）和真实冲突。信息充分时 issues=[]，直接生成需求，不为非关键细节追问。不能把未经确认的假设写成团队决定。成员可以只执行任务，不要求每人提交计划。" : "审核阶段将本批选中的所有 PR 作为一个整体联合分析，识别 PR 相互矛盾、PR 与现有正式需求和任务之间的矛盾，不能把独立的单 PR 分析简单拼接。给每个 PR 采纳/退回建议并明确全部受影响任务（包括已完成任务）。未选中与后来提交的 PR 不在本批范围。只为阻碍实施的真实冲突提问，无冲突 issues=[]。") + "不需要代码或 Git 取证，不要求成员在线。每个问题恰好三个有意义且取舍不同的解决方案，说明各自影响并在标签中标明推荐项，用户另有自定义入口。证据 sourceId 引用资料中的 DOC/PR/CHANGE/TASK 标识或 REQ-版本。",
+      AGILE_DIALOGUE: (flow.kind === "initial" ? "检查队长最新回答是否补齐关键需求缺口或留下必须确认的新矛盾。" : "检查队长最新回答是否留下必须确认的新矛盾。") + "仅必要时返回一个 followUp，每题恰好三个取舍不同的方案，说明影响并在标签中标明推荐项，引用真实来源；答案已足够明确时 followUp=null。不要重复已回答的问题，也不要重复已有待答问题。自定义回答也是正式裁决，不能把未经确认的假设当作答案。",
       AGILE_REQUIREMENT: "根据全部成员计划、队长裁决、采纳的 PR 和现有正式需求，生成完整一致的新版需求 Markdown（不是追加变更章节）。只应用采纳 PR，不应用退回 PR。包含目标、范围、明确功能、约束和验收。保留未改变的需求，消除旧版矛盾。使用标题支持文档大纲。",
-      AGILE_ALLOCATE: "根据已保存需求 MD 和成员计划生成具体任务分工。首轮任务 sourceTaskId=null。审核阶段重新对比已保存 MD 与原需求、所有任务，因为队长可能在编辑正文时改变影响范围。只输出真正受影响任务的修订/返工和必要的新任务；未受影响任务由系统自动保留，不要重写。每个已知受影响任务必须输出带 sourceTaskId 的任务或列入 removedTaskIds。修订必须写出合并本批采纳 PR 后的具体新目标、边界和可验证验收；不能复制原任务冒充新版，也不能只改 key 或需求引用。新增受影响任务同样使用真实 sourceTaskId，系统会在预览前暂停它们。已完成任务通过 sourceTaskId 创建关联返工任务，保留完成记录。依赖用本次任务 key 或未受影响任务的实际 ID。任务有清晰目标、边界、验收和负责人；路径仅使用已知的相对路径，不猜路径。"
+      AGILE_ALLOCATE: "根据已保存需求 MD 和成员可选意见生成具体任务分工。team 中所有成员都可以成为负责人，无需提交个人计划；按职责合理分工。首轮任务 sourceTaskId=null。审核阶段重新对比已保存 MD 与原需求、所有任务，因为队长可能在编辑正文时改变影响范围。只输出真正受影响任务的修订/返工和必要的新任务；未受影响任务由系统自动保留，不要重写。每个已知受影响任务必须输出带 sourceTaskId 的任务或列入 removedTaskIds。修订必须写出合并本批采纳 PR 后的具体新目标、边界和可验证验收；不能复制原任务冒充新版，也不能只改 key 或需求引用。新增受影响任务同样使用真实 sourceTaskId，系统会在预览前请求暂停它们。已完成任务通过 sourceTaskId 创建关联返工任务，保留完成记录。依赖用本次任务 key 或未受影响任务的实际 ID。任务有清晰目标、边界、验收和负责人；路径仅使用已知的相对路径，不猜路径。"
     };
     const data = {
       kind: flow.kind, team: this.repo.listNodes().filter(n => !n.revoked).map(n => ({ id: n.id, name: n.label })),

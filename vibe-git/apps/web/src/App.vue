@@ -11,18 +11,17 @@ const store = useWorkspace(), repository = useRepository(), route = useRoute(), 
 const inboxOpen = ref(false), search = ref(""), searchInput = ref<HTMLInputElement>();
 const searchPlaceholder = computed(() => typeof route.meta.searchPlaceholder === "string" ? route.meta.searchPlaceholder : "");
 const entries = [
-  { path: "/", icon: "code", text: "Code", title: "成员工作情况", section: "code" },
-  { path: "/issues", icon: "issue", text: "Issues", title: "需求变更", section: "issues" },
-  { path: "/pulls", icon: "pull", text: "Pull requests", title: "代码合并申请", section: "pulls" },
-  { path: "/agents", icon: "agent", text: "Agents", title: "Codex 对话", section: "agents" },
-  { path: "/projects", icon: "project", text: "Projects", title: "任务与分工", section: "projects" },
-  { path: "/requirements", icon: "book", text: "Wiki", title: "需求文档", section: "requirements" },
-  { path: "/settings", icon: "settings", text: "Settings", title: "算力与团队设置", section: "settings" }
+  { path: "/", icon: "code", text: "工作台", title: "当前行动与团队进度", section: "code" },
+  { path: "/requirements", icon: "book", text: "需求", title: "团队需求与可选想法", section: "requirements" },
+  { path: "/projects", icon: "project", text: "任务", title: "任务与分工", section: "projects" },
+  { path: "/issues", icon: "issue", text: "变更", title: "需求变更与审核", section: "issues" },
+  { path: "/settings", icon: "settings", text: "设置", title: "算力与团队设置", section: "settings" }
 ];
 const unread = computed(() => store.data?.notifications.filter(note => !note.readAt).length ?? 0);
 const notifications = computed(() => store.data?.notifications.map(note => ({ note, resource: notificationResource(note, store.data!) })) ?? []);
 const activeTasks = computed(() => store.data?.tasks.filter(task => !task.archived && task.status !== "DONE").length ?? 0);
-const stage = computed(() => store.flow?.status === "READY" ? 3 : store.flow?.draftMarkdown ? 2 : store.flow ? 1 : store.data?.room.requirementRevision ? 4 : 0);
+const stage = computed(() => store.flow?.status === "DECIDING" ? 0 : store.flow?.phase === "AGILE_ALLOCATE" ? 2 : store.flow?.draftMarkdown ? 1 : store.flow ? 0 : store.data?.room.requirementRevision ? 3 : 0);
+const steps = computed(() => store.flow?.kind === "review" ? ["变更审核", "需求修订", "分工修订", "发布执行"] : ["补齐需求", "需求草稿", "任务分工", "发布执行"]);
 function resourceStatus(resource: NotificationResource) { return resource.kind === "task" ? taskStatus[resource.status] ?? resource.status : resource.status; }
 function viewNotification(resource: NotificationResource) {
   const target = resource.kind === "change" ? { path: "/issues", query: { change: resource.id } } : resource.kind === "task" ? { path: "/projects", query: { task: resource.id, view: "packages" } } :
@@ -73,8 +72,8 @@ onBeforeUnmount(() => { store.stop(); clearTimeout(noticeTimer); window.removeEv
       <template v-else>
         <section class="repository-title-row"><div class="repository-title"><Icon name="book" :size="23" /><RouterLink to="/">{{ repository.name }}</RouterLink><span class="repo-visibility">Team</span></div><div class="repository-actions"><span class="connection-label"><i class="presence" :class="{ online: store.connected }"></i>{{ store.connected ? '实时同步' : '连接恢复中' }}</span><span class="repository-stat"><Icon name="people" :size="16" />{{ store.data.nodes.filter(node => !node.revoked).length }} 位成员</span><span class="repository-stat"><Icon name="document" :size="16" />{{ store.data.room.requirementRevision ? '需求 R' + store.data.room.requirementRevision : '首轮计划' }}</span></div></section>
         <div v-if="!store.local" class="legacy-notice">请在自己的电脑运行 <code>vibe-git open</code>，进入可编辑的本机工作台。</div>
-        <nav v-if="route.meta.section === 'code'" class="code-subnav" aria-label="Code 视图"><RouterLink to="/" :class="{ active: route.path === '/' }" :aria-current="route.path === '/' ? 'page' : undefined">成员工作</RouterLink><RouterLink to="/plans" :class="{ active: route.path === '/plans' }" :aria-current="route.path === '/plans' ? 'page' : undefined">个人计划</RouterLink></nav>
-        <div v-if="route.path === '/plans' && (!store.data.room.requirementRevision || store.flow?.kind === 'initial')" class="phase-rail" aria-label="协作流程"><div v-for="(step, i) in ['计划收集', '冲突对齐', '需求确认', '任务派发']" :key="step" :class="{ current: i === stage, completed: i < stage }"><span>{{ i < stage ? '✓' : i + 1 }}</span>{{ step }}<i></i></div></div>
+        <nav v-if="route.meta.section === 'requirements'" class="code-subnav" aria-label="需求视图"><RouterLink to="/requirements" :class="{ active: route.path === '/requirements' }" :aria-current="route.path === '/requirements' ? 'page' : undefined">团队需求</RouterLink><RouterLink to="/plans" :class="{ active: route.path === '/plans' }" :aria-current="route.path === '/plans' ? 'page' : undefined">可选想法</RouterLink></nav>
+        <div v-if="(store.agileEnabled || store.flow) && ['code', 'requirements', 'projects', 'issues'].includes(String(route.meta.section))" class="phase-rail" aria-label="协作流程"><div v-for="(step, i) in steps" :key="step" :class="{ current: i === stage, completed: i < stage }" :aria-current="i === stage ? 'step' : undefined"><span>{{ i < stage ? '✓' : i + 1 }}</span>{{ step }}<i></i></div></div>
         <RouterView />
       </template>
     </main>

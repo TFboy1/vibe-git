@@ -16,9 +16,9 @@ Vibe-Git 让每位成员在自己的 Git 工作区使用熟悉的 Agent，并共
 | 阶段 | 队长 | 成员 | 完成后应看到 |
 | --- | --- | --- | --- |
 | 安装工具 | [环境与源码安装](./guide/install.md) | 同样安装新版 CLI 与 Skill | 帮助中包含超敏捷命令 |
-| 建立连接 | [创建房间](./guide/captain.md)、[配置算力](./guide/compute.md) | [加入房间](./guide/member.md) | Settings 中显示本人身份与成员 |
-| 提出想法 | [提交自己的计划](./guide/plans.md) | 提交各自计划 | 个人计划显示“已提交” |
-| 确认需求 | [整合与裁决](./guide/alignment.md) | 查看原始计划与共同需求 | Wiki 出现需求草稿 |
+| 建立连接 | [创建房间](./guide/captain.md)、[配置算力](./guide/compute.md) | [加入房间](./guide/member.md) | 设置中显示本人身份与成员 |
+| 简述目标 | 在需求页输入目标或导入文档 | 可以[补充想法](./guide/plans.md)，也可以直接等任务 | 至少一份有效输入，无需全员提交 |
+| 补齐需求 | [比较方案并回答](./guide/alignment.md) | 查看共同需求和进度 | 需求页出现可编辑草稿 |
 | 安排任务 | [预览分工并派发](./guide/dispatch.md) | 查看自己的任务包 | 正式需求 R1 和任务包一起发布 |
 | 实施任务 | 作为任务负责人时同样汇报 | [开发与汇报](./guide/execution.md) | 本人任务记录进度、阻塞或完成 |
 | 调整需求 | [批量审核并重新派发](./guide/changes.md) | 提交需求变更 Issue | 新版需求与任务修订同步到成员 |
@@ -34,7 +34,7 @@ Vibe-Git 让每位成员在自己的 Git 工作区使用熟悉的 Agent，并共
 ## 选择你的身份 {#roles}
 
 - **队长**：创建房间、邀请成员、配置团队算力、整合计划、处理冲突、编辑共同需求和派发任务。进入[队长教程](./guide/captain.md)。
-- **成员**：使用邀请命令加入房间、提交自己的计划、让 Agent 读取任务包、开发汇报和提出需求变更。进入[成员教程](./guide/member.md)。
+- **成员**：使用邀请命令加入房间，按需补充想法，复制任务指令给现有开发 AI，汇报进度和提出需求变更。进入[成员教程](./guide/member.md)。
 
 队长也可以承担开发任务。身份由连接节点决定，在网页里不能随意切换为其他成员。
 
@@ -42,14 +42,14 @@ Vibe-Git 让每位成员在自己的 Git 工作区使用熟悉的 Agent，并共
 
 | 页面 | 用来做什么 | 操作教程 |
 | --- | --- | --- |
-| Code → 个人计划 | 编写、导入和更新自己的计划 | [提交计划](./guide/plans.md) |
-| 个人计划中的整合流程 | 收集方案、选择冲突处理方式 | [整合与裁决](./guide/alignment.md) |
-| Wiki | 编辑需求草稿、查看正式版本和历史 | [需求与派发](./guide/dispatch.md) |
-| Projects | 审核分工、查看看板与任务包 | [任务派发](./guide/dispatch.md)、[开发汇报](./guide/execution.md) |
-| Issues | 提出需求变更、选择批次并统一审核 | [需求变更](./guide/changes.md) |
-| Pull requests | 打开 GitHub/GitLab 的真实代码 PR | [代码协作](./guide/git.md) |
-| Agents | 进行 Codex 分析，复用草稿与审查建议 | [代码协作](./guide/git.md#agent-assistance) |
-| Settings | 配置算力、连接 Codex、邀请成员、设置仓库与名字 | [算力](./guide/compute.md)、[房间](./guide/captain.md) |
+| 工作台 | 按角色查看当前行动、自己的任务和等待原因 | [开发汇报](./guide/execution.md) |
+| 需求 → 可选想法 | 编写、导入和更新本人想法 | [补充想法](./guide/plans.md) |
+| 需求 | 简述目标、选择方案、编辑草稿和查看历史 | [补齐需求](./guide/alignment.md)、[统一发布](./guide/dispatch.md) |
+| 任务 | 审核分工、查看看板和任务包、复制给开发 AI | [统一发布](./guide/dispatch.md)、[开发汇报](./guide/execution.md) |
+| 变更 | 提出需求变更、选择批次并统一审核 | [需求变更](./guide/changes.md) |
+| 辅助入口：代码 PR | 打开 GitHub/GitLab 的真实代码 PR | [代码协作](./guide/git.md) |
+| 辅助入口：AI 分析 | 只读分析，复用草稿与审查建议 | [代码协作](./guide/git.md#agent-assistance) |
+| 设置 | 配置算力、连接 Codex、邀请成员、设置仓库与名字 | [算力](./guide/compute.md)、[房间](./guide/captain.md) |
 
 ## 让 Skill 帮你操作 {#skill}
 

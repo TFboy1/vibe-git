@@ -72,6 +72,6 @@ async function publish() {
     <button class="text-button add-task" @click="add"><Icon name="plus" :size="16" /> 添加任务</button>
     <div v-if="preserved.length" class="preserved-tasks"><span class="eyebrow">KEEPING THE MOMENTUM / 保留原有工作</span><div v-for="task in preserved" :key="task.id"><Icon name="check" :size="14" /><strong>{{ task.title }}</strong><span>{{ store.name(task.assigneeNodeId) }}</span><small>{{ task.status === 'DONE' ? '完成记录保留' : '负责人和当前进度保留' }}</small></div></div>
     <div v-if="removed.length" class="removed-tasks"><strong>本轮将归档</strong><span v-for="id in removed" :key="id">{{ flow.taskSnapshot.find(t => t.id === id)?.title }}</span></div>
-    <footer class="paper-footer allocation-footer"><div><strong>准备好就一起开工。</strong><p>需求 R{{ flow.baseRequirementRevision + 1 }} 与整批任务包同时发布。成员无需领取或确认。</p></div><div class="button-row"><button class="btn" :disabled="store.busy || !dirty" @click="save">保存调整</button><button class="btn primary" :disabled="store.busy" @click="publish">派发任务包 <Icon name="arrow" /></button></div></footer>
+    <footer class="paper-footer allocation-footer"><div><strong>检查无误后，一次发布。</strong><p>正式需求 R{{ flow.baseRequirementRevision + 1 }} 与整批任务包一起发布。成员在现有开发 AI 中同步并执行，无需领取或另做网页确认。</p></div><div class="button-row"><button class="btn" :disabled="store.busy || !dirty" @click="save">保存调整</button><button class="btn primary" :disabled="store.busy" @click="publish">发布需求与任务 <Icon name="arrow" /></button></div></footer>
   </section>
 </template>

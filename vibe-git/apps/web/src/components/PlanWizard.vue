@@ -26,7 +26,7 @@ async function answer() {
 </script>
 <template>
   <section v-if="issue && flow.status === 'DECIDING'" class="wizard paper">
-    <header class="section-head"><span class="eyebrow">PLAN MODE / 冲突裁决</span><span class="muted small-text">已处理 {{ answered }} / {{ flow.issues.length }}</span></header>
+    <header class="section-head"><span class="eyebrow">{{ flow.kind === 'initial' ? '补齐需求 · 比较方案' : '需求变更 · 确认取舍' }}</span><span class="muted small-text">已处理 {{ answered }} / {{ flow.issues.length }}</span></header>
     <h2>{{ issue.title }}</h2><p class="lead">{{ issue.reason }}</p>
     <div class="evidence-list"><blockquote v-for="(evidence, i) in issue.evidence" :key="i"><span>{{ source(evidence.sourceId) }}</span><p>{{ evidence.excerpt }}</p></blockquote></div>
     <fieldset :disabled="!store.canManage || store.busy"><legend class="sr-only">选择解决方案</legend>
@@ -34,7 +34,7 @@ async function answer() {
         <input v-model="selected" type="radio" :value="'option:' + option.id" :name="'issue-' + issue.id" /><span class="choice-letter">{{ ['A', 'B', 'C'][i] }}</span><span><strong>{{ option.label }}</strong><small>{{ option.impact }}</small></span><Icon v-if="selected === 'option:' + option.id" name="check" />
       </label>
       <label class="choice custom-choice" :class="{ selected: selected === 'custom' }"><input v-model="selected" type="radio" value="custom" :name="'issue-' + issue.id" /><span class="choice-letter">＋</span><span><strong>我有自己的方案</strong><small>写下你的决定，AI 会结合这条回答继续整合。</small></span></label>
-      <textarea v-if="selected === 'custom'" v-model="custom" class="input custom-answer" rows="3" placeholder="说明希望如何处理这项冲突…" aria-label="自定义解决方案"></textarea>
+      <textarea v-if="selected === 'custom'" v-model="custom" class="input custom-answer" rows="3" placeholder="说明你的需求或希望采用的方案…" aria-label="自定义解决方案"></textarea>
     </fieldset>
     <footer class="wizard-footer"><span class="muted">{{ store.canManage ? '每次处理一项，必要时会继续追问。' : '队长正在统一裁决，你的原始计划会作为依据。' }}</span><button v-if="store.canManage" class="btn primary" :disabled="!selected || (selected === 'custom' && !custom.trim()) || store.busy" @click="answer">确认并继续 <Icon name="arrow" /></button></footer>
   </section>

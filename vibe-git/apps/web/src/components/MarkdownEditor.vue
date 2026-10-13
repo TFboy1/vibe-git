@@ -10,8 +10,8 @@ import { linkTooltip } from "@milkdown/crepe/feature/link-tooltip";
 import { table } from "@milkdown/crepe/feature/table";
 import { replaceAll } from "@milkdown/utils";
 import Icon from "./Icon.vue";
-const props = withDefaults(defineProps<{ modelValue: string; readonly?: boolean; filename?: string; outline?: boolean; compact?: boolean; tools?: boolean }>(),
-  { readonly: false, filename: "requirements.md", outline: true, compact: false, tools: true });
+const props = withDefaults(defineProps<{ modelValue: string; readonly?: boolean; filename?: string; outline?: boolean; compact?: boolean; tools?: boolean; placeholder?: string }>(),
+  { readonly: false, filename: "requirements.md", outline: true, compact: false, tools: true, placeholder: "写下你的目标、范围与验收…" });
 const emit = defineEmits<{ "update:modelValue": [value: string]; error: [value: string] }>();
 const root = ref<HTMLElement>(), file = ref<HTMLInputElement>(), loading = ref(true);
 const headings = ref<Array<{ title: string; level: number }>>([]);
@@ -47,7 +47,7 @@ onMounted(async () => {
     crepe = new CrepeBuilder({ root: root.value!, defaultValue: props.modelValue });
     crepe.addFeature(blockEdit, { textGroup: { label: "正文与标题", text: { label: "正文" }, h1: { label: "一级标题" }, h2: { label: "二级标题" }, h3: { label: "三级标题" } } });
     crepe.addFeature(toolbar, { boldLabel: "加粗", italicLabel: "斜体", codeLabel: "代码", linkLabel: "链接", strikethroughLabel: "删除线" });
-    crepe.addFeature(cursor); crepe.addFeature(placeholder, { text: "写下你的目标、范围与验收…", mode: "doc" });
+    crepe.addFeature(cursor); crepe.addFeature(placeholder, { text: props.placeholder, mode: "doc" });
     crepe.addFeature(listItem); crepe.addFeature(linkTooltip); crepe.addFeature(table);
     crepe.setReadonly(props.readonly);
     crepe.on(listener => listener.markdownUpdated((_ctx, markdown, previous) => {

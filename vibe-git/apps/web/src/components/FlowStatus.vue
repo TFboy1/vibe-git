@@ -14,6 +14,6 @@ const phaseNames: Record<string, string> = { AGILE_ANALYZE: "正在分析需求�
   </div>
   <div v-else-if="flow.status === 'FAILED'" class="flow-status failure">
     <Icon name="clock" /><div><strong>本次分析未完成</strong><p>{{ flow.error }}</p><small>已保留你的回答与草稿。</small></div>
-    <button v-if="store.canManage && !readonly" class="btn small" :disabled="store.busy" @click="store.mutate('/api/v1/agile/flows/' + flow.id + '/retry', { expectedRevision: flow.revision })">重试</button><RouterLink v-else-if="store.canManage" :to="flow.kind === 'initial' ? '/plans' : '/issues'" class="text-button">查看处理流程 <Icon name="arrow" :size="14" /></RouterLink>
+    <button v-if="store.canManage && !readonly" class="btn small" :disabled="store.busy" @click="store.mutate('/api/v1/agile/flows/' + flow.id + '/retry', { expectedRevision: flow.revision })">重试</button><RouterLink v-else-if="store.canManage" :to="flow.kind === 'initial' ? '/requirements' : '/issues'" class="text-button">查看处理流程 <Icon name="arrow" :size="14" /></RouterLink>
   </div>
 </template>

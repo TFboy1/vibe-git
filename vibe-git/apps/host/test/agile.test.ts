@@ -127,13 +127,12 @@ describe("超敏捷协作", () => {
     expect(flow.changeSnapshot.every(change => s.repo.getPullRequest(change.id)!.status === "APPLIED")).toBe(true);
     expect(mode === "agile" ? s.repo.getPullRequest(pending.id)!.status : s.repo.getCoordinationChange(pending.id)!.status).toBe(mode === "agile" ? "QUEUED" : "PENDING");
   });
-  it("新一轮整合检查缺席、撤回与跳过，取消后复用同一计划版本的待审记录", async () => {
+  it("新一轮整合只收集已提交且未撤回的意见，取消后复用同一版本的待审记录", async () => {
     const { a, s, captain, member, publishInitial } = await setup(); publishInitial();
     s.repo.setMeta("v20_plan_withdrawn_" + member.id, "true");
-    expect(() => a.startPlanIntegration(captain, { expectedRequirementRevision: 1 })).toThrow("收齐计划");
-    expect(() => a.startPlanIntegration(captain, { expectedRequirementRevision: 1, skipMissingNodeIds: [captain.id, member.id] })).toThrow("至少需要一位");
+    expect(() => a.startPlanIntegration(captain, { expectedRequirementRevision: 1, skipMissingNodeIds: [captain.id, member.id] })).toThrow("至少提交一份");
     expect(() => a.startPlanIntegration(captain, { expectedRequirementRevision: 1, skipMissingNodeIds: ["不存在的节点"] })).toThrow("不存在");
-    let flow = a.startPlanIntegration(captain, { expectedRequirementRevision: 1, skipMissingNodeIds: [member.id] });
+    let flow = a.startPlanIntegration(captain, { expectedRequirementRevision: 1 });
     expect(flow.participantNodeIds).toEqual([captain.id]); expect(flow.planSnapshot).toHaveLength(1);
     const ids = flow.changeSnapshot.map(change => change.id);
     expect(() => a.startPlanIntegration(captain, { expectedRequirementRevision: 1 })).toThrow("已有进行中");
@@ -167,12 +166,12 @@ describe("超敏捷协作", () => {
     const flow = a.startPlanIntegration(captain, { expectedRequirementRevision: 0 });
     expect(flow.kind).toBe("initial"); expect(flow.changeSnapshot).toHaveLength(0); expect(flow.planSnapshot).toHaveLength(2);
   });
-  it("成员命名、收齐计划、冻结来源，并在后端限制队长操作", async () => {
+  it("成员命名、至少一份输入、冻结来源，并在后端限制队长操作", async () => {
     const { a, s, captain, member, plans, app, runtime, joined } = await setup();
     expect(a.rename(member, { label: " 小林 " }).label).toBe("小林");
     expect(a.rename(captain, { label: "小林" }).label).toBe("小林");
     expect(() => a.startInitial(member, { expectedRequirementRevision: 0 })).toThrow("队长");
-    expect(() => a.startInitial(captain, { expectedRequirementRevision: 0 })).toThrow("收齐");
+    expect(() => a.startInitial(captain, { expectedRequirementRevision: 0 })).toThrow("至少提交一份");
     plans(); const flow = a.startInitial(captain, { expectedRequirementRevision: 0 });
     const saved = a.savePlan(member, { expectedRevision: 1, content: "# 新计划", filename: "member.md" });
     expect(flow.planSnapshot.find(p => p.ownerNodeId === member.id)!.revision).toBe(1);
@@ -183,6 +182,45 @@ describe("超敏捷协作", () => {
     const renamed = await app.inject({ method: "PUT", url: "/api/v1/agile/profile",
       headers: { authorization: "Bearer " + runtime.captain.nodeToken }, payload: { label: "队长" } });
     expect(renamed.json().label).toBe("队长"); expect(s.repo.listNodes()).toHaveLength(2);
+  });
+  it.each(["initial", "integration"] as const)("%s 入口从一句目标补齐需求，给未提交计划的成员派任务并附证据完成", async entry => {
+    const { a, s, captain, member, app, runtime, finish, task, report } = await setup();
+    const goal = a.savePlan(captain, { expectedRevision: 0, content: "做一个团队待办板", filename: "goal.md" });
+    const response = await app.inject({ method: "POST", url: entry === "initial" ? "/api/v1/agile/initial" : "/api/v1/agile/plan-integrations",
+      headers: { authorization: "Bearer " + runtime.captain.nodeToken }, payload: { expectedRequirementRevision: 0 } });
+    expect(response.statusCode).toBe(200);
+    let flow = response.json<AgileFlow>();
+    expect(flow.planSnapshot).toEqual([goal]); expect(flow.participantNodeIds).toEqual([captain.id]);
+    const issue = { ...conflict(flow), title: "首轮需要哪些能力？", reason: "目标尚未明确验收范围",
+      evidence: [{ sourceId: goal.id, excerpt: goal.content }] };
+    flow = finish(flow, { summary: "需要补齐范围", issues: [issue], affectedTaskIds: [], decisions: [] }).flow;
+    flow = a.answer(captain, flow.id, { expectedRevision: flow.revision, issueId: issue.id, answer: { kind: "option", optionId: "a" } });
+    flow = finish(flow, { summary: "关键需求已明确", followUp: null }).flow;
+    flow = finish(flow, { summary: "待办板需求", markdown: "# 团队待办板\n\n## 验收\n可以新增和完成待办" }).flow;
+    expect(s.repo.requirementRevision()).toBe(0);
+    flow = a.allocate(captain, flow.id, { expectedRevision: flow.revision });
+    flow = finish(flow, { summary: "成员负责页面", tasks: [task("todo-board", member)], removedTaskIds: [] }).flow;
+    expect(s.repo.requirementRevision()).toBe(0); expect(s.repo.listTasks()).toHaveLength(0);
+    a.publish(captain, flow.id, { expectedRevision: flow.revision });
+    const assigned = s.repo.listTasks()[0]!;
+    expect(assigned.assigneeNodeId).toBe(member.id); expect(s.repo.latestDocument(member.id, "plan", null)).toBeUndefined();
+    expect(a.inbox(member).tasks[0]!.package.taskId).toBe(assigned.id);
+    expect(report(member, assigned, "completed").status).toBe("DONE");
+    expect(s.repo.getTask(assigned.id)!.reportEvidence).toHaveLength(1);
+  });
+  it("首轮拒绝空来源、撤回来源与过期版本，不纳入后来提交的意见", async () => {
+    const { a, s, captain, member } = await setup();
+    const goal = a.savePlan(captain, { expectedRevision: 0, content: "简述目标", filename: "goal.md" });
+    s.repo.setMeta("v20_plan_withdrawn_" + captain.id, "true");
+    expect(() => a.startInitial(captain, { expectedRequirementRevision: 0 })).toThrow("至少提交一份");
+    s.repo.setMeta("v20_plan_withdrawn_" + captain.id, "");
+    expect(() => a.startInitial(captain, { expectedRequirementRevision: 0, skipMissingNodeIds: [captain.id] })).toThrow("至少提交一份");
+    expect(() => a.startInitial(captain, { expectedRequirementRevision: 1 })).toThrow();
+    expect(s.repo.listJobs()).toHaveLength(0); expect(a.snapshot().activeFlow).toBeNull();
+    const flow = a.startInitial(captain, { expectedRequirementRevision: 0 });
+    a.savePlan(member, { expectedRevision: 0, content: "后来补充的意见", filename: "idea.md" });
+    expect(s.repo.getAgileFlow(flow.id)!.planSnapshot).toEqual([goal]);
+    expect(() => a.startInitial(captain, { expectedRequirementRevision: 0 })).toThrow("已有进行中");
   });
   it("每题恰好三个方案；自定义回答触发必要追问，并保留答案与草稿历史", async () => {
     const { a, captain, plans, finish, task } = await setup(); plans();

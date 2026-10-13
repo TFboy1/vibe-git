@@ -16,7 +16,7 @@ const modelOptions = computed(() => agents.model && !models.value.some(model => 
   ? [...models.value, { id: agents.model, name: agents.model }] : models.value);
 const presets = [
   { key: "issues", icon: "issue", title: "分析 Issues 与代码 PR", text: "分析当前待审核的需求 Issues 与代码 PR，找出需求之间、需求与任务、需求与代码变更的冲突，提出解决方案和需要队长决定的问题。请先使用当前可见的资料，缺少代码 diff 时明确列出所需资料。" },
-  { key: "allocate", icon: "project", title: "分配任务给队友", text: "结合当前需求、成员计划、现有任务和工作进度，提出团队分工建议，说明负责人、目标、边界、验收和依赖。保留已完成记录与未受影响任务的进度，待队长在 Projects 确认后统一派发。" },
+  { key: "allocate", icon: "project", title: "分配任务给队友", text: "结合当前需求、成员可选意见、现有任务和工作进度，提出分工建议，说明负责人、目标、边界、验收和依赖。保留完成记录与未受影响任务的进度，待队长在任务页确认后统一发布。" },
   { key: "progress", icon: "activity", title: "整理工作与 Git 进度", text: "根据已同步的任务状态、进度和 Git 分支/提交标识，整理团队工作情况、阻塞点和下一步。不把工作区修改或提交标识直接当成任务完成证据。" },
   { key: "review", icon: "pull", title: "审查代码合并方案", text: "结合当前需求和任务职责，列出代码 PR 的审查重点、潜在冲突和合并顺序。代码 PR 使用原生 Git 流程；缺少真实 diff 和检查结果时不要推断代码已经通过审查。" }
 ];
@@ -61,7 +61,7 @@ async function useDraft(kind: "plan" | "issue") {
   if (!lastAssistant.value?.text || !workspace.data) return;
   try {
     const data = workspace.data, text = lastAssistant.value.text;
-    if (kind === "plan") localStorage.setItem("vibe-plan:" + data.room.id + ":" + data.viewer.id, text);
+    if (kind === "plan") workspace.editPlanDraft(text);
     else localStorage.setItem("vibe-pr:" + data.room.id + ":" + data.viewer.id, JSON.stringify({ title: text.match(/^#\s+(.+)$/m)?.[1]?.slice(0, 160) || "Codex 需求建议", content: text, baseRevision: data.room.requirementRevision }));
     await router.push(kind === "plan" ? "/plans" : "/issues"); workspace.notice = "建议已放入草稿，可编辑后提交";
   } catch { agents.error = "无法保存本机草稿，请复制回答后在计划或 Issues 中编辑"; }

@@ -1,8 +1,9 @@
-import { computed, ref } from "vue";
+import { computed, ref, watch } from "vue";
 import { defineStore } from "pinia";
 import { workspaceChanges } from "@vibe-git/protocol";
-import type { AgileFlow, LocalComputeStatus, LocalCodexStatus, RoomEvent, V20BootstrapPayload } from "@vibe-git/protocol";
+import type { AgileFlow, LocalComputeStatus, LocalCodexStatus, MarkdownDocument, RoomEvent, V20BootstrapPayload } from "@vibe-git/protocol";
 import { request } from "./api";
+import { taskNextStep } from "./team";
 
 export interface LocalProject {
   name: string; path: string; branch: string; headSha: string; dirty: boolean; valid: boolean; error?: string; runningTask: string | null;
@@ -35,6 +36,78 @@ export const useWorkspace = defineStore("workspace", () => {
   });
   const computeAvailable = computed(() => provider.value === "codex" ? (data.value?.auditPool.available ?? 0) > 0 :
     captain.value && local.value ? compute.value?.ready && compute.value.connection?.status === "passed" : data.value?.nodes.some(node => node.role === "captain" && node.connected && node.apiReady));
+  const ownPlan = computed(() => data.value?.plans.find(plan => plan.ownerNodeId === data.value?.viewer.id));
+  const planDraft = ref(""), planDraftBase = ref(""), planDraftRevision = ref(0);
+  const planDraftDirty = computed(() => planDraft.value.trim() !== planDraftBase.value.trim());
+  const planDraftConflict = computed(() => planDraftDirty.value && planDraftRevision.value !== (ownPlan.value?.revision ?? 0));
+  let planKey = "";
+  function resetPlanDraft() {
+    planDraft.value = planDraftBase.value = ownPlan.value?.content ?? ""; planDraftRevision.value = ownPlan.value?.revision ?? 0;
+    try { localStorage.removeItem(planKey); } catch { /* Server content remains available. */ }
+  }
+  watch(() => [data.value?.room.id, data.value?.viewer.id, ownPlan.value?.revision] as const, ([room, viewer]) => {
+    if (!room || !viewer) return;
+    const key = "vibe-plan:" + room + ":" + viewer;
+    if (key === planKey) {
+      if (!planDraftDirty.value) { planDraft.value = planDraftBase.value = ownPlan.value?.content ?? ""; planDraftRevision.value = ownPlan.value?.revision ?? 0; }
+      return;
+    }
+    planKey = key;
+    let cached: string | null = null; try { cached = localStorage.getItem(key); } catch { /* Private mode. */ }
+    planDraft.value = planDraftBase.value = ownPlan.value?.content ?? ""; planDraftRevision.value = ownPlan.value?.revision ?? 0;
+    if (cached) {
+      let content = cached, revision = ownPlan.value ? -1 : 0;
+      try {
+        const saved = JSON.parse(cached);
+        if (saved?.type === "plan-draft" && typeof saved.content === "string" && Number.isInteger(saved.revision) && saved.revision >= -1) {
+          content = saved.content; revision = saved.revision;
+        }
+      } catch { /* Restore drafts written by the previous plain-text editor. */ }
+      if (content.trim() !== planDraftBase.value.trim()) {
+        planDraft.value = content; planDraftRevision.value = revision;
+        editPlanDraft(content);
+      }
+    }
+  });
+  function editPlanDraft(content: string) {
+    planDraft.value = content;
+    try { localStorage.setItem(planKey, JSON.stringify({ type: "plan-draft", content, revision: planDraftRevision.value })); } catch { /* Keep the draft in memory. */ }
+  }
+  const integrationBlocker = computed(() => {
+    if (!canManage.value) return "请在队长电脑运行 vibe-git open，进入可操作的工作台。";
+    if (flow.value) return "已有进行中的需求整合或审核，请先完成或取消本轮。";
+    if (!data.value?.room.requirementRevision && !agileEnabled.value) return "历史房间首轮仍使用 vibe-git align start；可以先提交想法。";
+    if (data.value?.room.requirementRevision && !data.value.agile?.planIntegrationEnabled) return "协作服务需要更新后才能整合本轮想法。";
+    if (data.value?.room.requirementRevision && !reviewStage.value) return "当前没有可更新的需求阶段。";
+    if (reviewStage.value?.reviewId || ["REVIEWING", "AWAITING_APPLY"].includes(reviewStage.value?.status ?? "")) return "当前阶段已有审核，请先完成或取消。";
+    if (planDraftConflict.value) return "本机草稿与已提交版本不同，请先导出草稿并核对已提交内容。";
+    if (planDraftDirty.value && !planDraft.value.trim()) return "目标或想法为空，请填写内容或恢复已提交内容。";
+    if (!planDraft.value.trim() && !data.value?.plans.length) return "先简述一个目标，或导入已有 Markdown。";
+    if (!computeAvailable.value) return "协作算力尚未就绪，请在设置中配置后继续。";
+    return "";
+  });
+  const myTasks = computed(() => (data.value?.tasks ?? []).filter(task => !task.archived && task.assigneeNodeId === data.value?.viewer.id && task.status !== "DONE")
+    .sort((a, b) => Number(b.status === "PAUSED") - Number(a.status === "PAUSED") || Number(b.status === "IN_PROGRESS") - Number(a.status === "IN_PROGRESS")));
+  const nextAction = computed(() => {
+    const current = flow.value, flowPath = current?.kind === "review" ? "/issues" : "/requirements";
+    if (!captain.value) {
+      const task = myTasks.value[0];
+      if (task) return { title: task.title, body: taskNextStep(task, data.value?.tasks ?? [], name), path: "/projects?view=packages&task=" + encodeURIComponent(task.id), label: "查看我的任务" };
+      const leader = data.value?.nodes.find(node => node.role === "captain");
+      const done = data.value?.tasks.some(task => task.assigneeNodeId === data.value?.viewer.id && task.status === "DONE");
+      return { title: done ? "本轮任务已完成" : "等待" + (leader?.label ?? "队长") + "派发任务", body: current ? "队长正在" + (current.kind === "review" ? "审核需求变更" : "整理需求与分工") + "，发布后你的任务会自动出现。" : done ? "验收证据已保留；后续变更需要返工时会创建关联任务。" : "可以按需补充想法，也可以直接等待任务，无需提交个人计划。", path: current ? flowPath : "/requirements", label: "查看团队需求" };
+    }
+    if (current) {
+      if (current.status === "FAILED") return { title: "本次分析需要重试", body: current.error ?? "回答与草稿已保留，请进入原流程继续。", path: flowPath, label: "处理失败" };
+      if (current.status === "DECIDING") return { title: "有待确认的需求问题", body: "比较各方案的取舍，选择一个或写下自己的决定。", path: flowPath, label: "继续确认" };
+      if (current.status === "DRAFT") return { title: "需求草稿已就绪", body: "审核正文，再生成分工；正式需求与任务包将在最后一起发布。", path: "/requirements", label: "审核需求" };
+      if (current.status === "READY") return { title: "分工已就绪，等待你发布", body: "检查负责人、目标、边界与验收，一次发布需求和任务包。", path: "/projects", label: "审核并发布" };
+      return { title: current.status === "PLANNING" ? "AI 正在生成分工" : "AI 正在整理需求", body: "已提交的内容与决定会保留，可以稍后回到当前流程。", path: flowPath, label: "查看进度" };
+    }
+    if (!data.value?.room.requirementRevision) return { title: "从一个目标开始", body: "简述希望解决的问题，AI 会用选择题补齐关键需求。成员可以按需补充想法。", path: "/requirements", label: "创建需求" };
+    if (pendingChanges.value.length) return { title: pendingChanges.value.length + " 项需求变更待审核", body: "选择本轮要处理的变更，统一分析影响并形成新版需求。", path: "/issues", label: "处理需求变更" };
+    return { title: "团队正在按正式需求开发", body: "查看任务进度、依赖和阻碍；需要调整目标时提交需求变更。", path: "/projects", label: "查看团队任务" };
+  });
   let events: EventSource | null = null, refreshTimer: ReturnType<typeof setTimeout> | undefined;
   let refreshPromise: Promise<void> | null = null, refreshAgain = false;
   async function refresh(): Promise<void> {
@@ -99,12 +172,34 @@ export const useWorkspace = defineStore("workspace", () => {
   }
   const mutate = <T = AgileFlow>(path: string, body: unknown, success = "", method = "POST") =>
     perform(() => request<T>(path, body, method), success);
+  async function submitPlan() {
+    if (!local.value || !planDraft.value.trim() || busy.value) return null;
+    if (planDraftConflict.value) { error.value = "已提交内容发生变化。请先导出本机草稿，再核对或恢复已提交内容。"; return null; }
+    const plan = ownPlan.value, sent = planDraft.value;
+    const path = agileEnabled.value ? "/api/v1/agile/plan" : plan ? "/api/v1/plans/" + encodeURIComponent(plan.id) : "/api/v1/plans";
+    const saved = await mutate<MarkdownDocument>(path, { expectedRevision: planDraftRevision.value, content: sent, filename: plan?.filename ?? "plan.md" }, "目标或想法已提交", agileEnabled.value || plan ? "PUT" : "POST");
+    if (saved) {
+      planDraftBase.value = saved.content; planDraftRevision.value = saved.revision;
+      if (planDraft.value === sent) {
+        planDraft.value = saved.content;
+        try { const cached = localStorage.getItem(planKey); if (cached && JSON.parse(cached)?.content === sent) localStorage.removeItem(planKey); } catch { /* Keep drafts from other windows. */ }
+      }
+      else editPlanDraft(planDraft.value);
+    }
+    return saved;
+  }
+  async function startRequirement() {
+    if (busy.value || integrationBlocker.value) return null;
+    if (planDraftDirty.value && !(await submitPlan())) return null;
+    return mutate<AgileFlow>(data.value?.agile?.planIntegrationEnabled ? "/api/v1/agile/plan-integrations" : "/api/v1/agile/initial",
+      { expectedRequirementRevision: data.value?.room.requirementRevision ?? 0 }, "输入已保存，AI 正在补齐需求与分析冲突");
+  }
   function checkRequirementDraft(value: AgileFlow): boolean {
     try {
       const raw = localStorage.getItem("vibe-requirement:" + data.value?.room.id + ":" + value.id);
       const saved = raw ? JSON.parse(raw) as { markdown?: unknown } : null;
       if (saved && typeof saved.markdown === "string" && saved.markdown !== value.draftMarkdown) {
-        error.value = "需求文档还有本机未保存的修改。请先到 Wiki 保存并核对需求，再生成分工或派发任务。"; return false;
+        error.value = "需求文档还有本机未保存的修改。请先到需求页保存并核对，再生成分工或发布任务。"; return false;
       }
     } catch { /* Server revisions remain authoritative when local storage is unavailable. */ }
     return true;
@@ -112,9 +207,10 @@ export const useWorkspace = defineStore("workspace", () => {
   async function generateAllocation() {
     const current = flow.value;
     if (!canManage.value || !current || current.status !== "DRAFT" || !checkRequirementDraft(current)) return null;
-    return mutate("/api/v1/agile/flows/" + current.id + "/allocate", { expectedRevision: current.revision }, "AI 正在生成任务分工，完成后可在 Projects 确认并派发");
+    return mutate("/api/v1/agile/flows/" + current.id + "/allocate", { expectedRevision: current.revision }, "AI 正在生成分工，完成后可在任务页审核并发布");
   }
   function name(id: string) { return data.value?.nodes.find(n => n.id === id)?.label ?? id.slice(-6); }
   return { data, ready, local, connected, error, notice, captain, canManage, agileEnabled, batchReviewEnabled, reviewStage, flow, changes, pendingChanges, pendingPRs, busy,
-    project, projectError, chatAvailable, refreshProject, compute, codex, computeError, provider, computeLabel, computeAvailable, refreshCompute, start, stop, refresh, perform, mutate, checkRequirementDraft, generateAllocation, name };
+    project, projectError, chatAvailable, refreshProject, compute, codex, computeError, provider, computeLabel, computeAvailable, refreshCompute, start, stop, refresh, perform, mutate, checkRequirementDraft, generateAllocation, name,
+    ownPlan, planDraft, planDraftDirty, planDraftConflict, editPlanDraft, resetPlanDraft, submitPlan, startRequirement, integrationBlocker, myTasks, nextAction };
 });

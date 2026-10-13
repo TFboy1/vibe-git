@@ -70,14 +70,16 @@ vibe-git host start
 vibe-git open
 ```
 
-成员进入**各自的项目 Git 工作区**，运行队长给出的加入命令，然后提交一份 UTF-8 Markdown 提案：
+成员进入**各自的项目 Git 工作区**，运行队长给出的加入命令并打开工作台。可以只接任务，也可以按需提交一份 UTF-8 Markdown 想法：
 
 ```powershell
 vibe-git connect "https://xxxx.trycloudflare.com/join/xxxxx"
+vibe-git open
+# 可选：补充自己的想法
 vibe-git plan submit .\proposal.md
 ```
 
-队长在 Settings 配置协作算力，收齐个人计划后使用新版整合、裁决、需求编辑和任务包派发。成员通过 Skill 读取 `task inbox` 并以 `task report` 汇报实际执行结果。完整步骤见[新版使用文档](https://tfboy1.github.io/vibe-git/guide.html)。加入链接含注册密钥，只交给预期成员；下方工作流表保留历史流程说明。
+队长在“设置”配置协作算力，在“需求”简述目标或导入已有文档。AI 用选择题补齐关键需求，队长审核需求与分工后一次发布。无需收齐所有人的计划。成员在“任务”复制具体指令给现有开发 AI，Skill 同步 `task inbox` 并通过 `task report` 汇报实际结果。完整步骤见[新版使用文档](https://tfboy1.github.io/vibe-git/guide.html)。加入链接含注册密钥，只交给预期成员；下方工作流表保留历史流程说明。
 
 ## 工作流
 

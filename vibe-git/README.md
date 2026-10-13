@@ -1,6 +1,6 @@
 # Vibe-Git 0.20
 
-当前 `codex/frontend-rebuild` 分支已完成 Vue 超敏捷工作台：多人计划、三方案与自定义裁决、可编辑需求 MD、分工预览、批量需求变更 PR 与全员任务包派发。`npm run build` 同时构建前后端，`vibe-git open` 打开本机工作台。启动与操作步骤见[超敏捷协作](docs/AGILE-WORKFLOW.md)；下文保留历史流程说明。
+当前 `codex/frontend-rebuild` 分支的 Vue 工作台以当前行动为入口：队长简述目标，AI 用三方案和自定义答案补齐需求，审核正文与分工后一次发布；成员可以只接任务，复制指令给现有开发 AI，通过 Skill 同步与汇报。主导航为工作台、需求、任务、变更、设置；个人想法是可选输入。`npm run build` 同时构建前后端，`vibe-git open` 打开本机工作台。启动与操作步骤见[超敏捷协作](docs/AGILE-WORKFLOW.md)；下文保留历史流程说明。
 
 Vibe-Git 是一个 **CLI 主导、网页观察** 的多人 Codex 协作控制面。队长只启动一个 Host 和 Cloudflare Quick Tunnel；每位成员从自己的 Git 工作区连接，不需要填写项目名称、成员名字或固定 A/B/C 身份。
 
