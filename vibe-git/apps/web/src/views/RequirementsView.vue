@@ -72,7 +72,8 @@ async function allocate() {
   if (!canAllocate.value || store.busy || saving.value || !value.value.trim() || !(await save())) return;
   await store.generateAllocation();
 }
-onBeforeUnmount(() => { clearTimeout(timer); if (dirty.value && !saving.value) void save(); });
+const unregisterDraftSaver = store.registerDraftSaver(save);
+onBeforeUnmount(() => { unregisterDraftSaver(); clearTimeout(timer); if (!store.projectSwitching && dirty.value && !saving.value) void save(); });
 </script>
 <template>
   <div class="intro-line"><p>团队共同遵循的需求。<span>{{ liveDraft ? '编辑正文后生成分工，最后一起发布。' : '从一个目标开始，成员可以按需补充想法。' }}</span></p><div class="button-row"><RouterLink to="/plans" class="btn">补充想法（可选）</RouterLink><RouterLink v-if="store.data?.room.requirementRevision && !current" to="/issues" class="btn primary">提出需求变更 <Icon name="arrow" /></RouterLink></div></div>

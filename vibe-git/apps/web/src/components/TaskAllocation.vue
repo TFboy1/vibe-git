@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
+import { computed, onBeforeUnmount, ref, watch } from "vue";
 import type { AgileFlow, AgileTaskDraft } from "@vibe-git/protocol";
 import { useWorkspace } from "../store";
 import Icon from "./Icon.vue";
@@ -50,6 +50,8 @@ async function publish() {
   const saved = await save(); if (!saved) return;
   await store.mutate("/api/v1/agile/flows/" + saved.id + "/publish", { expectedRevision: saved.revision }, "正式需求与任务包已向全员派发");
 }
+const unregisterDraftSaver = store.registerDraftSaver(async () => !!(await save()));
+onBeforeUnmount(unregisterDraftSaver);
 </script>
 <template>
   <section class="paper allocation-paper">

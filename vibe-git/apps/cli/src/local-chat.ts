@@ -1,7 +1,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createInterface } from "node:readline";
 import { resolve } from "node:path";
-import type { StageTask, V20BootstrapPayload } from "@vibe-git/protocol";
+import type { CodexModelSettings, StageTask, V20BootstrapPayload } from "@vibe-git/protocol";
 import { api } from "./api.js";
 import { codexInvocation } from "./codex-command.js";
 import { readJson, vibeHome, writeJson, type ClientConfig } from "./config.js";
@@ -33,11 +33,12 @@ export class LocalAppServer {
   private planQuestionWaiter: ((question: PlanStep) => void) | null = null;
   private planCompletion: Promise<void> | null = null;
 
-  constructor(workspace: string) {
+  constructor(private readonly workspace: string) {
     const invocation = codexInvocation();
     this.child = spawn(invocation.file, [...invocation.prefixArgs, "app-server", "--stdio"],
       { cwd: workspace, windowsHide: true, stdio: ["pipe", "pipe", "pipe"] });
     createInterface({ input: this.child.stdout }).on("line", (line) => this.receive(line));
+    this.child.stderr.resume();
     this.child.once("error", (error) => this.failAll(error));
     this.child.once("close", () => this.failAll(new Error("本机 Codex App Server 已退出")));
   }
@@ -119,6 +120,7 @@ export class LocalAppServer {
     this.notify("initialized", {});
   }
   async turn(threadId: string, text: string, workspace: string, onDelta: (delta: string) => void, outputSchema?: unknown, model?: string, timeoutMs = 180_000, _signal?: AbortSignal): Promise<string> {
+    model = await resolveCodexModel(workspace, model);
     this.finalText = ""; this.onDelta = onDelta;
     const completed = new Promise<void>((resolvePromise, rejectPromise) => {
       const timer = setTimeout(() => { this.turnDone = null; rejectPromise(new Error("Codex 思考超时，请重试")); }, timeoutMs);
@@ -136,6 +138,7 @@ export class LocalAppServer {
     return this.finalText;
   }
   async planMode(model?: string): Promise<{ mode: "plan"; settings: { model: string; developer_instructions: null; reasoning_effort?: string | null } }> {
+    model = await resolveCodexModel(this.workspace, model);
     const listed = await this.request<{ data?: Array<{ mode?: string | null; model?: string | null; reasoning_effort?: string | null }> }>("collaborationMode/list", {}, 10_000);
     const preset = listed.data?.find((item) => item.mode === "plan");
     if (!preset) throw new Error("当前 Codex 不支持原生 Plan 模式，请更新 Codex CLI");
@@ -259,6 +262,32 @@ export async function draftProposalWithCodex(config: ClientConfig, userPrompt?: 
 
 
 export interface CodexModelOption { id: string; name: string; description?: string; isDefault?: boolean }
+
+export async function resolveCodexModel(workspace: string, explicit?: string): Promise<string> {
+  const chosen = explicit || (await readJson<{ model?: string }>(resolve(vibeHome(), "codex-model.json")))?.model;
+  if (chosen) return chosen;
+  const app = new LocalAppServer(workspace);
+  try {
+    await app.initialize();
+    const effective = await app.request<{ config: { model?: string | null } }>("config/read", { includeLayers: false });
+    if (effective.config.model) return effective.config.model;
+    const listed = await app.request<{ data: Array<{ model?: string; id: string; isDefault?: boolean }> }>("model/list", { limit: 100, includeHidden: false });
+    const model = listed.data.find(model => model.isDefault);
+    if (!model) throw new Error("Codex 未返回具体默认模型，请在连接设置中选择模型");
+    return model.model || model.id;
+  } finally { app.close(); }
+}
+export async function codexModelSettings(workspace: string): Promise<CodexModelSettings> {
+  const selectedModel = (await readJson<{ model?: string }>(resolve(vibeHome(), "codex-model.json")))?.model ?? null;
+  try { return { selectedModel, effectiveModel: await resolveCodexModel(workspace), source: selectedModel ? "vibe-git" : "codex" }; }
+  catch (error) { return { selectedModel, effectiveModel: null, source: selectedModel ? "vibe-git" : "codex", error: error instanceof Error ? error.message : String(error) }; }
+}
+export async function saveCodexModel(config: ClientConfig, model: unknown): Promise<CodexModelSettings> {
+  if (model !== null && (typeof model !== "string" || !model.trim() || model.length > 150 || /[\r\n]/.test(model))) throw new Error("模型名称无效");
+  if (model !== null && !(await listCodexModels(config)).some(option => option.id === model && option.id !== "default")) throw new Error("所选模型当前不在 Codex 模型列表中，请刷新后重新选择");
+  await writeJson(resolve(vibeHome(), "codex-model.json"), { model });
+  return codexModelSettings(config.workspace);
+}
 export async function listCodexModels(config: ClientConfig): Promise<CodexModelOption[]> {
   const app = new LocalAppServer(config.workspace);
   try {

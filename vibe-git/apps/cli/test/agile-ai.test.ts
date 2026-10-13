@@ -6,6 +6,7 @@ import { computeStatus, responsesUrl, runResponses, runStructuredJob, saveComput
 import { handleAgileCommand, waitForAgile } from "../src/agile-command.js";
 import { loadConfig, type ClientConfig } from "../src/config.js";
 import { runAudit } from "../src/codex.js";
+import { activityReporter } from "../src/job-activity.js";
 vi.mock("../src/codex.js", () => ({ runAudit: vi.fn() }));
 const config: ClientConfig = { hostUrl: "http://host.test", nodeId: "captain", nodeToken: "test-node-token", workspace: "D:/test-project",
   daemonPid: null, workTransport: "auto", connectedAt: new Date().toISOString(), openaiApiKey: "x", openaiBaseUrl: "https://proxy.test/custom/", openaiModel: "provider/model" };
@@ -19,6 +20,28 @@ afterEach(async () => {
   await rm(root, { recursive: true, force: true });
 });
 describe("原生 Responses 协作算力", () => {
+  it("旧 Host 未声明活动能力时不发送未知的进度状态", async () => {
+    const fetch = vi.fn(); vi.stubGlobal("fetch", fetch);
+    const reporter = activityReporter(config, { id: "old-job", payload: {}, leaseToken: "old-lease" } as never);
+    reporter.emit({ kind: "status", message: "正在分析" }); await reporter.flush();
+    expect(fetch).not.toHaveBeenCalled();
+  });
+  it("流式分析暴露真实接收进度，进度上报合并输出并隐藏凭据", async () => {
+    const activities: string[] = [];
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("data: " + JSON.stringify({ type: "response.output_text.delta", delta: '{"ok":true}' }) + "\n\n" +
+      "data: " + JSON.stringify({ type: "response.completed", response: completed }) + "\n\n", { headers: { "content-type": "text/event-stream" } })));
+    expect(await runResponses(config, "test", schema, undefined, activity => activities.push(activity.message))).toEqual({ ok: true });
+    expect(activities.some(message => message.includes("接收结果"))).toBe(true);
+    const sent: unknown[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (_url: string, init?: RequestInit) => { sent.push(JSON.parse(String(init?.body))); return new Response("{}"); }));
+    const reporter = activityReporter({ ...config, openaiApiKey: "private-api-key" }, { id: "job", leaseToken: "private-lease", payload: { activityEnabled: true } } as never);
+    reporter.emit({ kind: "output", message: "收到 1 字" }); reporter.emit({ kind: "output", message: "收到 2 字" });
+    reporter.emit({ kind: "tool", message: "请求 Bearer private-api-key", detail: "test-node-token private-lease" });
+    await reporter.flush();
+    expect(sent).toHaveLength(2); expect(JSON.stringify(sent)).not.toContain("private-api-key");
+    const body = sent[1] as { activity: unknown };
+    expect(JSON.stringify(body.activity)).not.toContain("private-lease"); expect(JSON.stringify(body.activity)).not.toContain("test-node-token");
+  });
   it("只追加 /responses，不自动补 /v1，兼容模型名和短 Key", async () => {
     expect(responsesUrl("https://proxy.test/custom///")).toBe("https://proxy.test/custom/responses");
     expect(responsesUrl("http://127.0.0.1:9000")).toBe("http://127.0.0.1:9000/responses");

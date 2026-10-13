@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import type { CapabilityStateV20, RateLimitWindow, WorkTransport } from "@vibe-git/protocol";
 import { codexInvocation } from "./codex-command.js";
+import { resolveCodexModel } from "./local-chat.js";
 
 const message = (error: unknown) => error instanceof Error ? error.message : String(error);
 
@@ -36,7 +37,10 @@ function deferred<T>(): Deferred<T> {
 export interface RunResult { status: "completed" | "failed" | "interrupted"; detail: string }
 export interface ActiveRun { runtimeId: string; transport: "app-server" | "cli"; done: Promise<RunResult>; interrupt(): Promise<RunResult> }
 
-export async function runAudit(prompt: string, schema: unknown, workspace: string, codexHome: string, signal?: AbortSignal): Promise<unknown> {
+export async function runAudit(prompt: string, schema: unknown, workspace: string, codexHome: string, signal?: AbortSignal,
+  options: { model?: string; onActivity?: ((activity: Omit<import("@vibe-git/protocol").JobActivityInput, "id">) => void) | undefined } = {}): Promise<unknown> {
+  const model = await resolveCodexModel(workspace, options.model);
+  options.onActivity?.({ kind: "status", message: "正在连接本机 Codex", model });
   if (signal?.aborted) throw new Error("Codex 修订生成已取消，已有草稿保留");
   await mkdir(codexHome, { recursive: true, mode: 0o700 });
   const temp = await mkdtemp(resolve(tmpdir(), "vibe-git-audit-"));
@@ -47,7 +51,7 @@ export async function runAudit(prompt: string, schema: unknown, workspace: strin
     await new Promise<void>((done, fail) => {
       const command = codexInvocation();
       const child = spawn(command.file, [...command.prefixArgs,
-        "exec", "--sandbox", "read-only", "--ephemeral", "--skip-git-repo-check",
+        "exec", "--model", model, "--json", "--sandbox", "read-only", "--ephemeral", "--skip-git-repo-check",
         "--output-schema", schemaPath, "--output-last-message", outputPath, "--cd", workspace, "-"
       ], { cwd: workspace, windowsHide: true, env: { ...process.env, CODEX_HOME: codexHome }, stdio: ["pipe", "pipe", "pipe"] });
       let stderr = "";
@@ -56,7 +60,15 @@ export async function runAudit(prompt: string, schema: unknown, workspace: strin
       signal?.addEventListener("abort", abort, { once: true });
       if (signal?.aborted) child.kill();
       const timeout = setTimeout(() => { timedOut = true; child.kill(); }, 25 * 60_000);
-      child.stdout.resume();
+      createInterface({ input: child.stdout }).on("line", line => {
+        let event: { type?: string; item?: { type?: string; text?: string; command?: string; aggregated_output?: string } };
+        try { event = JSON.parse(line); } catch { return; }
+        const item = event.item;
+        if (event.type === "turn.started") options.onActivity?.({ kind: "status", message: "Codex 正在分析输入资料", model });
+        if (item?.type === "reasoning" && item.text) options.onActivity?.({ kind: "summary", message: item.text, model });
+        if (item?.type === "command_execution") options.onActivity?.({ kind: "tool", message: (event.type === "item.completed" ? "已执行：" : "正在执行：") + (item.command ?? "查看项目资料"), detail: item.aggregated_output, model });
+        if (item?.type === "agent_message" && event.type === "item.completed") options.onActivity?.({ kind: "output", message: "已收到模型结果，正在校验", model });
+      });
       child.stderr.setEncoding("utf8");
       child.stderr.on("data", (chunk: string) => { stderr = (stderr + chunk).slice(-32_000); });
       child.once("error", (error) => { clearTimeout(timeout); signal?.removeEventListener("abort", abort); fail(error); });
@@ -76,23 +88,24 @@ export async function runAudit(prompt: string, schema: unknown, workspace: strin
 
 export async function startDevelopment(prompt: string, workspaceRaw: string, requested: WorkTransport): Promise<ActiveRun> {
   const workspace = resolve(workspaceRaw);
+  const model = await resolveCodexModel(workspace);
   const probe = probeCodex();
   if (probe.state !== "available") throw new Error("日常 Codex CLI 未登录或不可用");
   const transport = requested === "cli" ? "cli" : requested === "app-server" ? "app-server" : probe.appServer ? "app-server" : "cli";
   if (transport === "app-server" && !probe.appServer) throw new Error("本机 Codex App Server 不可用");
   if (transport === "app-server") {
-    try { return await startAppServer(prompt, workspace); }
+    try { return await startAppServer(prompt, workspace, model); }
     catch (error) {
       if (requested !== "auto") throw error;
-      return startCli(prompt, workspace);
+      return startCli(prompt, workspace, model);
     }
   }
-  return startCli(prompt, workspace);
+  return startCli(prompt, workspace, model);
 }
 
-async function startCli(prompt: string, workspace: string): Promise<ActiveRun> {
+async function startCli(prompt: string, workspace: string, model: string): Promise<ActiveRun> {
   const command = codexInvocation();
-  const child = spawn(command.file, [...command.prefixArgs, "exec", "--sandbox", "workspace-write", "--json", "--cd", workspace, "-"], {
+  const child = spawn(command.file, [...command.prefixArgs, "exec", "--model", model, "--sandbox", "workspace-write", "--json", "--cd", workspace, "-"], {
     cwd: workspace, windowsHide: true, stdio: ["pipe", "pipe", "pipe"]
   });
   const started = deferred<string>();
@@ -136,7 +149,7 @@ async function startCli(prompt: string, workspace: string): Promise<ActiveRun> {
   };
 }
 
-async function startAppServer(prompt: string, workspace: string): Promise<ActiveRun> {
+async function startAppServer(prompt: string, workspace: string, model: string): Promise<ActiveRun> {
   const command = codexInvocation();
   const child = spawn(command.file, [...command.prefixArgs, "app-server", "--stdio"], { cwd: workspace, windowsHide: true, stdio: ["pipe", "pipe", "pipe"] });
   const client = new AppServerClient(child);
@@ -144,10 +157,10 @@ async function startAppServer(prompt: string, workspace: string): Promise<Active
     await client.request("initialize", { clientInfo: { name: "vibe_git", title: "Vibe-Git", version: "0.20.0" } }, 20_000);
     client.notify("initialized", {});
     const thread = await client.request<{ thread: { id: string } }>("thread/start", {
-      cwd: workspace, approvalPolicy: "never", sandbox: "workspace-write", serviceName: "vibe_git"
+      cwd: workspace, model, approvalPolicy: "never", sandbox: "workspace-write", serviceName: "vibe_git"
     }, 20_000);
     const turn = await client.request<{ turn: { id: string } }>("turn/start", {
-      threadId: thread.thread.id, input: [{ type: "text", text: prompt }], cwd: workspace,
+      threadId: thread.thread.id, model, input: [{ type: "text", text: prompt }], cwd: workspace,
       approvalPolicy: "never", sandboxPolicy: { type: "workspaceWrite", writableRoots: [workspace], networkAccess: true }, summary: "concise"
     }, 30_000);
     const runtimeId = `${thread.thread.id}:${turn.turn.id}`;

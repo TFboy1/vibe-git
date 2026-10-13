@@ -7,7 +7,7 @@ export const useRepository = defineStore("repository", () => {
   const workspace = useWorkspace(), remote = ref("");
   const key = computed(() => "vibe-repository:" + workspace.data?.room.id);
   watch(key, () => { try { remote.value = localStorage.getItem(key.value) ?? ""; } catch { remote.value = ""; } }, { immediate: true });
-  const name = computed(() => workspace.project?.name || "vibe-git");
+  const name = computed(() => workspace.connections?.current.name || workspace.project?.name || "vibe-git");
   const owner = computed(() => workspace.data?.nodes.find(node => node.role === "captain")?.label || "团队");
   const url = computed(() => {
     try { const value = new URL(remote.value); return value.protocol === "https:" || value.protocol === "http:" ? value : null; }

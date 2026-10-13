@@ -2,6 +2,7 @@ import { homedir } from "node:os";
 import { dirname, resolve } from "node:path";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import type { WorkTransport } from "@vibe-git/protocol";
+import { randomUUID } from "node:crypto";
 
 export interface ClientConfig {
   hostUrl: string;
@@ -33,7 +34,7 @@ export async function readJson<T>(path: string): Promise<T | null> {
 
 export async function writeJson(path: string, value: unknown): Promise<void> {
   await mkdir(dirname(path), { recursive: true, mode: 0o700 });
-  const temp = `${path}.${process.pid}.tmp`;
+  const temp = `${path}.${process.pid}.${randomUUID()}.tmp`;
   await writeFile(temp, `${JSON.stringify(value, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
   await rename(temp, path);
 }

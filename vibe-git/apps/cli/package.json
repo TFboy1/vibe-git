@@ -9,6 +9,7 @@
   "scripts": {
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "build": "tsc -p tsconfig.build.json",
+    "pretest": "npm run build -w @vibe-git/host",
     "test": "vitest run test"
   },
   "dependencies": {

@@ -7,6 +7,8 @@ import { useWorkspace } from "./store";
 import { useRepository } from "./repository";
 import { taskStatus } from "./team";
 import Icon from "./components/Icon.vue";
+import ProjectSwitcher from "./components/ProjectSwitcher.vue";
+import AnalysisActivity from "./components/AnalysisActivity.vue";
 const store = useWorkspace(), repository = useRepository(), route = useRoute(), router = useRouter();
 const inboxOpen = ref(false), search = ref(""), searchInput = ref<HTMLInputElement>();
 const searchPlaceholder = computed(() => typeof route.meta.searchPlaceholder === "string" ? route.meta.searchPlaceholder : "");
@@ -55,7 +57,7 @@ onBeforeUnmount(() => { store.stop(); clearTimeout(noticeTimer); window.removeEv
       <div class="global-bar">
         <div class="global-identity">
           <RouterLink to="/" class="repository-brand" aria-label="Vibe-Git 首页">vg<span></span></RouterLink>
-          <div class="repository-breadcrumb"><span>{{ repository.owner }}</span><span class="muted">/</span><RouterLink to="/">{{ repository.name }}</RouterLink><Icon name="chevron" :size="12" class="rotate" /></div>
+          <div class="repository-breadcrumb"><span>{{ repository.owner }}</span><span class="muted">/</span><ProjectSwitcher v-if="store.local" /><RouterLink v-else to="/">{{ repository.name }}</RouterLink></div>
         </div>
         <form v-if="searchPlaceholder" class="global-search" role="search" @submit.prevent="find"><Icon name="search" :size="17" /><input ref="searchInput" v-model="search" type="search" :aria-label="searchPlaceholder" :placeholder="searchPlaceholder" @search="!search.trim() && find()" /><kbd>/</kbd></form>
         <div class="global-tools">
@@ -77,6 +79,7 @@ onBeforeUnmount(() => { store.stop(); clearTimeout(noticeTimer); window.removeEv
         <RouterView />
       </template>
     </main>
+    <AnalysisActivity />
     <footer class="repository-footer"><span class="footer-brand">vg</span><span>Vibe-Git · 团队协作工作台</span></footer>
     <div v-if="store.notice" class="toast" role="status"><Icon name="check" />{{ store.notice }}</div>
     <div v-if="inboxOpen" class="drawer-backdrop" @click.self="inboxOpen = false"><aside class="notification-drawer" aria-label="协作消息"><header class="section-head"><h2>Inbox <span class="count">{{ unread }}</span></h2><button class="icon-btn" aria-label="关闭消息" @click="inboxOpen = false"><Icon name="close" /></button></header><p class="muted small-text">消息保留事件记录，关联状态随房间同步。</p><div v-if="!notifications.length" class="empty-state">暂时没有消息。</div><article v-for="item in notifications" :key="item.note.id" class="notification-item" :class="{ unread: !item.note.readAt }"><small>{{ new Date(item.note.createdAt).toLocaleString('zh-CN') }}</small><h3>{{ item.note.title }}</h3><p>{{ item.note.body }}</p><div v-if="item.resource" class="notification-context"><span class="tag">当前状态 · {{ resourceStatus(item.resource) }}</span><button class="text-button" @click="viewNotification(item.resource)">查看{{ item.resource.kind === 'change' ? 'Issue' : item.resource.kind === 'task' ? '任务包' : item.resource.kind === 'plan' ? '个人计划' : '需求文档' }} <Icon name="arrow" :size="13" /></button></div><button v-if="!item.note.readAt && store.local" class="text-button" @click="store.mutate('/api/v1/notifications/' + item.note.id + '/read', {}, '', 'POST')">标为已读</button></article></aside></div>

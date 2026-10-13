@@ -76,6 +76,97 @@ function conflict(flow: AgileFlow, id = "conflict-1") {
 }
 
 describe("超敏捷协作", () => {
+  it.each(["agile", "legacy"] as const)("%s 房间直接改派，保留进度证据和需求版本，旧负责人不能再汇报", async mode => {
+    const { s, a, app, captain, member, runtime, joined, publishInitial, publishLegacy, report } = await setup();
+    const original = mode === "agile" ? publishInitial().client : publishLegacy().client;
+    const before = { ...original, status: "IN_PROGRESS" as const, progressSummary: "接口已实现，等待接续", reportEvidence: [{ reportId: "previous", taskRevision: original.packageRevision ?? original.revision, requirementRevision: original.requirementRevision ?? 1, action: "progress", summary: "已有进度", evidence: ["已有测试结果"], createdAt: new Date().toISOString() }] };
+    s.repo.putTask(before);
+    const response = await app.inject({ method: "POST", url: "/api/v1/tasks/assign", headers: { authorization: "Bearer " + runtime.captain.nodeToken },
+      payload: { taskIds: [before.id], assigneeNodeId: captain.id, expectedTaskRevisions: { [before.id]: before.revision } } });
+    expect(response.statusCode).toBe(200);
+    const updated = s.repo.getTask(before.id)!;
+    expect(updated).toMatchObject({ assigneeNodeId: captain.id, status: "PUBLISHED", goal: before.goal, dependencies: before.dependencies,
+      progressSummary: before.progressSummary, reportEvidence: before.reportEvidence,
+      revision: before.revision + 1, packageRevision: (before.packageRevision ?? before.revision) + 1 });
+    expect(updated.requirementRevision).toBe(before.requirementRevision); expect(s.repo.requirementRevision()).toBe(1); expect(s.repo.listPullRequests()).toHaveLength(0);
+    expect(s.repo.listNotifications(member.id).some(note => note.title.includes("停止原任务"))).toBe(true);
+    const denied = await app.inject({ method: "POST", url: "/api/v1/tasks/assign", headers: { authorization: "Bearer " + joined.nodeToken },
+      payload: { taskIds: [updated.id], assigneeNodeId: member.id, expectedTaskRevisions: { [updated.id]: updated.revision } } });
+    expect(denied.statusCode).toBe(403);
+    if (mode === "agile") {
+      expect(() => report(member, before, "completed")).toThrow("自己的任务");
+      expect(() => report(captain, before, "progress")).toThrow("版本");
+      expect(a.package(captain, updated.id).taskRevision).toBe(updated.packageRevision);
+    }
+  });
+
+  it("批量改派原子校验版本、完成状态、归档与审核冻结", async () => {
+    const { s, a, captain, member, publishInitial } = await setup();
+    const { room, client } = publishInitial();
+    const assign = (ids: string[], revisions: Record<string, number>) => s.assignTasks(captain, { taskIds: ids, assigneeNodeId: member.id, expectedTaskRevisions: revisions });
+    expect(() => assign([room.id, client.id], { [room.id]: room.revision, [client.id]: -1 })).toThrow("任务已变化");
+    expect(s.repo.getTask(room.id)?.assigneeNodeId).toBe(captain.id);
+    s.repo.putTask({ ...client, status: "DONE" });
+    expect(() => assign([room.id, client.id], { [room.id]: room.revision, [client.id]: client.revision })).toThrow("已完成");
+    expect(s.repo.getTask(room.id)?.revision).toBe(room.revision);
+    s.repo.putTask({ ...client, archived: true });
+    expect(() => assign([client.id], { [client.id]: client.revision })).toThrow("归档");
+    s.repo.putTask(client);
+    a.submitPR(member, { title: "增加通知", content: "增加房间通知", expectedRequirementRevision: 1 });
+    const review = a.startReview(captain, { expectedRequirementRevision: 1 });
+    expect(() => assign([room.id], { [room.id]: s.repo.getTask(room.id)!.revision })).toThrow("审核");
+    a.close(captain, review.id, { expectedRevision: review.revision });
+    const current = s.repo.getTask(room.id)!;
+    expect(assign([current.id], { [current.id]: current.revision })[0]!.assigneeNodeId).toBe(member.id);
+  });
+
+  it("进度事件校验租约并去重，不修改需求流程版本，历史可分页读取和重启恢复", async () => {
+    const { s, a, captain, member, root, app, runtime, plans } = await setup();
+    plans(); const flow = a.startInitial(captain, { expectedRequirementRevision: 0 }), job = s.claimJob(captain)!;
+    const activity = { id: "event-1", kind: "tool" as const, message: "查看需求", detail: "Authorization: Bearer secret-value", model: "test-model" };
+    const input = { phase: "progress" as const, leaseToken: job.leaseToken!, activity };
+    expect(() => s.reportJob(member, job.id, input)).toThrow("不属于");
+    expect(() => s.reportJob(captain, job.id, { ...input, leaseToken: "wrong" })).toThrow("租约");
+    s.reportJob(captain, job.id, input); s.reportJob(captain, job.id, input);
+    expect(s.repo.getAgileFlow(flow.id)?.revision).toBe(flow.revision);
+    expect(s.repo.getJob(job.id)?.status).toBe("LEASED");
+    const first = s.repo.flowActivity(flow.id, Number.MAX_SAFE_INTEGER);
+    expect(first.events.filter(event => event.type === "job.progress")).toHaveLength(1);
+    expect(JSON.stringify(first)).not.toContain("secret-value");
+    for (let i = 2; i < 108; i++) s.reportJob(captain, job.id, { ...input, activity: { ...activity, id: "event-" + i } });
+    const latest = await app.inject({ method: "GET", url: `/api/v1/agile/flows/${flow.id}/activity`, headers: { authorization: "Bearer " + runtime.captain.nodeToken } });
+    expect(latest.statusCode).toBe(200); expect(latest.json().hasMore).toBe(true);
+    const older = s.repo.flowActivity(flow.id, latest.json().events[0].seq);
+    expect(older.events.some(event => event.seq === first.events[0]!.seq)).toBe(true);
+    s.reportJob(captain, job.id, { leaseToken: job.leaseToken!, phase: "failed", error: "测试失败" });
+    expect(() => s.reportJob(captain, job.id, input)).toThrow(/已经结束|租约/);
+    await app.close();
+    const reopened = await buildApp({ dbPath: resolve(root, "room.db"), dataDir: root, backupDatabase: false, cloudflareManager: { status: async () => null, close: async () => {} } as never }); apps.push(reopened);
+    const persisted = (reopened as unknown as { v20Service: V20Service }).v20Service;
+    expect(persisted.repo.flowActivity(flow.id, Number.MAX_SAFE_INTEGER).events.some(event => event.type === "job.progress")).toBe(true);
+  });
+
+  it("切换准备阻止新作业，运行或排队中的作业阻止切换", async () => {
+    const { s, a, captain, plans } = await setup();
+    s.prepareProjectSwitch(captain); expect(s.claimJob(captain)).toBeNull(); s.switching = false;
+    plans(); a.startInitial(captain, { expectedRequirementRevision: 0 });
+    expect(() => s.prepareProjectSwitch(captain)).toThrow("未结束");
+  });
+
+  it("移除成员使旧邀请和凭据失效，保留历史名字并允许直接接续", async () => {
+    const { s, app, captain, member, publishInitial, runtime, joined } = await setup();
+    const { client } = publishInitial();
+    const removed = await app.inject({ method: "POST", url: `/api/v1/nodes/${member.id}/revoke`, headers: { authorization: "Bearer " + runtime.captain.nodeToken }, payload: { expectedActiveTaskRevisions: { [client.id]: client.revision } } });
+    expect(removed.statusCode).toBe(200); expect(s.repo.getTask(client.id)?.status).toBe("PAUSED");
+    expect(() => s.authenticateBearer("Bearer " + joined.nodeToken)).toThrow("撤销");
+    expect(() => s.join(runtime.inviteToken, "http://localhost")).toThrow();
+    expect((await s.bootstrap(captain)).nodes.find(node => node.id === member.id)).toMatchObject({ label: member.label, revoked: true, connected: false });
+    const paused = s.repo.getTask(client.id)!;
+    expect(s.assignTasks(captain, { taskIds: [paused.id], assigneeNodeId: captain.id, expectedTaskRevisions: { [paused.id]: paused.revision } })[0]).toMatchObject({ status: "PUBLISHED", blockedReason: null });
+    const denied = await app.inject({ method: "POST", url: `/api/v1/nodes/${captain.id}/revoke`, headers: { authorization: "Bearer " + runtime.captain.nodeToken }, payload: {} });
+    expect(denied.statusCode).toBe(403);
+  });
+
   it.each(["agile", "legacy"] as const)("%s 房间整合新一轮计划，冻结来源并统一发布新版需求", async mode => {
     const { a, s, captain, member, publishInitial, publishLegacy, app, runtime, joined, finish, task } = await setup();
     const initial = mode === "agile" ? publishInitial() : publishLegacy();

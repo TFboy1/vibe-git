@@ -3,18 +3,23 @@ import { execFileSync } from "node:child_process";
 import { realpathSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import type { AgentJob, GitSnapshot, NodeHeartbeatInput, RateLimitWindow, V20BootstrapPayload } from "@vibe-git/protocol";
-import { api, post } from "./api.js";
-import { defaultCodexHome, daemonLogPath, loadConfig, saveConfig, type ClientConfig } from "./config.js";
+import { api, post, ApiError } from "./api.js";
+import { defaultCodexHome, daemonLogPath, loadConfig, saveConfig, readJson, type ClientConfig } from "./config.js";
 import { probeCodex, readRateLimits, runAudit, startDevelopment, type ActiveRun } from "./codex.js";
 import { impactIndex, repositoryContext, worktreeFingerprint } from "./evidence.js";
 import { integrateWithReal, prepareMock } from "./mock.js";
 import { localPanelPath, startLocalPanel } from "./local-panel.js";
 import { assertProjectWorkspacePath } from "./local-workspace.js";
 import { computeStatus, runStructuredJob } from "./agile-ai.js";
+import { activityReporter } from "./job-activity.js";
+import { rememberProject } from "./projects.js";
 
 const executing = new Map<string, string>();
 const active = new Map<string, ActiveRun>();
 const activeJobIds = new Map<string, string>();
+const reporters = new Map<string, ReturnType<typeof activityReporter>>();
+let claimController: AbortController | undefined;
+const jobControllers = new Map<string, AbortController>();
 let stopping = false;
 let quota: RateLimitWindow[] = [];
 let lastQuotaAt = 0;
@@ -55,7 +60,8 @@ function probeGit(workspace: string): GitSnapshot | null {
   } catch { return null; }
 }
 
-async function heartbeat(config: ClientConfig, taskId?: string, captain = false): Promise<void> {
+async function heartbeat(connection: ClientConfig, taskId?: string, captain = false): Promise<void> {
+  const config = { ...connection };
   const normal = probeCodex();
   const audit = normal;
   if (audit.state === "available" && Date.now() - lastQuotaAt > 5 * 60_000) {
@@ -77,42 +83,45 @@ async function heartbeat(config: ClientConfig, taskId?: string, captain = false)
     currentTaskId: taskId ?? active.keys().next().value ?? null,
     ...(captain ? { repositoryContext: contextCache?.value ?? null } : {})
   };
-  await post(config, "/api/v1/nodes/heartbeat", input);
+  if (connection.nodeId === config.nodeId) await post(config, "/api/v1/nodes/heartbeat", input);
 }
 
 async function report(config: ClientConfig, job: AgentJob, body: Record<string, unknown>): Promise<void> {
+  if (["completed", "failed", "interrupted"].includes(String(body.phase))) await reporters.get(job.id)?.flush();
   await post(config, `/api/v1/jobs/${encodeURIComponent(job.id)}/status`, { leaseToken: job.leaseToken, ...body });
 }
 
 async function executeJob(config: ClientConfig, job: AgentJob): Promise<void> {
+  const activity = activityReporter(config, job); reporters.set(job.id, activity);
+  const controller = new AbortController(); jobControllers.set(job.id, controller);
   try {
     if (!job.leaseToken) throw new Error("Host 返回了无租约作业");
     if (job.kind.startsWith("AGILE_")) {
       const runtimeId = "agile-" + process.pid + "-" + Date.now();
       await report(config, job, { phase: "started", runtimeId });
       const result = await runStructuredJob(config, job.payload.provider === "api" ? "api" : "codex",
-        String(job.payload.prompt ?? ""), job.payload.outputSchema as Record<string, unknown>);
+        String(job.payload.prompt ?? ""), job.payload.outputSchema as Record<string, unknown>, controller.signal, activity.emit);
       await report(config, job, { phase: "completed", runtimeId, result });
       return;
     }
     if (job.kind === "ASSESS_CHANGE" || job.kind === "PLAN_INTENT" || job.kind === "ALIGN_PLANS" || job.kind === "DESCRIBE_WORKSTREAM" || job.kind === "REVIEW_CHANGES") {
       const runtimeId = `audit-${process.pid}-${Date.now()}`;
       await report(config, job, { phase: "started", runtimeId });
-      const result = await runAudit(String(job.payload.prompt ?? ""), job.payload.outputSchema, config.workspace, defaultCodexHome());
+      const result = await runAudit(String(job.payload.prompt ?? ""), job.payload.outputSchema, config.workspace, defaultCodexHome(), controller.signal, { onActivity: activity.emit });
       await report(config, job, { phase: "completed", runtimeId, result });
       return;
     }
     if (job.kind === "ALIGN_FINALIZE") {
       const runtimeId = `audit-${process.pid}-${Date.now()}`;
       await report(config, job, { phase: "started", runtimeId });
-      const result = await runAudit(String(job.payload.prompt ?? ""), job.payload.outputSchema, config.workspace, defaultCodexHome());
+      const result = await runAudit(String(job.payload.prompt ?? ""), job.payload.outputSchema, config.workspace, defaultCodexHome(), controller.signal, { onActivity: activity.emit });
       await report(config, job, { phase: "completed", runtimeId, result });
       return;
     }
     if (job.kind === "SUMMARIZE_CHANGE" || job.kind === "SUMMARIZE_PLAN") {
       const runtimeId = `summary-${process.pid}-${Date.now()}`;
       await report(config, job, { phase: "started", runtimeId });
-      const result = await runAudit(String(job.payload.prompt ?? ""), job.payload.outputSchema, config.workspace, defaultCodexHome());
+      const result = await runAudit(String(job.payload.prompt ?? ""), job.payload.outputSchema, config.workspace, defaultCodexHome(), controller.signal, { onActivity: activity.emit });
       await report(config, job, { phase: "completed", runtimeId, result });
       return;
     }
@@ -144,14 +153,14 @@ async function executeJob(config: ClientConfig, job: AgentJob): Promise<void> {
           `需求变更摘要：${changeBrief}`
         ].join("\n\n");
         if (Buffer.byteLength(prompt, "utf8") > 48 * 1024) throw new Error("本地取证提示词超出预算");
-        let result = await runAudit(prompt, PROBE_SCHEMA, config.workspace, defaultCodexHome()) as { status: string; reason: string; paths: string[] };
+        let result = await runAudit(prompt, PROBE_SCHEMA, config.workspace, defaultCodexHome(), controller.signal, { onActivity: activity.emit }) as { status: string; reason: string; paths: string[] };
         if (result.status === "uncertain") {
           const secondPrompt = [prompt,
             "第一次检索仍无法排除影响。请再做一轮只读补查：沿任务入口、依赖和验收路径扩展，不重复已查文件；本轮仍最多 20 个文件、每文件 200 行。确实无法判断则继续返回 uncertain，说明缺少什么证据。",
             `第一次结论：${JSON.stringify({ reason: String(result.reason ?? "").slice(0, 1_000), paths: Array.isArray(result.paths) ? result.paths.slice(0, 20) : [] })}`
           ].join("\n\n");
           if (Buffer.byteLength(secondPrompt, "utf8") > 48 * 1024) throw new Error("补查提示词超出预算");
-          result = await runAudit(secondPrompt, PROBE_SCHEMA, config.workspace, defaultCodexHome()) as { status: string; reason: string; paths: string[] };
+          result = await runAudit(secondPrompt, PROBE_SCHEMA, config.workspace, defaultCodexHome(), controller.signal, { onActivity: activity.emit }) as { status: string; reason: string; paths: string[] };
         }
         if (result.status === "affected") affectedTaskIds.push(task.id);
         else if (result.status === "unaffected") unaffectedTaskIds.push(task.id);
@@ -211,7 +220,7 @@ async function executeJob(config: ClientConfig, job: AgentJob): Promise<void> {
     const detail = error instanceof Error ? error.message : String(error);
     await log(`${job.kind} ${job.id} 失败：${detail}`);
     if (job.leaseToken) await report(config, job, { phase: "failed", error: detail }).catch(() => undefined);
-  }
+  } finally { await activity.flush(); reporters.delete(job.id); jobControllers.delete(job.id); }
 }
 
 export async function runDaemon(): Promise<void> {
@@ -222,31 +231,46 @@ export async function runDaemon(): Promise<void> {
   await saveConfig(config);
   await log(`节点守护进程启动：${config.nodeId}`);
   let captain = false;
-  const panel = await startLocalPanel(config, { beforeSwitch: async () => {
+  await rememberProject(config, await api<V20BootstrapPayload>(config, "/api/v1/bootstrap"));
+  const panel = await startLocalPanel(config, { beforeProjectSwitch: async () => {
+    claimController?.abort();
+  }, beforeSwitch: async () => {
     const data = await api<V20BootstrapPayload>(config, "/api/v1/bootstrap");
     const task = data.tasks.find(task => !task.archived && task.assigneeNodeId === config.nodeId &&
       (task.activeJobId || task.pauseRequested || ["IN_PROGRESS", "STARTING", "PREPARING_MOCK", "WAITING_CONFIRMATION", "WAITING_INTEGRATION", "PAUSED"].includes(task.status) || (task.executionMode === "external" && task.status === "BLOCKED")));
     if (task) throw new Error(`任务尚未结束，不能切换工作区：${task.title}`);
-  }, busy: () => executing.values().next().value ?? null, changed: async () => { contextCache = null; await heartbeat(config, undefined, captain); } });
+  }, busy: () => executing.values().next().value ?? null, changed: async () => {
+    contextCache = null;
+    captain = await api<V20BootstrapPayload>(config, "/api/v1/bootstrap").then(data => data.viewer.role === "captain");
+    await heartbeat(config, undefined, captain);
+  } });
   await log(`本机面板已监听 127.0.0.1:${panel.port}`);
   captain = await api<{ viewer?: { role?: string } }>(config, "/api/v1/bootstrap").then((value) => value.viewer?.role === "captain").catch(() => false);
-  const stop = () => { stopping = true; for (const run of active.values()) void run.interrupt(); };
+  const stop = () => { stopping = true; claimController?.abort(); for (const controller of jobControllers.values()) controller.abort(); for (const run of active.values()) void run.interrupt(); };
   process.once("SIGINT", stop); process.once("SIGTERM", stop);
 
   try {
     let nextHeartbeat = 0;
     while (!stopping) {
+      if (panel.switching()) { await new Promise(done => setTimeout(done, 100)); continue; }
       if (Date.now() >= nextHeartbeat) {
-        await heartbeat(config, undefined, captain).catch((error) => log(`心跳失败：${error instanceof Error ? error.message : String(error)}`));
+        await heartbeat(config, undefined, captain).catch(error => { if (error instanceof ApiError && error.status === 403) stop(); return log(`心跳失败：${error instanceof Error ? error.message : String(error)}`); });
+        for (const [jobId, controller] of jobControllers) {
+          const state = await api<{ status: string }>(config, `/api/v1/jobs/${jobId}/state`).catch(() => null);
+          if (state && ["CANCELLED", "FAILED"].includes(state.status)) controller.abort();
+        }
+        if (stopping) break;
         nextHeartbeat = Date.now() + 15_000;
       }
       try {
         const requestedAt = Date.now();
-        const job = await api<AgentJob | null>(config, "/api/v1/nodes/jobs/next", { method: "POST", body: "{}", headers: { "content-type": "application/json" } });
-        if (job) { executing.set(job.id, job.entityId); while (panel.switching()) await new Promise(resolve => setTimeout(resolve, 25)); void executeJob({ ...config }, job).finally(() => executing.delete(job.id)); }
+        const claimedConfig = { ...config }; claimController = new AbortController();
+        const job = await api<AgentJob | null>(claimedConfig, "/api/v1/nodes/jobs/next", { signal: claimController.signal, method: "POST", body: "{}", headers: { "content-type": "application/json" } });
+        if (job && claimedConfig.nodeId === config.nodeId && !panel.switching()) { executing.set(job.id, job.entityId); void executeJob(claimedConfig, job).finally(() => executing.delete(job.id)); }
         // 兼容错误地立即返回 204 的旧 Host，避免空转耗尽磁盘和 CPU。
         else if (Date.now() - requestedAt < 1_000) await new Promise(resolve => setTimeout(resolve, 3_000));
       } catch (error) {
+        if (claimController?.signal.aborted) continue;
         await log(`获取作业失败：${error instanceof Error ? error.message : String(error)}`);
         await new Promise((resolve) => setTimeout(resolve, 3_000));
       }
@@ -254,7 +278,7 @@ export async function runDaemon(): Promise<void> {
   } finally {
     const latest = await loadConfig(false);
     await panel.close();
-    await rm(localPanelPath(), { force: true });
+    if ((await readJson<{ pid: number }>(localPanelPath()))?.pid === process.pid) await rm(localPanelPath(), { force: true });
     if (latest?.daemonPid === process.pid) await saveConfig({ ...latest, daemonPid: null });
     await log("节点守护进程停止");
   }

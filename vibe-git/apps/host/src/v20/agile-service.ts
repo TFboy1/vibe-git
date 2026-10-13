@@ -255,7 +255,7 @@ export class AgileService {
     if (!executor || executor.revoked || (compute.provider === "api" && (!executor.apiReady || !executor.lastSeenAt || Date.now() - Date.parse(executor.lastSeenAt) > 45_000))) throw unavailable("队长本机 API 未就绪，请保存配置并保持守护进程在线");
     const updated: AgileFlow = { ...flow, phase, status: phase === "AGILE_ALLOCATE" ? "PLANNING" : "ANALYZING",
       revision: flow.revision + 1, updatedAt: now(), error: null };
-    const job = this.hooks.job(phase, executor.id, flow.id, { prompt: this.prompt(updated), outputSchema: AGILE_OUTPUT_SCHEMAS[phase],
+    const job = this.hooks.job(phase, executor.id, flow.id, { execution: this.repo.listJobs().filter(job => job.entityId === flow.id && job.kind === phase).length + 1, prompt: this.prompt(updated), outputSchema: AGILE_OUTPUT_SCHEMAS[phase],
       provider: compute.provider, flowRevision: updated.revision, draftRevision: updated.draftRevision });
     updated.agentJobId = job.id;
     this.repo.putJob(job); this.repo.putAgileFlow(updated);
@@ -483,7 +483,7 @@ export class AgileService {
   private restore(flow: AgileFlow): void {
     for (const [id, status] of Object.entries(flow.pausedTaskStates)) {
       const task = this.repo.getTask(id);
-      if (task && !task.archived && task.status === "PAUSED") {
+      if (task && !task.archived && task.status === "PAUSED" && !this.repo.getNode(task.assigneeNodeId)?.revoked) {
         this.repo.putTask({ ...task, status, pauseRequested: false, blockedReason: flow.pausedTaskReasons?.[id] ?? null, revision: task.revision + 1, updatedAt: now() });
         this.notify(task.assigneeNodeId, "TASK", "任务恢复", "审核已结束，继续原任务：" + task.title, flow.id);
       }
@@ -601,7 +601,8 @@ export class AgileService {
       "## 负责路径", (task.brief?.ownedPaths ?? []).join("\n") || "依据职责边界确认", "## 禁止修改", (task.brief?.excludedPaths ?? []).join("\n") || "其他成员负责的内容",
       ...(contracts.length ? ["## 接口契约", contracts.map(contract => "### " + contract.name + "\n" + contract.signature + "\n" + contract.behavior.join("\n") + "\n验证：" + contract.testCommand).join("\n\n")] : []),
       "## 正式需求", requirements, "## 依赖", dependencies.map(v => "- " + v.title + " / " + v.owner + " / " + v.status).join("\n") || "无",
-      "## 修订摘要", (task.changeNotes ?? []).join("\n\n") || "无", "## 进度", task.progressSummary || "尚未汇报", "## 下一步", nextStep,
+      "## 修订摘要", (task.changeNotes ?? []).join("\n\n") || "无", "## 进度", task.progressSummary || "尚未汇报",
+      "## 已有汇报与证据", (task.reportEvidence ?? []).map(report => report.summary + "\n" + report.evidence.map(value => "- " + value).join("\n")).join("\n\n") || "暂无", "## 下一步", nextStep,
       "## 汇报规则", "每次调用 Skill 先同步；暂停时停止工作。汇报必须携带实际读取的 taskRevision 和 requirementRevision；不要获取新版号给旧结果补填。完成附真实验证证据，无需网页确认。"].join("\n\n");
     return { taskId: task.id, taskRevision, requirementRevision, title: task.title, goal: task.goal, acceptance: task.acceptance,
       boundary: task.boundary, requirements, requirementSource: "full_fallback", contracts, dependencies,

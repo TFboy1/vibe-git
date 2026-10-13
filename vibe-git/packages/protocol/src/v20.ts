@@ -497,7 +497,8 @@ export interface NodeHeartbeatInput {
 
 export interface JobResultInput {
   leaseToken: string;
-  phase: "started" | "completed" | "failed" | "interrupted";
+  phase: "started" | "progress" | "completed" | "failed" | "interrupted";
+  activity?: import("./runtime.js").JobActivityInput;
   runtimeId?: string | null;
   result?: unknown;
   error?: string;

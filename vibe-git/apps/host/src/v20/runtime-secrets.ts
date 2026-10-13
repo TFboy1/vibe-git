@@ -70,8 +70,8 @@ export async function rotateInvite(repo: V20Repository, dataDir: string): Promis
   const room = repo.room();
   if (!room) throw new Error("Vibe-Git 房间尚未初始化");
   const inviteToken = newSecret();
-  repo.setInviteHash(hashSecret(inviteToken));
   await mkdir(dataDir, { recursive: true, mode: 0o700 });
   await writePrivate(join(dataDir, "invite.json"), { roomId: room.id, inviteToken });
+  repo.setInviteHash(hashSecret(inviteToken));
   return inviteToken;
 }

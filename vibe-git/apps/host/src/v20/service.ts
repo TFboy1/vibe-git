@@ -1,5 +1,6 @@
 import { CoordinationService } from "./coordination-service.js";
 import { AgileService } from "./agile-service.js";
+import { safeActivityText, type AssignTasksInput } from "@vibe-git/protocol";
 import { createHash, randomUUID } from "node:crypto";
 import type {
   AgentJob, AlignmentIssue, AlignmentRun, AlignmentTaskDraft, BrowserTicketResponse, CollaborationNode,
@@ -165,6 +166,7 @@ interface ReviewAgentResult {
 }
 
 export class V20Service {
+  switching = false;
   readonly coordination: CoordinationService;
   readonly agile: AgileService;
   constructor(
@@ -207,8 +209,12 @@ export class V20Service {
     if (node.role !== "captain") throw forbidden("该操作仅限队长");
   }
 
-  join(invite: string, hostUrl: string): JoinResponse {
+  joinInfo(invite: string): { roomId: string } {
     if (!invite || hashSecret(invite) !== this.repo.inviteHash()) throw forbidden("加入链接无效或已轮换");
+    return { roomId: this.repo.room()!.id };
+  }
+  join(invite: string, hostUrl: string): JoinResponse {
+    this.joinInfo(invite);
     const nodeId = `node-${randomUUID()}`;
     const nodeToken = newSecret();
     const createdAt = now();
@@ -226,7 +232,7 @@ export class V20Service {
   }
 
   async bootstrap(viewer: CollaborationNode): Promise<V20BootstrapPayload> {
-    const nodes = this.repo.listNodes().filter((node) => !node.revoked).map((node) => this.withConnection(node));
+    const nodes = this.repo.listNodes().map((node) => this.withConnection(node));
     const plans = this.latestPlans();
     const available = nodes.filter((node) => node.connected && (node.codex ?? node.auditCodex) === "available");
     return {
@@ -1007,6 +1013,7 @@ export class V20Service {
   }
 
   claimJob(node: CollaborationNode): AgentJob | null {
+    if (this.switching) return null;
     this.recoverExpiredJobs();
     return this.repo.tx(() => {
       const jobs = this.repo.listJobs();
@@ -1014,7 +1021,7 @@ export class V20Service {
       const queued = jobs.find((job) => job.targetNodeId === node.id && job.status === "QUEUED" && (!busyAudit || !MODEL_AUDIT_KINDS.has(job.kind)));
       if (!queued) return null;
       const leased: AgentJob = {
-        ...queued, status: "LEASED", leaseToken: newSecret(),
+        ...queued, payload: { ...queued.payload, activityEnabled: true }, status: "LEASED", leaseToken: newSecret(),
         leaseExpiresAt: new Date(Date.now() + JOB_LEASE_MS).toISOString(), updatedAt: now()
       };
       this.repo.putJob(leased);
@@ -1031,15 +1038,79 @@ export class V20Service {
   }
 
   reportJob(node: CollaborationNode, jobId: string, input: JobResultInput): AgentJob {
+    if (!input || typeof input !== "object") throw badRequest("缺少作业汇报内容");
     const job = this.repo.getJob(jobId); if (!job) throw notFound("作业不存在");
     if (job.targetNodeId !== node.id) throw forbidden("该作业不属于当前节点");
     if (!job.leaseToken || input.leaseToken !== job.leaseToken) throw forbidden("作业租约无效");
     if (!["LEASED", "RUNNING"].includes(job.status)) throw invalidState("作业已经结束，迟到结果已忽略");
     if (job.leaseExpiresAt && job.leaseExpiresAt < now()) throw invalidState("作业租约已过期");
+    if (input.phase === "progress") {
+      const activity = input.activity;
+      if (!activity || typeof activity.id !== "string" || !activity.id.trim() || activity.id.length > 100 ||
+        !["status", "summary", "tool", "output"].includes(activity.kind) || typeof activity.message !== "string" || !activity.message.trim() ||
+        (activity.detail !== undefined && typeof activity.detail !== "string") || (activity.model !== undefined && typeof activity.model !== "string")) throw badRequest("进度事件无效");
+      if (!this.repo.activityExists(job.id, activity.id)) this.event("job.progress", node.id, "agent_job", job.id, {
+        activityId: activity.id, activityKind: activity.kind,
+        message: safeActivityText(activity.message, [job.leaseToken, this.inviteToken]).slice(0, 500),
+        detail: safeActivityText(activity.detail ?? "", [job.leaseToken, this.inviteToken]),
+        model: safeActivityText(activity.model ?? "", [job.leaseToken, this.inviteToken]).slice(0, 150)
+      });
+      return job;
+    }
     if (input.phase === "started") return this.markJobStarted(job, input.runtimeId ?? null);
     if (input.phase === "failed" || input.phase === "interrupted") return this.failJob(job, input.error ?? (input.phase === "interrupted" ? "执行已中断" : "执行失败"));
+    if (input.phase !== "completed") throw badRequest("作业状态无效");
     try { return this.completeJob(job, input.result); }
     catch (error) { return this.failJob(job, error instanceof Error ? error.message : String(error)); }
+  }
+
+  prepareProjectSwitch(node: CollaborationNode): void {
+    this.captain(node);
+    if (this.switching) throw invalidState("项目正在切换");
+    const job = this.repo.listJobs().find(job => ["QUEUED", "LEASED", "RUNNING"].includes(job.status));
+    if (job) throw invalidState("当前项目仍有未结束的 AI 作业，请等待结束或取消后再切换", { jobId: job.id });
+    this.switching = true;
+  }
+
+  assignTasks(node: CollaborationNode, input: AssignTasksInput): StageTask[] {
+    this.captain(node);
+    if (!Array.isArray(input?.taskIds) || !input.taskIds.length || input.taskIds.length > 100 ||
+      input.taskIds.some(id => typeof id !== "string") || new Set(input.taskIds).size !== input.taskIds.length ||
+      typeof input.assigneeNodeId !== "string" || !input.assigneeNodeId.trim() ||
+      !input.expectedTaskRevisions || typeof input.expectedTaskRevisions !== "object" || Array.isArray(input.expectedTaskRevisions) ||
+      Object.values(input.expectedTaskRevisions).some(revision => !Number.isSafeInteger(revision))) throw badRequest("请选择任务、新负责人并提供任务版本");
+    const target = this.repo.getNode(input.assigneeNodeId);
+    if (!target || target.revoked) throw badRequest("新负责人不存在或已被移除");
+    const tasks = input.taskIds.map(taskId => {
+      const task = this.repo.getTask(taskId);
+      if (!task) throw notFound("任务不存在");
+      if (task.archived || task.status === "DONE") throw invalidState("已完成或归档任务不能改派");
+      if (task.revision !== input.expectedTaskRevisions[taskId]) throw revisionConflict("任务已变化，请刷新后重新改派");
+      const stage = this.repo.getStage(task.stageId);
+      if (stage?.reviewId || this.repo.listAgileFlows().some(flow => !["PUBLISHED", "CANCELLED", "REJECTED"].includes(flow.status) && taskId in flow.taskDigests))
+        throw invalidState("任务已纳入需求审核，请先完成或取消审核再改派");
+      return task;
+    });
+    return this.repo.tx(() => tasks.map(task => {
+      if (task.assigneeNodeId === target.id) return task;
+      const previous = task.assigneeNodeId, at = now();
+      if (task.activeJobId) {
+        const job = this.repo.getJob(task.activeJobId);
+        if (job) this.repo.putJob({ ...job, status: "CANCELLED", leaseToken: null, leaseExpiresAt: null, updatedAt: at, error: "任务已改派" });
+        if (task.runtimeId && !this.repo.getNode(previous)?.revoked) this.repo.putJob(this.newJob("INTERRUPT_TASK", previous, task.id, { runtimeId: task.runtimeId, cancelledJobId: task.activeJobId }, 1));
+      }
+      const blockedReason = task.blockedReason?.includes("负责人已撤销") ? null : task.blockedReason;
+      const updated: StageTask = { ...task, assigneeNodeId: target.id, status: blockedReason ? "BLOCKED" : "PUBLISHED",
+        blockedReason: blockedReason ?? null, pauseRequested: false, activeJobId: null, runtimeId: null,
+        revision: task.revision + 1, packageRevision: (task.packageRevision ?? task.revision) + 1, updatedAt: at,
+        changeNotes: [...(task.changeNotes ?? []), `负责人由 ${this.repo.getNode(previous)?.label ?? previous} 改为 ${target.label}；保留已记录的进度与证据。`] };
+      delete updated.executionMode;
+      this.repo.putTask(updated);
+      this.notify(previous, "TASK", "任务已改派，请停止原任务", task.title + "；请在本次同步后停止旧版本工作。", task.id);
+      this.notify(target.id, "TASK", "收到接续任务", task.title + "；请同步新版任务包并核对已有进度与证据。", task.id);
+      this.event("task.assigned", node.id, "task", task.id, { previousAssigneeNodeId: previous, assigneeNodeId: target.id, packageRevision: updated.packageRevision });
+      return updated;
+    }));
   }
 
   createBrowserTicket(node: CollaborationNode, publicBase: string): BrowserTicketResponse {
@@ -1070,15 +1141,18 @@ export class V20Service {
     return this.inviteInfo(node, publicBase);
   }
 
-  revokeNode(node: CollaborationNode, targetId: string, expectedActiveTaskRevisions?: Record<string, number>): CollaborationNode {
+  async revokeNode(node: CollaborationNode, targetId: string, expectedActiveTaskRevisions?: Record<string, number>): Promise<CollaborationNode> {
     this.captain(node);
     const target = this.repo.getNode(targetId); if (!target) throw notFound("节点不存在");
     if (target.role === "captain") throw forbidden("不能撤销队长节点");
-    if (expectedActiveTaskRevisions) {
+    const checkVersions = () => { if (expectedActiveTaskRevisions) {
       const actual = Object.fromEntries(this.repo.listTasks().filter(task => task.assigneeNodeId === targetId && task.status !== "DONE").map(task => [task.id, task.revision]));
       if (JSON.stringify(Object.entries(actual).sort()) !== JSON.stringify(Object.entries(expectedActiveTaskRevisions).sort()))
         throw revisionConflict("成员任务状态已变化，请重新查看撤销影响");
-    }
+    } };
+    checkVersions();
+    await this.rotateInvite(node, "http://127.0.0.1:8787");
+    checkVersions();
     const updated = { ...target, revoked: true, connected: false };
     const affectedTasks = this.repo.listTasks().filter(task => task.assigneeNodeId === target.id && task.status !== "DONE");
     this.repo.tx(() => {
@@ -1086,6 +1160,7 @@ export class V20Service {
       for (const job of this.repo.listJobs()) {
         if (job.targetNodeId === target.id && ["QUEUED", "LEASED", "RUNNING"].includes(job.status)) {
           this.repo.putJob({ ...job, status: "CANCELLED", leaseToken: null, leaseExpiresAt: null, updatedAt: now(), error: "节点已被队长撤销" });
+          if (job.kind.startsWith("AGILE_")) this.agile.fail(job, "执行成员已移除，请重新选择算力后重试");
         }
       }
       for (const task of affectedTasks) this.repo.putTask({ ...task, status: "PAUSED", activeJobId: null, runtimeId: null,
@@ -1172,7 +1247,7 @@ export class V20Service {
   }
 
   private failJob(job: AgentJob, error: string): AgentJob {
-    const safeError = error.slice(0, 4_000);
+    const safeError = safeActivityText(error, [job.leaseToken ?? "", this.inviteToken]);
     if (job.kind.startsWith("AGILE_")) {
       const failed: AgentJob = { ...job, status: "FAILED", error: safeError, leaseToken: null, leaseExpiresAt: null, updatedAt: now() };
       this.repo.tx(() => { this.repo.putJob(failed); this.agile.fail(job, safeError); this.event("job.failed", job.targetNodeId, "agent_job", job.id, { error: safeError }); });
@@ -2176,6 +2251,10 @@ export class V20Service {
   }
 
   private event(type: string, actorId: string, entityType: string, entityId: string, payload: unknown): RoomEvent {
+    if (entityType === "agent_job") {
+      const job = this.repo.getJob(entityId);
+      if (job) payload = { ...(payload as object), flowId: job.entityId, kind: job.kind, executorNodeId: job.targetNodeId, attempt: job.attempt, execution: job.payload.execution };
+    }
     const event = this.repo.appendEvent(type, actorId, entityType, entityId, payload);
     queueMicrotask(() => this.hub.publish(event));
     return event;

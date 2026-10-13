@@ -39,7 +39,7 @@ async function refresh() {
       <div class="repo-toolbar">
         <label class="branch-picker"><Icon name="branch" :size="18" /><select v-model="branch" aria-label="按 Git 分支筛选成员"><option value="">所有分支</option><option v-for="name in branches" :key="name" :value="name">{{ name }}</option></select></label>
         <span class="toolbar-stat"><Icon name="branch" :size="17" /><b>{{ branches.length }}</b> 个分支</span>
-        <span class="toolbar-stat"><Icon name="people" :size="17" /><b>{{ members.length }}</b> 位成员</span>
+        <span class="toolbar-stat"><Icon name="people" :size="17" /><b>{{ members.length }}</b> 位成员</span><RouterLink v-if="store.canManage" to="/settings#team" class="btn small">管理成员</RouterLink>
         <button class="btn toolbar-refresh" :disabled="refreshing" @click="refresh"><Icon name="activity" :size="17" /><span class="sr-only">刷新工作情况</span></button>
       </div>
       <section class="paper team-code-panel">

@@ -1,7 +1,7 @@
 import { registerCoordinationRoutes } from "./coordination-routes.js";
 import { registerAgileRoutes } from "./agile-routes.js";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
-import type { CollaborationNode, JobResultInput, NodeHeartbeatInput, ProjectModule } from "@vibe-git/protocol";
+import type { AssignTasksInput, CollaborationNode, JobResultInput, NodeHeartbeatInput, ProjectModule } from "@vibe-git/protocol";
 import { badRequest, forbidden, notFound, unavailable } from "../domain/errors.js";
 import type { CloudflareManager } from "../integrations/cloudflare/manager.js";
 import type { V20Service } from "./service.js";
@@ -54,10 +54,19 @@ async function tunnelOperation(work: () => Promise<unknown>): Promise<unknown> {
 }
 
 export async function registerV20Routes(app: FastifyInstance, service: V20Service, cloudflare: CloudflareManager): Promise<void> {
+  app.addHook("preHandler", async request => {
+    if (service.switching && !["GET", "HEAD"].includes(request.method) &&
+      !["/api/v1/local/project-switch/cancel", "/api/v1/local/cloudflare/stop"].includes(request.url.split("?")[0]!))
+      throw unavailable("项目正在切换，请稍后操作");
+  });
   registerAgileRoutes(app, service.agile, request => authenticate(request, service));
   registerCoordinationRoutes(app, service.coordination, request => authenticate(request, service), service.agile);
-  app.get("/health", async () => ({ ok: true, service: "vibe-git-host", version: "0.20", time: new Date().toISOString() }));
+  app.get("/health", async () => ({ ok: true, service: "vibe-git-host", version: "0.20", pid: process.pid, time: new Date().toISOString() }));
 
+  app.post<{ Body: { invite?: string } }>("/api/v1/join-info", async request => {
+    if (typeof request.body?.invite !== "string") throw badRequest("缺少加入密钥");
+    return service.joinInfo(request.body.invite);
+  });
   app.post<{ Body: { invite?: string } }>("/api/v1/join", async (request) => {
     if (!request.body?.invite) throw badRequest("缺少加入密钥");
     return service.join(request.body.invite, publicBase(request));
@@ -71,6 +80,14 @@ export async function registerV20Routes(app: FastifyInstance, service: V20Servic
   });
 
   app.get("/api/v1/bootstrap", async (request) => service.bootstrap(authenticate(request, service)));
+  app.post<{ Body: AssignTasksInput }>("/api/v1/tasks/assign", async request => service.assignTasks(authenticate(request, service), request.body));
+  app.get<{ Params: { id: string }; Querystring: { before?: string } }>("/api/v1/agile/flows/:id/activity", async request => {
+    authenticate(request, service);
+    if (!service.repo.getAgileFlow(request.params.id)) throw notFound("流程不存在");
+    const before = request.query.before === undefined ? Number.MAX_SAFE_INTEGER : Number(request.query.before);
+    if (!Number.isSafeInteger(before) || before < 1) throw badRequest("活动记录游标无效");
+    return service.repo.flowActivity(request.params.id, before);
+  });
   app.post<{ Body: NodeHeartbeatInput }>("/api/v1/nodes/heartbeat", async (request) => service.heartbeat(authenticate(request, service), request.body));
 
   app.get("/api/v1/modules", async (request) => { authenticate(request, service); return service.modules(); });
@@ -267,12 +284,19 @@ export async function registerV20Routes(app: FastifyInstance, service: V20Servic
         reply.raw.once("close", finish);
         if (reply.raw.destroyed) finish();
       });
+      if (reply.raw.destroyed) return;
       job = service.claimJob(node);
     }
     if (!job) return reply.status(204).send();
     return job;
   });
   app.post<{ Params: { id: string }; Body: JobResultInput }>("/api/v1/jobs/:id/status", async (request) => service.reportJob(authenticate(request, service), request.params.id, request.body));
+  app.get<{ Params: { id: string } }>("/api/v1/jobs/:id/state", async request => {
+    const node = authenticate(request, service), job = service.repo.getJob(request.params.id);
+    if (!job) throw notFound("作业不存在");
+    if (job.targetNodeId !== node.id && node.role !== "captain") throw forbidden("不能查看其他节点的作业");
+    return { status: job.status };
+  });
 
   app.get<{ Querystring: { since?: string } }>("/api/v1/events", async (request, reply) => {
     const node = authenticate(request, service);
@@ -283,7 +307,13 @@ export async function registerV20Routes(app: FastifyInstance, service: V20Servic
       Connection: "keep-alive", "X-Accel-Buffering": "no"
     });
     reply.raw.flushHeaders();
-    for (const event of service.repo.eventsSince(Number.isFinite(since) ? since : 0)) reply.raw.write(`id: ${event.seq}\ndata: ${JSON.stringify(event)}\n\n`);
+    let cursor = Number.isFinite(since) ? since : 0;
+    for (;;) {
+      const batch = service.repo.eventsSince(cursor);
+      for (const event of batch) reply.raw.write(`id: ${event.seq}\ndata: ${JSON.stringify(event)}\n\n`);
+      if (batch.length < 100) break;
+      cursor = batch.at(-1)!.seq;
+    }
     const unsubscribe = service.hub.subscribe((event) => reply.raw.write(`id: ${event.seq}\ndata: ${JSON.stringify(event)}\n\n`));
     const heartbeat = setInterval(() => reply.raw.write(`: ${node.id}\n\n`), 15_000);
     reply.raw.once("close", () => { clearInterval(heartbeat); unsubscribe(); });
@@ -294,6 +324,8 @@ export async function registerV20Routes(app: FastifyInstance, service: V20Servic
     if (!isLoopback(request.raw.socket.remoteAddress)) throw forbidden("Tunnel 控制只允许队长在 Host 本机执行");
     return node;
   };
+  app.post("/api/v1/local/project-switch/prepare", async request => { service.prepareProjectSwitch(localCaptain(request)); return { ready: true }; });
+  app.post("/api/v1/local/project-switch/cancel", async request => { localCaptain(request); service.switching = false; return { ready: true }; });
   app.get("/api/v1/local/cloudflare", async (request) => { localCaptain(request); return cloudflare.status(); });
   app.post("/api/v1/local/cloudflare/install", async (request) => { localCaptain(request); return tunnelOperation(() => cloudflare.install()); });
   app.post("/api/v1/local/cloudflare/start", async (request) => { localCaptain(request); return tunnelOperation(() => cloudflare.start()); });

@@ -241,4 +241,16 @@ export class V20Repository {
     }));
   }
   lastSeq(): number { return Number((this.db.prepare("SELECT COALESCE(MAX(seq), 0) seq FROM events").get() as { seq: number }).seq); }
+
+  activityExists(jobId: string, activityId: string): boolean {
+    return Boolean(this.db.prepare("SELECT 1 FROM events WHERE type='job.progress' AND entity_id=? AND json_extract(payload,'$.activityId')=? LIMIT 1").get(jobId, activityId));
+  }
+  flowActivity(flowId: string, before: number, limit = 100): { events: RoomEvent[]; hasMore: boolean } {
+    const rows = this.db.prepare("SELECT * FROM events WHERE seq < ? AND ((entity_type='agile' AND entity_id=?) OR (entity_type='agent_job' AND json_extract(payload,'$.flowId')=?)) ORDER BY seq DESC LIMIT ?")
+      .all(before, flowId, flowId, limit + 1) as Record<string, unknown>[];
+    return { hasMore: rows.length > limit, events: rows.slice(0, limit).reverse().map(row => ({
+      seq: Number(row.seq), type: String(row.type), actorId: String(row.actor_id) as RoomEvent["actorId"], source: "system",
+      entityType: String(row.entity_type), entityId: String(row.entity_id), payload: JSON.parse(String(row.payload)), createdAt: String(row.created_at)
+    })) };
+  }
 }

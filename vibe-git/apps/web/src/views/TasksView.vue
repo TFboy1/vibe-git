@@ -8,6 +8,7 @@ import { taskStatus, taskNextStep } from "../team";
 import MarkdownEditor from "../components/MarkdownEditor.vue";
 import FlowStatus from "../components/FlowStatus.vue";
 import Icon from "../components/Icon.vue";
+import TaskAssignment from "../components/TaskAssignment.vue";
 const store = useWorkspace(), filter = ref("active"), selected = ref(""), pack = ref<TaskExecutionPackage | null>(null), loading = ref(false), detailError = ref("");
 const route = useRoute();
 const statusNames = taskStatus;
@@ -67,11 +68,12 @@ watch(() => [selected.value, task.value?.packageRevision, task.value?.revision, 
     </aside>
     <section class="paper task-document">
       <header v-if="task" class="document-header"><div><span class="eyebrow">EXECUTION PACKAGE / 任务包</span><h2>{{ task.title }}</h2><p>{{ store.name(task.assigneeNodeId) }} · 任务包 v{{ pack?.taskRevision ?? task.packageRevision ?? task.revision }} · 需求 R{{ pack?.requirementRevision ?? task.requirementRevision ?? store.data?.room.requirementRevision }}</p></div><span class="tag" :class="{ amber: task.status === 'PAUSED', mint: task.status === 'DONE' }">{{ task.archived ? '已归档' : statusNames[task.status] ?? task.status }}</span></header>
+      <TaskAssignment v-if="task && store.canManage" :key="task.id" :tasks="[task]" />
       <div v-if="task" class="task-handoff"><div><strong>下一步</strong><p>{{ nextStep }}</p></div><button v-if="store.local && !task.archived && task.assigneeNodeId === store.data?.viewer.id" class="btn primary" @click="copyInstruction"><Icon name="copy" :size="16" />{{ syncOnly ? '复制同步指令' : '复制给开发 AI' }}</button></div>
       <div v-if="manualInstruction" class="manual-instruction"><label for="task-instruction">无法访问剪贴板，请手动复制以下指令到开发 AI：</label><textarea id="task-instruction" :value="manualInstruction" class="input mono" rows="8" readonly @focus="($event.target as HTMLTextAreaElement).select()"></textarea></div>
       <div v-if="task?.status === 'PAUSED'" class="pause-notice"><Icon name="pause" /><div><strong>已请求暂停，等待开发 AI 同步。</strong><p>网页状态不代表 AI 已经停止。下一次 Skill 同步会读取消息；新版任务包发布后再按新版继续。</p></div></div>
       <div v-if="task?.reworkOfTaskId" class="linked-work"><Icon name="link" :size="15" /><span>这是已完成任务的后续修订，原完成与验收记录保留。</span><RouterLink v-if="all.some(item => item.id === task?.reworkOfTaskId)" :to="{ path: '/projects', query: { task: task.reworkOfTaskId, view: 'packages' } }" class="text-button">查看原任务</RouterLink><code v-else>{{ task.reworkOfTaskId }}</code></div>
-      <details v-if="task?.status === 'DONE' && task.reportEvidence?.length" class="completion-evidence"><summary>查看完成汇报与验收证据</summary><article v-for="report in task.reportEvidence" :key="report.reportId"><strong>{{ report.summary }}</strong><ul v-if="report.evidence.length"><li v-for="(evidence, index) in report.evidence" :key="index">{{ evidence }}</li></ul></article></details>
+      <details v-if="task?.reportEvidence?.length" class="completion-evidence"><summary>{{ task.status === 'DONE' ? '查看完成汇报与验收证据' : '查看已有汇报与证据' }}</summary><article v-for="report in task.reportEvidence" :key="report.reportId"><strong>{{ report.summary }}</strong><ul v-if="report.evidence.length"><li v-for="(evidence, index) in report.evidence" :key="index">{{ evidence }}</li></ul></article></details>
       <div v-if="loading" class="empty-state"><span class="working-dot"></span> 正在读取任务包…</div><p v-else-if="detailError" class="inline-error">{{ detailError }}</p>
       <MarkdownEditor v-else-if="task" :key="task.id" :model-value="content" readonly :filename="'task-' + task.id + '.md'" @error="store.error = $event" /><div v-else class="empty-state">从左侧选择一项任务。</div>
     </section>

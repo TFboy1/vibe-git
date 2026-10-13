@@ -40,10 +40,13 @@ function responseText(response: unknown): string {
   if (content.some(item => item.type === "refusal")) throw new Error("模型拒绝了本次请求，请检查输入后重试");
   return content.filter(item => item.type === "output_text").map(item => item.text ?? "").join("");
 }
-export async function runResponses(config: ClientConfig, prompt: string, schema: Record<string, unknown>, signal?: AbortSignal): Promise<unknown> {
+export async function runResponses(config: ClientConfig, prompt: string, schema: Record<string, unknown>, signal?: AbortSignal,
+  onActivity?: (activity: Omit<import("@vibe-git/protocol").JobActivityInput, "id">) => void): Promise<unknown> {
   const { apiKey, baseUrl, model } = settings(config);
   if (!apiKey) throw new Error("请在队长本机算力设置中保存 API Key");
   if (!model.trim()) throw new Error("请填写你的 API 服务支持的模型名");
+  let actualModel = model;
+  onActivity?.({ kind: "status", message: "正在连接模型 API", model });
   const controller = new AbortController(), timeout = setTimeout(() => controller.abort(), 5 * 60_000);
   const abort = () => controller.abort(); signal?.addEventListener("abort", abort, { once: true });
   if (signal?.aborted) controller.abort();
@@ -66,9 +69,12 @@ export async function runResponses(config: ClientConfig, prompt: string, schema:
       const processEvent = (frame: string) => {
         const data = frame.split("\n").filter(line => line.startsWith("data:")).map(line => line.slice(5).trimStart()).join("\n");
         if (!data || data === "[DONE]") return;
-        const event = JSON.parse(data) as { type: string; delta?: string; response?: unknown; error?: { message?: string }; message?: string };
-        if (event.type === "response.output_text.delta") output += event.delta ?? "";
-        if (event.type === "response.completed") { output = responseText(event.response) || output; completed = true; }
+        const event = JSON.parse(data) as { type: string; delta?: string; response?: { model?: string }; error?: { message?: string }; message?: string };
+        if (event.response?.model) actualModel = event.response.model;
+        if (event.type === "response.created") onActivity?.({ kind: "status", message: "模型已接收请求，正在生成", model: actualModel });
+        if (event.type === "response.output_text.delta") { output += event.delta ?? ""; onActivity?.({ kind: "output", message: "正在接收结果，已收到 " + output.length + " 字", model: actualModel }); }
+        if (event.type === "response.reasoning_summary_text.delta" && event.delta) onActivity?.({ kind: "summary", message: event.delta, model: actualModel });
+        if (event.type === "response.completed") { output = responseText(event.response) || output; completed = true; onActivity?.({ kind: "status", message: "模型输出完成，正在校验结果", model: actualModel }); }
         if (["error", "response.failed", "response.incomplete"].includes(event.type)) {
           if (event.response) responseText(event.response);
           throw new Error(event.error?.message || event.message || "Responses 流执行失败");
@@ -96,9 +102,11 @@ export async function runResponses(config: ClientConfig, prompt: string, schema:
     throw new Error(safeMessage(error instanceof Error ? error.message : String(error), apiKey));
   } finally { clearTimeout(timeout); signal?.removeEventListener("abort", abort); }
 }
-export async function runStructuredJob(config: ClientConfig, provider: AgileProvider, prompt: string, schema: Record<string, unknown>, signal?: AbortSignal): Promise<unknown> {
-  const result = provider === "api" ? await runResponses(config, prompt, schema, signal) : await runAudit(prompt, schema, config.workspace, defaultCodexHome(), signal);
+export async function runStructuredJob(config: ClientConfig, provider: AgileProvider, prompt: string, schema: Record<string, unknown>, signal?: AbortSignal,
+  onActivity?: (activity: Omit<import("@vibe-git/protocol").JobActivityInput, "id">) => void): Promise<unknown> {
+  const result = provider === "api" ? await runResponses(config, prompt, schema, signal, onActivity) : await runAudit(prompt, schema, config.workspace, defaultCodexHome(), signal, { onActivity });
   assertJsonSchema(result, schema);
+  onActivity?.({ kind: "status", message: "结果结构校验通过", detail: typeof (result as { summary?: unknown })?.summary === "string" ? (result as { summary: string }).summary : undefined });
   return result;
 }
 export async function saveCompute(config: ClientConfig, input: Record<string, unknown>) {

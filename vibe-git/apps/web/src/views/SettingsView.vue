@@ -7,6 +7,8 @@ import { useRepository } from "../repository";
 import { relativeTime, taskStatus } from "../team";
 import Icon from "../components/Icon.vue";
 import ComputeDialog from "../components/ComputeDialog.vue";
+import CodexModelControl from "../components/CodexModelControl.vue";
+import TaskAssignment from "../components/TaskAssignment.vue";
 const store = useWorkspace(), repository = useRepository();
 const label = ref(store.data?.viewer.label ?? ""), remote = ref(repository.remote), repoError = ref(""), quotaLoading = ref(false), invitation = ref("");
 const removing = ref<CollaborationNode | null>(null), taskSnapshot = ref<StageTask[]>([]), removalError = ref(""), removalPanel = ref<HTMLElement>();
@@ -24,6 +26,8 @@ function modalKeys(event: KeyboardEvent) {
   else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
   else if (!elements.length) event.preventDefault();
 }
+const unfinished = (id: string) => (store.data?.tasks ?? []).filter(task => task.assigneeNodeId === id && !task.archived && task.status !== "DONE");
+const removedMembers = computed(() => store.data?.nodes.filter(node => node.revoked) ?? []);
 const members = computed(() => store.data?.nodes.filter(node => !node.revoked) ?? []);
 const limits = computed(() => store.codex?.rateLimits.length ? store.codex.rateLimits : store.data?.viewer.rateLimits ?? []);
 const codexLabels = { available: "本机 Codex 已连接", connecting: "等待设备授权", login_required: "本机 Codex 需要登录", unavailable: "本机 Codex 未就绪" };
@@ -49,7 +53,13 @@ async function connectCodex() {
 }
 async function invite() {
   if (!store.canManage || store.busy) return;
-  const result = await store.perform(() => request<{ command: string }>("/api/v1/invite"));
+  const result = await store.perform(async () => {
+    if (!store.data?.tunnel?.running) {
+      if (!store.data?.tunnel?.installed) await request("/api/v1/local/cloudflare/install", {}, undefined, { timeoutMs: 180000 });
+      await request("/api/v1/local/cloudflare/start", {}, undefined, { timeoutMs: 60000 });
+    }
+    return request<{ command: string }>("/api/v1/invite");
+  });
   if (!result) return;
   invitation.value = result.command;
   try { await navigator.clipboard.writeText(result.command); store.notice = "邀请命令已复制，请发给你的队友"; }
@@ -71,9 +81,10 @@ async function reviewRemoval(node: CollaborationNode) {
 }
 async function removeMember() {
   const node = removing.value; if (!node || !store.canManage) return;
+  invitation.value = "";
   const result = await store.mutate<CollaborationNode>("/api/v1/nodes/" + node.id + "/revoke",
     { expectedActiveTaskRevisions: Object.fromEntries(taskSnapshot.value.map(task => [task.id, task.revision])) }, "成员已移除，未完成任务暂停并保留原记录");
-  if (result) removing.value = null;
+  if (result) { removing.value = null; invitation.value = ""; }
   else removalError.value = store.error;
 }
 async function rename() { await store.mutate("/api/v1/agile/profile", { label: label.value }, "显示名字已更新", "PUT"); }
@@ -103,10 +114,12 @@ onBeforeUnmount(() => { if (removing.value) previousFocus?.focus(); });
           <p v-if="store.codex?.reason" class="muted">{{ store.codex.reason }}</p>
         </div>
       </section>
-      <section id="team" class="settings-section"><header class="settings-section-title"><h2>Collaborators <span class="count">{{ members.length }}</span></h2><button v-if="store.canManage" class="btn small" :disabled="store.busy" @click="invite"><Icon name="plus" :size="15" />邀请成员</button></header><p class="muted">成员按节点身份区分，可以使用相同的显示名字。</p><div v-if="invitation" class="invite-command"><code>{{ invitation }}</code><p>队友运行邀请命令连接自己的项目，再运行 vibe-git open。邀请仅发送给预期成员。</p><button class="icon-btn" aria-label="收起邀请命令" @click="invitation = ''"><Icon name="close" :size="16" /></button></div><div class="paper settings-member-list"><article v-for="node in members" :key="node.id"><span class="avatar">{{ node.label.slice(0, 1).toUpperCase() }}</span><div><strong>{{ node.label }}<span v-if="node.id === store.data?.viewer.id" class="tag">你</span></strong><small>{{ node.id.slice(-8) }} · {{ node.role === 'captain' ? '队长' : '成员' }} · {{ relativeTime(node.lastSeenAt) }}同步</small></div><span class="member-presence"><i class="presence" :class="{ online: node.connected }"></i>{{ node.connected ? '在线' : '离线' }}</span><button v-if="store.canManage && node.role !== 'captain'" class="btn small danger" :disabled="store.busy" @click="reviewRemoval(node)">移除</button><span v-else class="tag">{{ node.role === 'captain' ? 'Owner' : 'Member' }}</span></article></div></section>
+      <CodexModelControl />
+      <section id="team" class="settings-section"><header class="settings-section-title"><h2>团队成员 <span class="count">{{ members.length }}</span></h2><button v-if="store.canManage" class="btn small" :disabled="store.busy" @click="invite"><Icon name="plus" :size="15" />邀请成员</button></header><p class="muted">成员按节点身份区分，可以使用相同的显示名字。</p><div v-if="invitation" class="invite-command"><code>{{ invitation }}</code><p>队友运行邀请命令连接自己的项目，再运行 vibe-git open。邀请仅发送给预期成员。</p><button class="icon-btn" aria-label="收起邀请命令" @click="invitation = ''"><Icon name="close" :size="16" /></button></div><div class="paper settings-member-list"><article v-for="node in members" :key="node.id"><span class="avatar">{{ node.label.slice(0, 1).toUpperCase() }}</span><div><strong>{{ node.label }}<span v-if="node.id === store.data?.viewer.id" class="tag">你</span></strong><small>{{ node.id.slice(-8) }} · {{ node.role === 'captain' ? '队长' : '成员' }} · {{ relativeTime(node.lastSeenAt) }}同步 · {{ unfinished(node.id).length }} 项未完成任务</small></div><span class="member-presence"><i class="presence" :class="{ online: node.connected }"></i>{{ node.connected ? '在线' : '离线' }}</span><RouterLink :to="{ path: '/projects', query: { owner: node.id } }" class="text-button">查看任务</RouterLink><TaskAssignment v-if="store.canManage && unfinished(node.id).length" :tasks="unfinished(node.id)" /><button v-if="store.canManage && node.role !== 'captain'" class="btn small danger" :disabled="store.busy" @click="reviewRemoval(node)">移除</button><span v-else class="tag">{{ node.role === 'captain' ? 'Owner' : 'Member' }}</span></article></div></section>
+      <details v-if="removedMembers.length" class="removed-members"><summary>已移除成员（{{ removedMembers.length }}）</summary><article v-for="node in removedMembers" :key="node.id"><strong>{{ node.label }}</strong><span class="muted">历史身份保留 · {{ unfinished(node.id).length }} 项待接续任务</span><TaskAssignment v-if="store.canManage && unfinished(node.id).length" :tasks="unfinished(node.id)" /></article></details>
       <section id="repository" class="settings-section"><h2>Git repository</h2><p class="muted">设置代码 PR 的仓库入口。使用 GitHub / GitLab 原生审查与合并；入口保存在当前浏览器。</p><form class="repository-settings-form" @submit.prevent="saveRepository"><label class="field">仓库页面地址<input v-model="remote" class="input" type="url" required placeholder="https://github.com/team/project" /></label><p v-if="repoError" class="inline-error" role="alert">{{ repoError }}</p><div class="button-row"><button class="btn">保存仓库入口</button><a v-if="repository.pullUrl" :href="repository.pullUrl" target="_blank" rel="noopener noreferrer" class="btn">打开代码 PR <Icon name="external" :size="14" /></a></div></form><p v-if="store.project" class="workspace-path"><Icon name="folder" :size="15" /><span>本机工作区 <code>{{ store.project.path }}</code></span></p><p v-if="store.projectError" class="inline-error">{{ store.projectError }}</p></section>
       <section id="profile" class="settings-section"><h2>Profile</h2><p class="muted">更新在团队中显示的名字。</p><form class="profile-settings-form" @submit.prevent="rename"><label class="field">显示名字<input v-model="label" class="input" maxlength="40" :disabled="!store.local" /></label><button class="btn" :disabled="store.busy || !store.local || !label.trim() || label.trim() === store.data?.viewer.label">保存名字</button></form></section>
     </div>
   </div>
-  <div v-if="removing" class="modal-backdrop" @click.self="!store.busy && (removing = null)"><section ref="removalPanel" class="modal member-removal-modal" role="dialog" aria-modal="true" aria-labelledby="remove-member-title" tabindex="-1" @keydown="modalKeys"><header class="section-head"><h2 id="remove-member-title">移除 {{ removing.label }}？</h2><button class="icon-btn" :disabled="store.busy" aria-label="取消移除成员" @click="removing = null"><Icon name="close" /></button></header><p>该成员将无法继续连接房间，正在执行的作业会取消。{{ taskSnapshot.length }} 项未完成任务将暂停，原任务和完成记录保留。</p><ul v-if="taskSnapshot.length" class="removal-task-list"><li v-for="task in taskSnapshot" :key="task.id"><strong>{{ task.title }}</strong><span>{{ taskStatus[task.status] ?? task.status }} · v{{ task.packageRevision ?? task.revision }}</span></li></ul><p class="muted">移除后可以在 Projects 提交改派 Issue，安排其他队友继续。</p><p v-if="removalError" class="inline-error" role="alert">{{ removalError }}<button class="text-button" :disabled="store.busy" @click="reviewRemoval(removing)">刷新任务影响</button></p><footer class="modal-footer"><button class="btn" :disabled="store.busy" @click="removing = null">取消</button><button class="btn danger-solid" :disabled="store.busy || !!removalError" @click="removeMember">确认移除成员</button></footer></section></div>
+  <div v-if="removing" class="modal-backdrop" @click.self="!store.busy && (removing = null)"><section ref="removalPanel" class="modal member-removal-modal" role="dialog" aria-modal="true" aria-labelledby="remove-member-title" tabindex="-1" @keydown="modalKeys"><header class="section-head"><h2 id="remove-member-title">移除 {{ removing.label }}？</h2><button class="icon-btn" :disabled="store.busy" aria-label="取消移除成员" @click="removing = null"><Icon name="close" /></button></header><p>该成员将无法继续连接房间，正在执行的作业会取消。{{ taskSnapshot.length }} 项未完成任务将暂停，原任务和完成记录保留。</p><ul v-if="taskSnapshot.length" class="removal-task-list"><li v-for="task in taskSnapshot" :key="task.id"><strong>{{ task.title }}</strong><span>{{ taskStatus[task.status] ?? task.status }} · v{{ task.packageRevision ?? task.revision }}</span></li></ul><p class="muted">移除后可以直接更换未完成任务的负责人。旧邀请同时失效，需要加入的队友请使用新邀请。</p><p v-if="removalError" class="inline-error" role="alert">{{ removalError }}<button class="text-button" :disabled="store.busy" @click="reviewRemoval(removing)">刷新任务影响</button></p><footer class="modal-footer"><button class="btn" :disabled="store.busy" @click="removing = null">取消</button><button class="btn danger-solid" :disabled="store.busy || !!removalError" @click="removeMember">确认移除成员</button></footer></section></div>
 </template>

@@ -8,7 +8,8 @@ import { readFile, stat } from "node:fs/promises";
 import { extname, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { probeCodex } from "./codex.js";
-import { chatWithCodex, draftProposalWithCodex, listCodexModels } from "./local-chat.js";
+import { chatWithCodex, draftProposalWithCodex, listCodexModels, codexModelSettings, saveCodexModel } from "./local-chat.js";
+import { projectController } from "./projects.js";
 import { clarifyIntentWithCodex, endIntentSession } from "./intent-clarifier.js";
 import { clarifyIntentWithOpenAI, openAIStatus, saveOpenAIConfig } from "./openai-intent.js";
 import { computeStatus, savePanelCompute, testCompute } from "./agile-ai.js";
@@ -38,13 +39,20 @@ function json(res: ServerResponse, code: number, value: unknown): void {
   res.writeHead(code, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
   res.end(JSON.stringify(value));
 }
-export async function startLocalPanel(config: ClientConfig, controls: { busy(): string | null; changed(): Promise<void>; beforeSwitch?(): Promise<void> } = { busy: () => null, changed: async () => undefined }): Promise<{ port: number; switching(): boolean; close(): Promise<void> }> {
+export async function startLocalPanel(config: ClientConfig, controls: { busy(): string | null; changed(): Promise<void>; beforeSwitch?(): Promise<void>; beforeProjectSwitch?(): Promise<void> } = { busy: () => null, changed: async () => undefined }): Promise<{ port: number; switching(): boolean; close(): Promise<void> }> {
   const codex = codexController(controls.changed);
   const workspace = workspaceController(config, controls.busy, controls.changed);
   const tickets = new Map<string, number>();
   const sessions = new Map<string, number>();
+  const proxyStreams = new Set<AbortController>();
+  let activeWrites = 0;
+  const projects = projectController(config, {
+    busy: () => controls.busy() ?? (activeWrites ? "网页操作尚未完成" : null), changed: controls.changed,
+    beforeSwitch: async () => { await controls.beforeProjectSwitch?.(); for (const controller of proxyStreams) controller.abort(); }
+  });
   let choosingFolder = false;
   const server = createServer(async (req, res) => {
+    let tracked = false;
     try {
       const url = new URL(req.url ?? "/", "http://127.0.0.1");
       const origin = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
@@ -69,6 +77,25 @@ export async function startLocalPanel(config: ClientConfig, controls: { busy(): 
       const session = req.headers.cookie?.split(";").map((value) => value.trim()).find((value) => value.startsWith("vg_local="))?.slice(9) ?? "";
       if ((sessions.get(session) ?? 0) <= Date.now()) return json(res, 403, { error: "请先在本机运行 vibe-git open" });
       if (!["GET", "HEAD"].includes(req.method ?? "") && req.headers.origin !== origin) return json(res, 403, { error: "跨站请求被拒绝" });
+      if (projects.isSwitching()) return json(res, 409, { error: "项目正在切换，请稍后操作" });
+      if (url.pathname === "/api/local/projects" && req.method === "GET") return json(res, 200, await projects.list());
+      if (url.pathname === "/api/local/projects/pick" && req.method === "POST") {
+        if (choosingFolder) return json(res, 409, { error: "文件夹选择窗口已经打开" });
+        choosingFolder = true;
+        const controller = new AbortController();
+        res.once("close", () => { if (!res.writableEnded) controller.abort(); });
+        try { return json(res, 200, { path: await pickWindowsFolder(controller.signal) }); }
+        finally { choosingFolder = false; }
+      }
+      if (url.pathname === "/api/local/projects/switch" && req.method === "POST") {
+        const input = await body(req);
+        if (typeof input.path !== "string" || typeof input.expectedRoomId !== "string") return json(res, 400, { error: "缺少项目路径或当前房间标识" });
+        try { return json(res, 200, await projects.select(input.path, input.expectedRoomId)); }
+        catch (error) { return json(res, 409, { error: error instanceof Error ? error.message : String(error) }); }
+      }
+      if (!["GET", "HEAD"].includes(req.method ?? "") && url.pathname !== "/api/local/workspace/pick") { tracked = true; activeWrites++; }
+      if (url.pathname === "/api/local/codex/model" && req.method === "GET") return json(res, 200, await codexModelSettings(config.workspace));
+      if (url.pathname === "/api/local/codex/model" && req.method === "PUT") return json(res, 200, await saveCodexModel(config, (await body(req)).model));
       if (url.pathname === "/api/local/capabilities") return json(res, 200, { local: true, chat: probeCodex().appServer });
       const revisionRoute = url.pathname.match(/^\/api\/local\/changes\/([^/]+)\/revision-draft$/);
       if (revisionRoute && req.method === "POST") {
@@ -181,11 +208,14 @@ export async function startLocalPanel(config: ClientConfig, controls: { busy(): 
         res.end(); return;
       }
       if (url.pathname.startsWith("/api/v1/") || url.pathname === "/health") {
+        const connection = { ...config };
         const input = ["GET", "HEAD"].includes(req.method ?? "") ? undefined : Buffer.from(JSON.stringify(await body(req)), "utf8");
         const controller = new AbortController();
         res.once("close", () => controller.abort());
-        const upstream = await fetch(`${config.hostUrl.replace(/\/$/, "")}${url.pathname}${url.search}`, {
-          signal: controller.signal, method: req.method ?? "GET", headers: { authorization: `Bearer ${config.nodeToken}`, ...(input ? { "content-type": "application/json" } : {}) },
+        if (url.pathname === "/api/v1/events") proxyStreams.add(controller);
+        res.once("close", () => proxyStreams.delete(controller));
+        const upstream = await fetch(`${connection.hostUrl.replace(/\/$/, "")}${url.pathname}${url.search}`, {
+          signal: controller.signal, method: req.method ?? "GET", headers: { authorization: `Bearer ${connection.nodeToken}`, ...(input ? { "content-type": "application/json" } : {}) },
           ...(input ? { body: input } : {})
         });
         res.writeHead(upstream.status, { "content-type": upstream.headers.get("content-type") ?? "application/octet-stream",
@@ -203,12 +233,13 @@ export async function startLocalPanel(config: ClientConfig, controls: { busy(): 
       if (!existsSync(resolve(WEB_DIST, "../package.json")) || !existsSync(path)) return json(res, 503, { error: "当前分支的前端正在重建，本机 API 保持可用" });
       res.writeHead(200, { "content-type": mime[extname(path)] ?? "application/octet-stream", "cache-control": "no-store" });
       res.end(req.method === "HEAD" ? undefined : await readFile(path));
-    } catch (error) { if (!res.headersSent) json(res, 500, { error: error instanceof Error ? error.message : String(error) }); else res.end(); }
+    } catch (error) { if (!res.headersSent) json(res, error instanceof ApiError ? error.status : 500, { error: error instanceof Error ? error.message : String(error) }); else res.end(); }
+    finally { if (tracked) activeWrites--; }
   });
   await new Promise<void>((resolvePromise, rejectPromise) => {
     server.once("error", rejectPromise); server.listen(0, "127.0.0.1", () => resolvePromise());
   });
   const port = (server.address() as { port: number }).port;
   await writeJson(localPanelPath(), { port, pid: process.pid });
-  return { port, switching: workspace.isSwitching, close: () => { codex.close(); server.closeAllConnections(); return new Promise<void>((resolvePromise) => server.close(() => resolvePromise())); } };
+  return { port, switching: () => workspace.isSwitching() || projects.isSwitching(), close: () => { codex.close(); server.closeAllConnections(); return new Promise<void>((resolvePromise) => server.close(() => resolvePromise())); } };
 }

@@ -9,7 +9,7 @@ const phaseNames: Record<string, string> = { AGILE_ANALYZE: "正在分析需求�
 </script>
 <template>
   <div v-if="['ANALYZING', 'PLANNING'].includes(flow.status)" class="flow-status">
-    <span class="working-dot"></span><div><strong>{{ phaseNames[flow.phase] }}</strong><p>你可以留在这里，也可以稍后回来。已提交的内容和裁决会保留。</p></div>
+    <span class="working-dot"></span><div><strong>{{ phaseNames[flow.phase] }}</strong><p>右下角显示实时活动，点击可展开本轮记录；刷新或稍后回来仍能查看。</p></div>
     <ActionMenu v-if="store.canManage && !readonly && !hideCancel" aria-label="更多流程操作" :disabled="store.busy"><button type="button" role="menuitem" class="danger" :disabled="store.busy" @click="store.mutate('/api/v1/agile/flows/' + flow.id + '/cancel', { expectedRevision: flow.revision })">取消本轮</button></ActionMenu>
   </div>
   <div v-else-if="flow.status === 'FAILED'" class="flow-status failure">

@@ -5,13 +5,14 @@ import { useWorkspace } from "../store";
 import { useAgents } from "../agents";
 import { useRepository } from "../repository";
 import { request } from "../api";
+import type { CodexModelSettings } from "@vibe-git/protocol";
 import { taskStatus } from "../team";
 import Icon from "../components/Icon.vue";
 import MarkdownEditor from "../components/MarkdownEditor.vue";
 import FlowStatus from "../components/FlowStatus.vue";
 const workspace = useWorkspace(), agents = useAgents(), repository = useRepository(), route = useRoute(), router = useRouter();
 const input = ref(""), chatBody = ref<HTMLElement>(), composer = ref<HTMLTextAreaElement>(), autoScroll = ref(true), modelsLoading = ref(false);
-const models = ref<Array<{ id: string; name: string }>>([{ id: "", name: "Codex 默认模型" }]);
+const models = ref<Array<{ id: string; name: string }>>([{ id: "", name: "本机默认模型" }]);
 const modelOptions = computed(() => agents.model && !models.value.some(model => model.id === agents.model)
   ? [...models.value, { id: agents.model, name: agents.model }] : models.value);
 const presets = [
@@ -48,7 +49,10 @@ function submitKey(event: KeyboardEvent) {
 }
 async function loadModels() {
   modelsLoading.value = true;
-  try { const available = await request<Array<{ id: string; name: string }>>("/api/local/codex/models"); models.value = [{ id: "", name: "Codex 默认模型" }, ...available.filter(model => model.id !== "default")]; }
+  try {
+    const [available, current] = await Promise.all([request<Array<{ id: string; name: string }>>("/api/local/codex/models"), request<CodexModelSettings>("/api/local/codex/model")]);
+    models.value = [{ id: "", name: "本机默认：" + (current.effectiveModel ?? "尚未读取") }, ...available.filter(model => model.id !== "default").map(model => ({ ...model, name: "本次覆盖：" + model.name }))];
+  }
   catch (e) { agents.error = e instanceof Error ? e.message : String(e); }
   finally { modelsLoading.value = false; }
 }
