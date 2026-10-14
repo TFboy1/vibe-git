@@ -1,6 +1,7 @@
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import type { MemberId } from "@vibe-git/protocol";
 import { VibeService } from "../domain/service.js";
+import { streamEvents } from "../events/hub.js";
 
 const actor = (request: FastifyRequest) => request.headers["x-member-id"] as MemberId | undefined;
 
@@ -28,9 +29,7 @@ export async function registerApi(app: FastifyInstance, service: VibeService) {
       "Content-Type": "text/event-stream; charset=utf-8", "Cache-Control": "no-cache, no-transform",
       Connection: "keep-alive", "Access-Control-Allow-Origin": "*"
     });
-    for (const event of service.repo.eventsSince(Number.isFinite(since) ? since : 0)) reply.raw.write(`id: ${event.seq}\ndata: ${JSON.stringify(event)}\n\n`);
-    const unsubscribe = service.hub.subscribe((event) => reply.raw.write(`id: ${event.seq}\ndata: ${JSON.stringify(event)}\n\n`));
-    const heartbeat = setInterval(() => reply.raw.write(": heartbeat\n\n"), 15_000);
-    request.raw.on("close", () => { clearInterval(heartbeat); unsubscribe(); });
+    reply.raw.flushHeaders();
+    await streamEvents(reply.raw, service.hub, cursor => service.repo.eventsSince(cursor), since);
   });
 }

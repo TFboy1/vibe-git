@@ -2,7 +2,12 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { once } from "node:events";
+import { PassThrough } from "node:stream";
+import { setImmediate } from "node:timers/promises";
+import { EventHub, streamEvents } from "../src/events/hub.js";
+import type { RoomEvent } from "@vibe-git/protocol";
 import type { AgentJob, AlignmentRun, CloudflareTunnelStatus, CollaborationNode, StageTask, V20BootstrapPayload } from "@vibe-git/protocol";
 import { buildApp } from "../src/app.js";
 import type { CloudflareManager } from "../src/integrations/cloudflare/manager.js";
@@ -19,6 +24,47 @@ class FakeCloudflare implements CloudflareManager {
 
 const roots: string[] = [];
 afterEach(async () => { await Promise.all(roots.splice(0).map((path) => rm(path, { recursive: true, force: true }))); });
+
+describe("持久化事件流背压", () => {
+  const outputs: PassThrough[] = [];
+  const event = (seq: number): RoomEvent => ({ seq, type: "job.progress", actorId: "system", source: "system", entityType: "agent_job", entityId: "job", payload: { detail: "x".repeat(1000) }, createdAt: new Date().toISOString() });
+  afterEach(async () => { for (const output of outputs.splice(0)) output.destroy(); await setImmediate(); vi.useRealTimers(); });
+  it("暂停消费时不读取更多批次，恢复后按顺序补齐历史与暂停期间的事件", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    const output = new PassThrough({ highWaterMark: 128 }); outputs.push(output);
+    const hub = new EventHub(), events = Array.from({ length: 250 }, (_, i) => event(i + 1));
+    const read = vi.fn((cursor: number) => events.filter(item => item.seq > cursor).slice(0, 100));
+    const initial = streamEvents(output, hub, read, 0);
+    expect(output.writableNeedDrain).toBe(true); expect(read).toHaveBeenCalledTimes(1);
+    const buffered = output.writableLength;
+    vi.advanceTimersByTime(60_000);
+    for (let i = 251; i <= 300; i++) { const next = event(i); events.push(next); hub.publish(next); }
+    expect(read).toHaveBeenCalledTimes(1); expect(output.writableLength).toBe(buffered);
+    const chunks: Buffer[] = []; output.on("data", chunk => chunks.push(chunk as Buffer)); output.resume();
+    await initial;
+    const delivered = [...Buffer.concat(chunks).toString("utf8").matchAll(/^id: (\d+)$/gm)].map(match => Number(match[1]));
+    expect(delivered).toEqual(Array.from({ length: 300 }, (_, i) => i + 1));
+    const next = event(301); events.push(next); hub.publish(next); await setImmediate();
+    expect(Buffer.concat(chunks).toString("utf8")).toContain("id: 301\n");
+  });
+  it("背压期间断开连接会取消等待、定时器与订阅", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    const output = new PassThrough({ highWaterMark: 128 }); outputs.push(output);
+    const hub = new EventHub(), read = vi.fn((cursor: number) => cursor < 1 ? [event(1)] : []);
+    const initial = streamEvents(output, hub, read, 0);
+    const closed = once(output, "close"); output.destroy(); await closed; await initial;
+    expect(vi.getTimerCount()).toBe(0);
+    const count = read.mock.calls.length; hub.publish(event(2)); await setImmediate();
+    expect(read).toHaveBeenCalledTimes(count);
+  });
+  it("从已确认的游标继续发送，不重复旧事件", async () => {
+    const output = new PassThrough(); outputs.push(output);
+    const hub = new EventHub(), events = [event(1), event(2), event(3)], chunks: Buffer[] = [];
+    output.on("data", chunk => chunks.push(chunk as Buffer));
+    await streamEvents(output, hub, cursor => events.filter(item => item.seq > cursor), 2);
+    expect([...Buffer.concat(chunks).toString("utf8").matchAll(/^id: (\d+)$/gm)].map(match => Number(match[1]))).toEqual([3]);
+  });
+});
 
 async function setup() {
   const root = await mkdtemp(resolve(tmpdir(), "vibe-git-v20-test-")); roots.push(root);

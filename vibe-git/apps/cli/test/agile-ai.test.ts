@@ -20,6 +20,39 @@ afterEach(async () => {
   await rm(root, { recursive: true, force: true });
 });
 describe("原生 Responses 协作算力", () => {
+  it("上报阻塞时只有一个发送器，队列保留最新 100 条进度", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>(resolvePromise => { release = resolvePromise; });
+    const sent: Array<{ activity: { message: string } }> = [];
+    vi.stubGlobal("fetch", vi.fn(async (_url: string, init?: RequestInit) => {
+      sent.push(JSON.parse(String(init?.body)) as (typeof sent)[number]);
+      if (sent.length === 1) await gate;
+      return new Response("{}");
+    }));
+    const reporter = activityReporter(config, { id: "bounded-job", leaseToken: "lease", payload: { activityEnabled: true } } as never);
+    try {
+      reporter.emit({ kind: "status", message: "进度 0" });
+      const firstFlush = reporter.flush(); await Promise.resolve();
+      for (let i = 1; i <= 1200; i++) {
+        reporter.emit({ kind: "tool", message: `进度 ${i}` });
+        expect(reporter.flush()).toBe(firstFlush);
+      }
+      expect(sent).toHaveLength(1);
+      release(); await firstFlush;
+      expect(sent.map(item => item.activity.message)).toEqual(["进度 0", ...Array.from({ length: 100 }, (_, i) => `进度 ${1101 + i}`)]);
+      reporter.emit({ kind: "summary", message: "最终进度" }); await reporter.flush();
+      expect(sent.at(-1)?.activity.message).toBe("最终进度");
+    } finally { release(); await reporter.flush(); }
+  });
+  it("进度请求失败后仍能发送后续活动并完成 flush", async () => {
+    const fetch = vi.fn().mockRejectedValueOnce(new Error("网络中断")).mockImplementation(async () => new Response("{}"));
+    vi.stubGlobal("fetch", fetch);
+    const reporter = activityReporter(config, { id: "retry-job", leaseToken: "lease", payload: { activityEnabled: true } } as never);
+    reporter.emit({ kind: "status", message: "开始" }); reporter.emit({ kind: "tool", message: "后续活动" });
+    await reporter.flush();
+    reporter.emit({ kind: "summary", message: "完成" }); await reporter.flush();
+    expect(fetch).toHaveBeenCalledTimes(3);
+  });
   it("旧 Host 未声明活动能力时不发送未知的进度状态", async () => {
     const fetch = vi.fn(); vi.stubGlobal("fetch", fetch);
     const reporter = activityReporter(config, { id: "old-job", payload: {}, leaseToken: "old-lease" } as never);

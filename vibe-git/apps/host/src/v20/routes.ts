@@ -6,6 +6,7 @@ import { badRequest, forbidden, notFound, unavailable } from "../domain/errors.j
 import type { CloudflareManager } from "../integrations/cloudflare/manager.js";
 import type { V20Service } from "./service.js";
 import { taskMarkdown, workstreamMarkdown } from "./contract-format.js";
+import { streamEvents } from "../events/hub.js";
 
 type MarkdownBody = { filename?: string; content?: string };
 type PlanUpdateBody = MarkdownBody & { expectedRevision?: number };
@@ -307,16 +308,7 @@ export async function registerV20Routes(app: FastifyInstance, service: V20Servic
       Connection: "keep-alive", "X-Accel-Buffering": "no"
     });
     reply.raw.flushHeaders();
-    let cursor = Number.isFinite(since) ? since : 0;
-    for (;;) {
-      const batch = service.repo.eventsSince(cursor);
-      for (const event of batch) reply.raw.write(`id: ${event.seq}\ndata: ${JSON.stringify(event)}\n\n`);
-      if (batch.length < 100) break;
-      cursor = batch.at(-1)!.seq;
-    }
-    const unsubscribe = service.hub.subscribe((event) => reply.raw.write(`id: ${event.seq}\ndata: ${JSON.stringify(event)}\n\n`));
-    const heartbeat = setInterval(() => reply.raw.write(`: ${node.id}\n\n`), 15_000);
-    reply.raw.once("close", () => { clearInterval(heartbeat); unsubscribe(); });
+    await streamEvents(reply.raw, service.hub, cursor => service.repo.eventsSince(cursor), since, `: ${node.id}`);
   });
 
   const localCaptain = (request: FastifyRequest): CollaborationNode => {

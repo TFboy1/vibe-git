@@ -3,6 +3,7 @@ import { workspaceController } from "./local-workspace.js";
 import { pickWindowsFolder } from "./native-folder-picker.js";
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { pipeline } from "node:stream/promises";
 import { existsSync } from "node:fs";
 import { readFile, stat } from "node:fs/promises";
 import { extname, resolve, sep } from "node:path";
@@ -38,6 +39,12 @@ async function body(req: IncomingMessage): Promise<Record<string, unknown>> {
 function json(res: ServerResponse, code: number, value: unknown): void {
   res.writeHead(code, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
   res.end(JSON.stringify(value));
+}
+function sendEvent(res: ServerResponse, type: string, value: unknown): void {
+  if (res.destroyed || res.writableEnded) return;
+  // Callback producers cannot pause: close stalled clients instead of retaining more output.
+  if (res.writableNeedDrain) { res.destroy(); return; }
+  res.write(`data: ${JSON.stringify({ type, value })}\n\n`);
 }
 export async function startLocalPanel(config: ClientConfig, controls: { busy(): string | null; changed(): Promise<void>; beforeSwitch?(): Promise<void>; beforeProjectSwitch?(): Promise<void> } = { busy: () => null, changed: async () => undefined }): Promise<{ port: number; switching(): boolean; close(): Promise<void> }> {
   const codex = codexController(controls.changed);
@@ -173,9 +180,9 @@ export async function startLocalPanel(config: ClientConfig, controls: { busy(): 
         res.once("close", () => { if (!res.writableEnded) controller.abort(); });
         res.writeHead(200, { "content-type": "text/event-stream; charset=utf-8", "cache-control": "no-store", connection: "keep-alive", "x-accel-buffering": "no" });
         res.flushHeaders();
-        const send = (type: string, value: unknown) => { if (!res.destroyed && !res.writableEnded) res.write(`data: ${JSON.stringify({ type, value })}\n\n`); };
+        const send = (type: string, value: unknown) => sendEvent(res, type, value);
         send("status", "请求已接收");
-        const heartbeat = setInterval(() => { if (!res.destroyed && !res.writableEnded) res.write(": heartbeat\n\n"); }, 10_000);
+        const heartbeat = setInterval(() => { if (!res.destroyed && !res.writableEnded && !res.writableNeedDrain) res.write(": heartbeat\n\n"); }, 10_000);
         try {
           const result = provider === "openai"
             ? await clarifyIntentWithOpenAI(config, typeof input.sessionId === "string" ? input.sessionId : "default", String(input.message ?? ""), input.start === true, typeof input.model === "string" ? input.model : undefined, controller.signal, send)
@@ -202,7 +209,7 @@ export async function startLocalPanel(config: ClientConfig, controls: { busy(): 
         if (match[2]) return json(res, 200, await chatWithCodex(config, taskId, "", () => undefined, true));
         const input = await body(req);
         res.writeHead(200, { "content-type": "text/event-stream; charset=utf-8", "cache-control": "no-store", connection: "keep-alive" });
-        const send = (type: string, value: unknown) => res.write(`data: ${JSON.stringify({ type, value })}\n\n`);
+        const send = (type: string, value: unknown) => sendEvent(res, type, value);
         try { const answer = await chatWithCodex(config, taskId, String(input.message ?? ""), (delta) => send("delta", delta)); send("done", answer); }
         catch (error) { send("error", error instanceof Error ? error.message : String(error)); }
         res.end(); return;
@@ -211,19 +218,21 @@ export async function startLocalPanel(config: ClientConfig, controls: { busy(): 
         const connection = { ...config };
         const input = ["GET", "HEAD"].includes(req.method ?? "") ? undefined : Buffer.from(JSON.stringify(await body(req)), "utf8");
         const controller = new AbortController();
-        res.once("close", () => controller.abort());
+        res.once("close", () => { if (!res.writableEnded) controller.abort(); });
         if (url.pathname === "/api/v1/events") proxyStreams.add(controller);
         res.once("close", () => proxyStreams.delete(controller));
         const upstream = await fetch(`${connection.hostUrl.replace(/\/$/, "")}${url.pathname}${url.search}`, {
-          signal: controller.signal, method: req.method ?? "GET", headers: { authorization: `Bearer ${connection.nodeToken}`, ...(input ? { "content-type": "application/json" } : {}) },
+          signal: controller.signal, method: req.method ?? "GET", headers: { authorization: `Bearer ${connection.nodeToken}`, ...(input ? { "content-type": "application/json" } : {}),
+            ...(url.pathname === "/api/v1/events" && typeof req.headers["last-event-id"] === "string" ? { "last-event-id": req.headers["last-event-id"] } : {}) },
           ...(input ? { body: input } : {})
         });
         res.writeHead(upstream.status, { "content-type": upstream.headers.get("content-type") ?? "application/octet-stream",
           "cache-control": "no-store" });
         // An idle SSE stream must open immediately, before its first event.
         if (upstream.headers.get("content-type")?.startsWith("text/event-stream")) res.flushHeaders();
-        if (upstream.body) for await (const chunk of upstream.body) res.write(chunk);
-        res.end(); return;
+        if (upstream.body) await pipeline(upstream.body, res, { signal: controller.signal });
+        else res.end();
+        return;
       }
       if (req.method !== "GET" && req.method !== "HEAD") return json(res, 405, { error: "不支持的方法" });
       const decoded = decodeURIComponent(url.pathname);
