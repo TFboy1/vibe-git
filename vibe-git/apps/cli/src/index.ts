@@ -2,10 +2,11 @@
 import { handleCoordinationCommand, COORDINATION_USAGE } from "./coordination-command.js";
 import { handleAgileCommand, AGILE_USAGE } from "./agile-command.js";
 import { spawn } from "node:child_process";
-import { closeSync, existsSync, openSync } from "node:fs";
+import { closeSync, existsSync } from "node:fs";
+import { openLogFile } from "@vibe-git/protocol/logging";
 import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { basename, dirname, resolve } from "node:path";
+import { basename, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { AlignmentRun, JoinResponse, MarkdownDocument, V20BootstrapPayload, WorkTransport } from "@vibe-git/protocol";
 import { api, post } from "./api.js";
@@ -68,8 +69,7 @@ async function stopDaemon(config: ClientConfig | null): Promise<ClientConfig | n
 
 async function spawnDaemon(config: ClientConfig): Promise<ClientConfig> {
   await stopDaemon(config);
-  await mkdir(dirname(daemonLogPath()), { recursive: true });
-  const fd = openSync(daemonLogPath(), "a");
+  const fd = openLogFile(daemonLogPath());
   const child = spawn(process.execPath, [CLI_ENTRY, "daemon"], {
     detached: true, windowsHide: true, cwd: config.workspace, stdio: ["ignore", fd, fd], env: process.env
   });

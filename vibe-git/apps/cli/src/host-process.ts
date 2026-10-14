@@ -1,11 +1,12 @@
 import { spawn } from "node:child_process";
-import { closeSync, existsSync, openSync } from "node:fs";
-import { mkdir, rm } from "node:fs/promises";
+import { closeSync, existsSync } from "node:fs";
+import { openLogFile } from "@vibe-git/protocol/logging";
+import { rm } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { resolve } from "node:path";
 import { api, post } from "./api.js";
 import { hostDataRoot, migrateLegacyHostData } from "./host-data.js";
-import { hostLogPath, hostProcessPath, readJson, vibeHome, writeJson, type ClientConfig } from "./config.js";
+import { hostLogPath, hostProcessPath, readJson, writeJson, type ClientConfig } from "./config.js";
 
 export const LOCAL_HOST = "http://127.0.0.1:8787";
 const ROOT = resolve(fileURLToPath(new URL("../../..", import.meta.url)));
@@ -36,10 +37,9 @@ export async function startHost(workspace: string, previous?: ClientConfig | nul
   } else {
     if (!existsSync(ENTRY)) throw new Error("缺少 Host 构建，请先运行 npm run build");
     if (!rootOverride && previous?.hostUrl === LOCAL_HOST) await migrateLegacyHostData(dataRoot, previous.nodeId);
-    await mkdir(vibeHome(), { recursive: true });
-    const fd = openSync(hostLogPath(), "a");
+    const fd = openLogFile(hostLogPath());
     const child = spawn(process.execPath, [ENTRY], { detached: true, windowsHide: true, cwd: ROOT,
-      stdio: ["ignore", fd, fd], env: { ...process.env, PORT: "8787", HOST: "0.0.0.0", VIBE_GIT_DATA_DIR: dataRoot, VIBE_GIT_TUNNEL_TARGET: LOCAL_HOST } });
+      stdio: ["ignore", fd, fd], env: { ...process.env, PORT: "8787", HOST: "0.0.0.0", VIBE_GIT_DATA_DIR: dataRoot, VIBE_GIT_TUNNEL_TARGET: LOCAL_HOST, VIBE_GIT_LOG_FILE: hostLogPath() } });
     child.unref(); closeSync(fd);
     info = { pid: child.pid!, hostUrl: LOCAL_HOST, startedAt: new Date().toISOString(), root: ROOT, workspace, dataRoot };
     await writeJson(hostProcessPath(), info);

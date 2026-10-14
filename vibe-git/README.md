@@ -231,6 +231,8 @@ vibe-git logs
 Get-Content "$HOME/.vibe-git/host.log" -Tail 100
 ```
 
+`host.log` 与 `daemon.log` 在写入前自动检查大小，每份最多 20 MiB，保留 `.1`、`.2` 两个备份；两组正常运行日志合计最多 120 MiB。重启时也会轮转超限日志，并仅保留旧大文件末尾最多 20 MiB。该策略在重启 Host 和守护进程后生效，不清理 Codex 会话、房间数据库或旧版遗留的其他日志文件。
+
 
 ## 快速协作
 

@@ -1,7 +1,8 @@
-import { appendFile, mkdir, rm, stat } from "node:fs/promises";
+import { rm, stat } from "node:fs/promises";
+import { appendLog } from "@vibe-git/protocol/logging";
 import { execFileSync } from "node:child_process";
 import { realpathSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { resolve } from "node:path";
 import type { AgentJob, GitSnapshot, NodeHeartbeatInput, RateLimitWindow, V20BootstrapPayload } from "@vibe-git/protocol";
 import { api, post, ApiError } from "./api.js";
 import { defaultCodexHome, daemonLogPath, loadConfig, saveConfig, readJson, type ClientConfig } from "./config.js";
@@ -38,8 +39,7 @@ import { gitExecutable } from "./git-command.js";
 
 async function log(value: string): Promise<void> {
   const line = `[${new Date().toISOString()}] ${value.replace(/[\r\n]+/g, " ").slice(0, 4_000)}\n`;
-  await mkdir(dirname(daemonLogPath()), { recursive: true });
-  await appendFile(daemonLogPath(), line, "utf8").catch(() => undefined);
+  try { appendLog(daemonLogPath(), line); } catch { /* Logging must not stop the daemon. */ }
 }
 
 function git(cwd: string, args: string[]): string {

@@ -21,7 +21,7 @@ export interface BuildAppOptions {
   dataDir?: string;
   /** 默认只提供 API；重建前端后可显式传入构建目录。 */
   staticDir?: string | false;
-  logger?: boolean | { level: "warn" };
+  logger?: boolean | { level: "warn"; stream?: NodeJS.WritableStream };
   cloudflareManager?: CloudflareManager;
   /** 仅为兼容旧测试调用；v0.20 永远不会写入演示数据。 */
   seedDemo?: boolean;
