@@ -1,5 +1,7 @@
 # Vibe-Git Research · 可核查的科研交接
 
+> **当前接手分支：[TFboy1/vibe-git · CityuAI4S](https://github.com/TFboy1/vibe-git/tree/CityuAI4S)。**
+
 > **队友接手入口：[SciencePal 实跑、Agent 配置与提交续办](docs/submission/sciencepal-handoff/README.md) · [原材料与视频制作源](TEAM-HANDOFF.md)。** SciencePal 新核验与原字节交付包已完成；视频保持原样，等待队友处理。正式问卷仍为草稿，尚无提交回执。
 
 **让 Codex 与 SciencePAL 在同一份研究协议下合作，把经过复核的成果、版本和批准依据一起交给下一步。**
@@ -104,7 +106,7 @@ npm run research:replay
 
 ### 历史基线与其他验证
 
-最终功能基线 [`dda48233f57ee20e9c8be2d6b21c782b46ece7ba`](https://github.com/WeihanChen000/vibe-git-research/tree/dda48233f57ee20e9c8be2d6b21c782b46ece7ba)，材料 final-20261031-v1。功能已冻结；参赛前只修启动、演示或提交阻塞。不新增平台、学科案例或重做界面。
+历史功能基线 [`dda48233f57ee20e9c8be2d6b21c782b46ece7ba`](https://github.com/WeihanChen000/vibe-git-research/tree/dda48233f57ee20e9c8be2d6b21c782b46ece7ba)，材料 final-20261031-v1。本次接手分支包含随后授权的 GitHub 风格界面重构、连接与恢复修复及 SciencePal 核验材料，具体结果和边界见上方接手说明；历史科研证据与现有视频保留原样。
 
 最新代码补齐[科研防偏移与反例验证](docs/research/RESEARCH-ANTI-DRIFT-20261031.md)：原文遗漏不能发布、返工须对应原验收、变更按影响复用有效成果。该新增治理层已通过受控模拟及最新真实两轮闭环；既有回放仍展示其原始历史版本。
 
@@ -121,7 +123,7 @@ npm run research:replay
 
 原功能保留与同学代码覆盖范围见[核对清单](docs/research/ORIGINAL-FUNCTION-PRESERVATION.md)：原软件流程继续保留，科研扩展不替代原防偏移机制；当前主 CLI 的执行仍限于 Codex。
 
-这是公开的团队分享仓库，保留上游基线和作者归属，不改写队友原仓库。源码包包含科研 Skill：[`vibe-git/research-skill`](vibe-git/research-skill/SKILL.md)。原版文档入口为 [README-ORIGINAL.md](README-ORIGINAL.md)，早期研发报告可能描述历史阶段，请以本 README 和验证页为当前状态。
+这是 Vibe-Git 源仓库中的独立科研接手分支 `CityuAI4S`，保留上游基线和作者归属；原有分支继续保留。源码包包含科研 Skill：[`vibe-git/research-skill`](vibe-git/research-skill/SKILL.md)。原版文档入口为 [README-ORIGINAL.md](README-ORIGINAL.md)，早期研发报告可能描述历史阶段，请以本 README 和验证页为当前状态。
 
 仓库已由负责人授权公开，可直接分享给队友与评委。当前快照未发现统一的根级开源许可证，公开可见不等于授予任意使用许可；保留原作者及素材归属，不擅自补写 MIT。见 [来源和分享范围](docs/research/PROVENANCE.md)。API Key、邀请凭据、成员 token、私人数据库与完整运行目录均不进入分享快照。
 

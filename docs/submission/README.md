@@ -12,6 +12,7 @@
 
 | 材料 | 入口 | 范围 |
 |---|---|---|
+| 最新修复源码 | [TFboy1/vibe-git · CityuAI4S](https://github.com/TFboy1/vibe-git/tree/CityuAI4S) | 本次连接/恢复修复、GitHub 风格界面与 SciencePal 接手材料；获取命令见队友接手页 |
 | 3–5 分钟视频 | [直接播放](https://weihanchen000.github.io/vibe-git-research/submission/watch.html) / [MP4](vibe-git-research-demo.mp4) | 新版约 4:38，英文合成配音、中文字幕；历史真实证据与模拟界面分开标注 |
 | 最多五页说明 | [更新后的五页 PDF](sciencepal-handoff/project-brief-updated.pdf) / [历史 v1 PDF](project-brief.pdf) | 更新 SciencePal 入口、实跑结果、访问条件与后续计划；原 PDF 保留 |
 | 新 SciencePal 核验 | [本次实际运行回放](https://sciencepal.ai/share/026c4e92-32d3-462a-8f6d-6b54d48aeca6) / [原字节 ZIP](sciencepal-handoff/sciencepal-evidence-originals.zip) | 首轮、追问与后续交付修正；公开记录只读，运行授权另行配置 |

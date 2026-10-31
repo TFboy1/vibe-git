@@ -2,6 +2,8 @@
 
 更新于 2026-10-31。这里保存本次实际核验、可移交的 Agent 配置及提交续办信息。视频按用户要求保持原样，等待队友处理。
 
+本次源码接手分支：[TFboy1/vibe-git · CityuAI4S](https://github.com/TFboy1/vibe-git/tree/CityuAI4S)。[克隆、安装与检查步骤](../../../TEAM-HANDOFF.md#获取代码先做不花模型额度的检查)位于队友接手页。
+
 ## 先拿到入口和文件
 
 | 内容 | 入口 |
