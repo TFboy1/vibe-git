@@ -1,8 +1,15 @@
 /** Deterministic synthetic fixture only. Never calls SciencePAL or a Codex model. */
 import assert from 'node:assert/strict';
-import {createHash} from 'node:crypto';
+import {createHash,randomUUID} from 'node:crypto';
 const hash=b=>createHash('sha256').update(b).digest('hex');
 const json=b=>JSON.parse(Buffer.from(b).toString());
+/** A preview Host is in memory: workers share its session, but new projects get distinct IDs. */
+export function simulationSession(sessions,key,projectId,prefix,calculate) {
+  let session=sessions.get(key);
+  if(session&&session.journal.projectId!==projectId)throw Error('模拟连接器日志属于其他项目');
+  if(!session){session={remote:new ResearchRemote(`${prefix}-${randomUUID()}`,calculate),journal:{projectId,phase:'IDLE'}};sessions.set(key,session);}
+  return session;
+}
 export function simulatedEnvelope(kind, files) {
   const context = json(files[0].bytes);
     let result;

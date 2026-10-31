@@ -795,7 +795,7 @@ describe('Same-project local Codex actions and shared continuation journal',()=>
 
 
 import {AgentRegistry} from '@vibe-git/relay/agent-registry';
-import {startLocalAgent,agentRunState} from '../src/sciencepal/local-agent.js';
+import {startLocalAgent,agentRunState,reconcileLocalAgent} from '../src/sciencepal/local-agent.js';
 import {managedCodexTask} from '../src/sciencepal/local-codex.js';
 describe('shared research executor and constraints permissions',()=>{
  it.each([true,false])('local startup failure is retryable only when dispatch is known not to occur: %s',async safe=>{
@@ -809,7 +809,8 @@ describe('shared research executor and constraints permissions',()=>{
   expect((await s.raw(s.captain.nodeToken,path,{claimId:'wrong'})).statusCode).toBe(403);
   await expect(startLocalAgent(s.a,context,registry)).rejects.toThrow('start rejected');
   expect(s.pipeline.get(s.project.id).runs[0]!.status).toBe(safe?'FAILED':'RUNNING');
-  expect((await agentRunState(info.directory))?.state).toBe('FAILED');
+  expect((await agentRunState(info.directory))?.state).toBe(safe?'FAILED':'STARTING');
+  if(!safe){await expect(reconcileLocalAgent(info.directory,false)).rejects.toThrow('先核对');expect((await reconcileLocalAgent(info.directory,true)).state).toBe('INTERRUPTED');}
   if(safe){await s.command('retry',{runId:run.id});expect(s.pipeline.get(s.project.id).runs.at(-1)!.status).toBe('READY');await expect(s.a(path,{claimId:task.claimId})).rejects.toThrow('新版本');}
  });
 
@@ -820,6 +821,7 @@ describe('shared research executor and constraints permissions',()=>{
   registry.register({kind:'gemini',probe:()=>({kind:'gemini',state:'unverified',detail:'synthetic',version:null,transports:{appServer:'unsupported',cli:'unverified',preferred:'cli'}}),start:async(prompt,workspace,_transport,env)=>{count++;received={prompt,workspace,env};return {transport:'cli',runtimeId:'synthetic',done:new Promise(r=>{finish=r;}),interrupt:async()=>({status:'INTERRUPTED',detail:'test',outputSummary:null})};}});
   await startLocalAgent(s.a,context,registry,{VIBE_AGENT:'codex',SCIENCEPAL_API_KEY:'TEST_SECRET',VIBE_GIT_MEMBER_FILE:'private-profile'});expect(received.env.VIBE_AGENT).toBe('gemini');expect(received.env.SCIENCEPAL_API_KEY).toBeUndefined();expect(received.env.VIBE_GIT_MEMBER_FILE).toBeUndefined();expect(received.workspace).toBe(task.directory);expect(received.prompt).toContain('Gemini');
   await expect(startLocalAgent(s.a,context,registry)).rejects.toThrow('已有执行记录');expect(count).toBe(1);
+  await expect(reconcileLocalAgent(task.directory,true)).rejects.toThrow('仍在本入口执行');
   finish({status:'COMPLETED',detail:'synthetic fixture',outputSummary:null});
   for(let i=0;i<30&&(await agentRunState(task.directory))?.state!=='COMPLETED';i++)await new Promise(r=>setTimeout(r,10));
   expect((await agentRunState(task.directory))?.state).toBe('COMPLETED');
@@ -836,6 +838,60 @@ describe('shared research executor and constraints permissions',()=>{
   await expect(s.command('set-constraints',{constraints:[{taskKey:'data',field:'seed',kind:'number',value:42}]},s.b)).rejects.toThrow('403');
   await expect(s.command('set-scientific-checks',{checks:{version:1,tasks:{data:[{id:'sum',kind:'sum',totalPath:'total',rowsPath:'rows',valueField:'value',absoluteTolerance:0}]}}},s.b)).rejects.toThrow('403');
   const frozen=await s.command('set-constraints',{constraints:[{taskKey:'data',field:'seed',kind:'number',value:42}]});expect(frozen.resultContracts).toBeDefined();
+ });
+});
+
+describe('Terminal acknowledgement recovery',()=>{
+ it.each([false,true])('reconciles a lost FAILED acknowledgement before or after captain retry: %s',async retried=>{
+  const s=await setup();s.remoteA.askKinds.add('ALIGN');await s.command('align');await s.connectorA.step();
+  const remoteId=s.connectorA.journal.remote!.runId,runId=s.connectorA.journal.localRunId!;s.remoteA.states.set(remoteId,'failed');
+  let snapshot=structuredClone(s.saved()),lost=false;
+  const request:MemberRequest=async(path,body,method)=>{const result=await s.a(path,body,method);if((body as any)?.status==='FAILED'&&!lost){lost=true;throw new SciencePALError('lost FAILED acknowledgement',false,true);}return result;};
+  const failing=new SciencePALMemberConnector(s.remoteA,request,snapshot,async j=>{snapshot=structuredClone(j);});
+  await expect(failing.step()).rejects.toThrow('lost FAILED');expect(snapshot.phase).toBe('FAILING');expect(s.pipeline.get(s.project.id).runs[0]!.status).toBe('FAILED');
+  if(retried)await s.command('retry',{runId});
+  const restarted=new SciencePALMemberConnector(s.remoteA,s.a,snapshot,async()=>{});await restarted.step();
+  expect(restarted.journal.phase).toBe('IDLE');expect(s.remoteA.calls).toHaveLength(1);
+  if(retried){await restarted.step();expect(s.remoteA.calls).toHaveLength(2);expect(s.pipeline.get(s.project.id).runs[0]!.status).toBe('FAILED');}
+ });
+ it('replays a rejected submission failure without dispatching again when Host acknowledgement is lost',async()=>{
+  const s=await setup();await s.command('align');let starts=0,lost=false,snapshot:ConnectorJournal={phase:'IDLE',projectId:s.project.id};
+  s.remoteA.start=async()=>{starts++;throw new SciencePALError('explicit rejection');};
+  const request:MemberRequest=async(path,body,method)=>{const result=await s.a(path,body,method);if((body as any)?.status==='FAILED'&&!lost){lost=true;throw new SciencePALError('lost rejection acknowledgement',false,true);}return result;};
+  const connector=new SciencePALMemberConnector(s.remoteA,request,snapshot,async j=>{snapshot=structuredClone(j);});
+  await expect(connector.step()).rejects.toThrow('lost rejection');expect(snapshot.phase).toBe('FAILING');
+  const restarted=new SciencePALMemberConnector(s.remoteA,s.a,snapshot,async()=>{});await restarted.step();expect(restarted.journal.phase).toBe('IDLE');expect(starts).toBe(1);
+ });
+ it('reconciles legacy RUNNING journals and makes repeated terminal reports idempotent',async()=>{
+  const s=await setup();s.remoteA.askKinds.add('ALIGN');await s.command('align');await s.connectorA.step();
+  const legacy=structuredClone(s.saved()),id=legacy.localRunId!,path=`/api/sciencepal-team/projects/${s.project.id}/runs/${id}/status`;
+  await s.a(path,{status:'FAILED'});const before=JSON.stringify(s.pipeline.get(s.project.id));await s.a(path,{status:'FAILED'});
+  expect(JSON.stringify(s.pipeline.get(s.project.id))).toBe(before);
+  const restarted=new SciencePALMemberConnector(s.remoteA,s.a,legacy,async()=>{});await restarted.step();expect(restarted.journal.phase).toBe('IDLE');expect(s.remoteA.calls).toHaveLength(1);
+ });
+});
+
+describe('Owner-confirmed local interruption recovery',()=>{
+ it('recovers a stale marker after panel restart, retains dispatch history and still validates output',async()=>{
+  const s=await setup(false,true),l=await localEntry(s,true);await s.command('align');const r=s.pipeline.get(s.project.id).runs[0]!,body={projectId:s.project.id,runId:r.id};
+  const info=(await l.call('/api/local/research/codex-take',body)).json(),saved=JSON.parse(await readFile(join(info.directory,'task.json'),'utf8'));
+  const files=saved.packet.files.map((f:any)=>({filename:f.filename,bytes:Buffer.from(f.base64,'base64')}));await s.remoteA.start('a',saved.packet.run.prompt.replace('Vibe-Git Codex','Vibe-Git SciencePAL'),files[0],files.slice(1));
+  await writeFile(info.outputPath,s.remoteA.calls.at(-1)!.bytes);
+  await writeFile(join(info.directory,'adapter-run.json'),JSON.stringify({state:'RUNNING',platform:'codex',runtimeId:'stopped-fixture',at:'2026-10-31T00:00:00Z',detail:'fixture crash'}));
+  await l.panel.app.close();
+  const panel=await buildResearchPanel({profileDir:l.profile,captainFile:join(s.root,'captain.json'),hostUrl:l.host});await panel.listen();cleanup.push(()=>panel.app.close());
+  const opened=await panel.app.inject({url:new URL(panel.ticket()).pathname}),cookie=String(opened.headers['set-cookie']).split(';')[0]!;
+  const csrf=(await panel.app.inject({url:'/api/local/research',headers:{cookie}})).json().csrfToken;
+  const post=(action:string,payload:any)=>panel.app.inject({method:'POST',url:'/api/local/research/'+action,headers:{cookie,origin:panel.origin(),'x-vibe-csrf':csrf},payload});
+  expect((await post('codex-submit',body)).statusCode).toBe(409);
+  expect((await post('agent-reconcile',body)).statusCode).toBe(400);
+  expect((await post('agent-reconcile',{...body,runId:'foreign',confirmedStopped:true})).statusCode).toBe(403);
+  expect((await post('agent-reconcile',{...body,confirmedStopped:true})).json()).toMatchObject({state:'INTERRUPTED',runtimeId:'stopped-fixture',recovery:{previousState:'RUNNING',confirmedStopped:true}});
+  expect((await post('agent-reconcile',{...body,confirmedStopped:true})).statusCode).toBe(200);
+  await expect(startLocalAgent(s.a,{host:l.host,nodeId:s.captain.nodeId,projectId:s.project.id,runId:r.id,profileDir:l.profile})).rejects.toThrow('已有执行记录');
+  await writeFile(info.outputPath,'{}');expect((await post('codex-submit',body)).statusCode).toBe(400);
+  await writeFile(info.outputPath,s.remoteA.calls.at(-1)!.bytes);expect((await post('codex-submit',body)).json().status).toBe('COLLECTED');
+  expect((await agentRunState(info.directory))?.recovery?.confirmedStopped).toBe(true);
  });
 });
 

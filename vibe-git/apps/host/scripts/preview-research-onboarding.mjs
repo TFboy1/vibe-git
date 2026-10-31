@@ -8,7 +8,7 @@ import {buildApp} from '../dist/app.js';
 import {buildResearchPanel} from '../dist/sciencepal/local-panel.js';
 import {SciencePALMemberConnector} from '../dist/sciencepal/member-connector.js';
 import {localMemberTask} from '../dist/sciencepal/local-member.js';
-import {ResearchRemote,simulatedEnvelope} from './research-simulation-fixture.mjs';
+import {ResearchRemote,simulatedEnvelope,simulationSession} from './research-simulation-fixture.mjs';
 const root=await mkdtemp(join(tmpdir(),'vibe-onboard-demo-')),out=resolve('data/onboarding-demo');await mkdir(out,{recursive:true});
 const noRemote=new ResearchRemote('HOST');noRemote.configured=false;
 const app=await buildApp({dbPath:':memory:',dataDir:root,staticDir:false,backupDatabase:false,sciencepal:{remote:noRemote,worker:false}});
@@ -19,7 +19,7 @@ const request=token=>async(path,body,method)=>{const r=await fetch(origin+path,{
 const a=request(captain.nodeToken),children=new Set();
 const workerJournals=new Map();
 function fakeWorker(env){const child=new EventEmitter();let stopping=false,busy=false,connector,req;children.add(child);
- const ready=(async()=>{const c=JSON.parse(await readFile(env.VIBE_GIT_MEMBER_FILE));req=request(c.nodeToken);service.repo.putNode({...service.repo.getNode(c.nodeId),label:'研究员 B'});let saved=workerJournals.get(env.VIBE_GIT_CONNECTOR_STATE);if(!saved){saved={remote:new ResearchRemote('DEMO-B'),journal:{projectId:env.VIBE_GIT_PROJECT_ID,phase:'IDLE'}};workerJournals.set(env.VIBE_GIT_CONNECTOR_STATE,saved);}connector=new SciencePALMemberConnector(saved.remote,req,saved.journal,async()=>{});})();
+ const ready=(async()=>{const c=JSON.parse(await readFile(env.VIBE_GIT_MEMBER_FILE));req=request(c.nodeToken);service.repo.putNode({...service.repo.getNode(c.nodeId),label:'研究员 B'});const saved=simulationSession(workerJournals,env.VIBE_GIT_CONNECTOR_STATE,env.VIBE_GIT_PROJECT_ID,'DEMO-B');connector=new SciencePALMemberConnector(saved.remote,req,saved.journal,async()=>{});})();
  const timer=setInterval(async()=>{if(stopping||busy)return;busy=true;try{await ready;await req('/api/sciencepal-team/heartbeat',{channel:'connector',instanceId:env.VIBE_GIT_CONNECTOR_INSTANCE,projectId:env.VIBE_GIT_PROJECT_ID,status:connector.journal.phase==='IDLE'?'ready':'working'});await connector.step();}catch(e){console.error('Synthetic worker:',e.message);}finally{busy=false;}},700);
  child.kill=()=>{stopping=true;clearInterval(timer);children.delete(child);child.emit('exit',0);return true;};return child;}
 const base={allowLocalExecution:false,remote:key=>{const directory=new ResearchRemote('directory');directory.agents=async()=>{if(key==='EMPTY-KEY')return [];if(key!=='DEMO-KEY')throw Error('Synthetic invalid key');return [{id:'simulated-research-expert',name:'SIMULATED expert'}];};return directory;},worker:fakeWorker};

@@ -86,7 +86,12 @@ export async function buildApp(options: BuildAppOptions = {}) {
   repo.setMeta("schema_version", "21");
   const runtime = await ensureV20Runtime(repo, dataDir);
   const hub = new EventHub();
-  const cloudflareManager = options.cloudflareManager ?? new CloudflareTunnelManager(resolve(dataRoot, "tools/cloudflared.exe"));
+  const cloudflareManager = options.cloudflareManager ?? new CloudflareTunnelManager(resolve(dataRoot, "tools/cloudflared.exe"), process.env.VIBE_GIT_TUNNEL_TARGET ?? (() => {
+    const address = app.server.address();
+    if (!address || typeof address === "string") throw new Error("Host 尚未监听 TCP 端口，不能启动隧道");
+    const targetHost = address.address === "0.0.0.0" ? "127.0.0.1" : address.address === "::" ? "[::1]" : address.family === "IPv6" ? `[${address.address}]` : address.address;
+    return `http://${targetHost}:${address.port}`;
+  }));
   const service = new V20Service(repo, hub, dataDir, cloudflareManager, runtime.inviteToken);
 
   app.decorate("v20Service", service);

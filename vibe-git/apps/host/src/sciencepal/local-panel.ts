@@ -1,4 +1,4 @@
-import {startLocalAgent,agentRunState} from "./local-agent.js";
+import {startLocalAgent,agentRunState,localAgentActive,reconcileLocalAgent} from "./local-agent.js";
 import { isLocalResearchPlatform, researchPlatformName } from "@vibe-git/protocol";
 import Fastify from 'fastify';
 import {randomBytes,randomUUID,timingSafeEqual,createHash} from 'node:crypto';
@@ -97,10 +97,14 @@ export async function buildResearchPanel(options:Options){
   const context={host:credential.hostUrl,nodeId:credential.nodeId,projectId:String(input?.projectId??''),runId:String(input?.runId??''),profileDir:profile};
   const inspected=await managedCodexTask('inspect',value,context),execution=await agentRunState(inspected.directory);
   if(command==='submit'&&execution&&['STARTING','RUNNING'].includes(execution.state))throw revisionConflict('Agent 尚在执行或启动结果未知，请先核对原进程；不能交回仍可能变化的文件');
-  return {...await managedCodexTask(command,value,context),execution};
+  return {...await managedCodexTask(command,value,context),execution:execution?{...execution,canReconcile:['STARTING','RUNNING'].includes(execution.state)&&!localAgentActive(inspected.directory)}:null};
  };
  app.get<{Querystring:{projectId?:string;runId?:string}}>('/api/local/research/codex-task',r=>codexTask('inspect',r.query));
  app.post<{Body:{projectId?:string;runId?:string}}>('/api/local/research/agent-run',r=>{if(options.allowLocalExecution===false)throw forbidden('此演练禁止启动真实模型；请使用真实项目的本人待办');if(!credential)throw forbidden('请先加入房间');return startLocalAgent(value,{host:credential.hostUrl,nodeId:credential.nodeId,projectId:String(r.body.projectId??''),runId:String(r.body.runId??''),profileDir:profile});});
+ app.post<{Body:{projectId?:string;runId?:string;confirmedStopped?:boolean}}>('/api/local/research/agent-reconcile',async r=>{
+  const task=await codexTask('inspect',r.body);
+  return reconcileLocalAgent(task.directory,r.body.confirmedStopped===true);
+ });
  app.post<{Body:{projectId?:string;runId?:string}}>('/api/local/research/codex-take' ,r=>codexTask('take',r.body));
  app.post<{Body:{projectId?:string;runId?:string}}>('/api/local/research/codex-submit',r=>codexTask('submit',r.body));
  const proxyAllowed=(path:string,method:string)=>method==='GET'&&(path.startsWith('/api/sciencepal-team/')||['/api/v1/invite'].includes(path))||method==='POST'&&(/^\/api\/sciencepal-team\/projects\/[^/]+\/commands\/[a-z-]+$/.test(path)||path==='/api/sciencepal-team/projects'||path==='/api/v1/plans')||method==='PUT'&&/^\/api\/v1\/plans\/[^/]+$/.test(path);

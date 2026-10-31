@@ -2,6 +2,8 @@
 
 > **交接状态：现有视频待重剪，尚未获使用者认可。** 技术播放检查通过不代表讲解效果合格。后续修改和正式提交交给队友，完整源码、配音与未完成录像材料见 [队友接手页](../../TEAM-HANDOFF.md)。
 
+> **最新 SciencePal 接手内容（2026-10-31）：**已创建并实际运行科研交接核验 Agent，首轮 190 项、追问 192 项通过；[原字节包、系统提示词、完整步骤及剩余事项](sciencepal-handoff/README.md)已备齐。下文 `final-20261031-v1` 是历史材料快照，不代表本次又重跑了 SASA。公开回放只读，评审 Agent 权限待账号信息；表单仍为草稿。
+
 材料版本 **final-20261031-v1**。功能基线 **dda48233f57ee20e9c8be2d6b21c782b46ece7ba**。材料可另行提交；本文件不引用自身 commit。**尚未提交问卷，尚无提交回执。**
 
 [官方规则](https://sciencepal.ai/hackathon) · [提交表](https://wj.qq.com/s2/28257934/cce2/)。2026-10-31 重新核对：截止 **10 月 31 日 23:59，香港/北京时间 UTC+8**。队伍已报名（用户确认），不等于作品已提交。
@@ -11,8 +13,9 @@
 | 材料 | 入口 | 范围 |
 |---|---|---|
 | 3–5 分钟视频 | [直接播放](https://weihanchen000.github.io/vibe-git-research/submission/watch.html) / [MP4](vibe-git-research-demo.mp4) | 新版约 4:38，英文合成配音、中文字幕；历史真实证据与模拟界面分开标注 |
-| 最多五页说明 | [五页 PDF](https://weihanchen000.github.io/vibe-git-research/submission/project-brief.pdf) | 同一主案例、数字与贡献边界 |
-| SciencePAL 演示 | [公开核查回放](https://sciencepal.ai/share/3b6302a7-f055-460e-9e3d-588287a7b3ca) | 早期材料独立核查、只读；不是最新两轮案例，也不是匿名可重跑 |
+| 最多五页说明 | [更新后的五页 PDF](sciencepal-handoff/project-brief-updated.pdf) / [历史 v1 PDF](project-brief.pdf) | 更新 SciencePal 入口、实跑结果、访问条件与后续计划；原 PDF 保留 |
+| 新 SciencePal 核验 | [本次实际运行回放](https://sciencepal.ai/share/026c4e92-32d3-462a-8f6d-6b54d48aeca6) / [原字节 ZIP](sciencepal-handoff/sciencepal-evidence-originals.zip) | 首轮、追问与后续交付修正；公开记录只读，运行授权另行配置 |
+| 历史 SciencePAL 演示 | [早期公开核查回放](https://sciencepal.ai/share/3b6302a7-f055-460e-9e3d-588287a7b3ca) | 早期材料独立核查、只读，保留原范围 |
 | 固定代码 | [功能快照](https://github.com/WeihanChen000/vibe-git-research/tree/dda48233f57ee20e9c8be2d6b21c782b46ece7ba) | 原功能及界面保留；本次没有重新运行真实模型 |
 | 真实主证据 | [两轮记录](../research/LATEST-GOVERNANCE-LIVE-20261031.md) / [原始包](../research/latest-governance-live/manifest.json) | 成功项目 31 附件、34 输入回执、11 作业 |
 | 填表与声明 | [复制文本](FORM-COPY.md) / [贡献说明](CONTRIBUTION-STATEMENT.md) / [资源声明](ORIGINALITY-RESOURCES.md) | 身份、逐人分工、最终确认留给队长 |
@@ -32,11 +35,11 @@
 
 本次冻结检查：59 项相关前端测试、类型/前端构建、公开回放构建、`test:latest-live`。历史全量与兼容测试见原记录，不将各轮数量相加。最后一次新文案界面走查因用户停止电脑控制而未完成最终交付段，不冒称验收完成。
 
-## 队长必须完成
+## 当前需要续办
 
-1. 填写与报名一致的队伍名、队长姓名/邮箱、其他队员姓名/机构/邮箱及真实分工；确认赛前/赛期工作划分和资源使用依据。
-2. 表单第一页已只读核对，建议简介不超过 1500 字符。后续页需本人填写身份后进入；上传格式、大小、最终声明仍待本人核实。未用虚构身份绕过校验。
-3. 核对官方“可运行作品链接”要求：目前公开 SciencePAL 链接只读，完整重跑依赖本人账号与本地运行。若问卷要求评委直接可运行，须明确提供可用权限安排或向主办方确认；不能将只读回放自动等同满足此项。
-4. 上传材料、本人确认最终声明、提交并保存成功页或回执。只准备材料不算提交完成。
+1. 浏览器问卷已填写真实报名身份、项目简介和运行说明，并上传五页 PDF 与现有视频草稿。视频保持原样，等待队友处理；正式提交前替换或审定成片。
+2. 新 Agent 已实际执行核验，但公开回放只读；主办给出评审 SciencePal 邮箱后，由队长配置 Agent 共享并验证新任务能运行。访问条件已如实写入草稿。
+3. 原项目与队友代码用于参赛/公开展示的授权已获用户确认。资源说明、既有成果与新增工作已整理；三人责任分工为拟稿，需按实际参与核对，不以 Git 署名推断作者或编造工时。
+4. 最终页需确认信息/资源真实性、SciencePal 实质使用与材料访问、赛事规定及隐私说明，并接受问卷协议。当前未勾选这些最终声明、未点击提交。完成后保存成功页或回执。
 
 实测文件大小、哈希、时长、页数、访问检查及未核实项见 [artifact-checks.json](artifact-checks.json)；历史审核记录保留在 [AUDIT.md](AUDIT.md)。

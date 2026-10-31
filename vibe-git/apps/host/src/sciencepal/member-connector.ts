@@ -10,7 +10,7 @@ import { SciencePALError, type SciencePALRemote } from "./client.js";
 export type MemberRequest = <T = any>(path: string, body?: unknown, method?: string) => Promise<T>;
 export interface ConnectorJournal {
   projectId: string; packet?: SPTeamPacket;
-  phase: "IDLE" | "CLAIMING" | "SUBMITTING" | "RUNNING" | "OUTPUT" | "UNKNOWN";
+  phase: "IDLE" | "CLAIMING" | "SUBMITTING" | "RUNNING" | "FAILING" | "OUTPUT" | "UNKNOWN";
   localRunId?: string;
   claimId?: string;
   remote?: { threadId: string; runId: string };
@@ -35,9 +35,25 @@ export class SciencePALMemberConnector {
     delete this.journal.knownRunIds; delete this.journal.followUp;
     this.journal.phase = "IDLE"; await this.persist();
   }
+  private async reportFailure() {
+    this.journal.phase = "FAILING"; await this.persist();
+    await this.request(this.path("status"), { status: "FAILED" });
+    await this.clear(); return "远端执行失败，已确认 Host 回执";
+  }
   async step(): Promise<string> {
     const j = this.journal;
     if (j.followUp) return this.advanceFollowUp();
+    // Reconcile both new and legacy journals before replaying /started. A captain may
+    // already have retried the failed run; this only reads its immutable identity.
+    if (j.phase === "RUNNING" || j.phase === "FAILING") {
+      const project = await this.request<SPProject>(`/api/sciencepal-team/projects/${j.projectId}`);
+      const run = project.runs.find(r => r.id === j.localRunId);
+      if (run?.status === "FAILED" && run.claimId === j.claimId && j.claimId && run.ownerNodeId === j.packet?.run.ownerNodeId &&
+          (!j.remote || run.threadId === j.remote.threadId && run.runId === j.remote.runId)) {
+        await this.clear(); return "Host 已记录原运行失败，已恢复连接器日志";
+      }
+    }
+    if (j.phase === "FAILING") return this.reportFailure();
     if (j.phase === "UNKNOWN" || j.phase === "SUBMITTING") {
       j.phase = "UNKNOWN"; await this.persist();
       await this.request(this.path("status"), { status: "UNKNOWN" }).catch(() => undefined);
@@ -72,7 +88,7 @@ export class SciencePALMemberConnector {
       } catch (error) {
         if (error instanceof SciencePALError && !error.uncertain) {
           if (error.retryable) { j.phase = "CLAIMING"; await this.persist(); throw error; }
-          await this.request(this.path("status"), { status: "FAILED" }); await this.clear(); return "远端明确拒绝提交";
+          return this.reportFailure();
         }
         j.phase = "UNKNOWN"; await this.persist();
         await this.request(this.path("status"), { status: "UNKNOWN" }).catch(() => undefined);
@@ -84,7 +100,7 @@ export class SciencePALMemberConnector {
       await this.request(this.path("started"), j.remote);
       const status = await this.remote.run(j.remote!.runId);
       if (["failed", "stopped", "cancelled", "error"].includes(status)) {
-        await this.request(this.path("status"), { status: "FAILED" }); await this.clear(); return "远端执行失败";
+        return this.reportFailure();
       }
       if (["asked", "paused", "waiting_for_input"].includes(status)) {
         await this.request(this.path("status"), { status: "NEEDS_INPUT" });

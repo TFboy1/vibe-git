@@ -7,7 +7,7 @@ import { connectionSummary, currentMemberRuns, memberForAgent, platformName, res
 import "@xyflow/react/dist/style.css";
 
 type CardData = { title:string; subtitle:string; platform?:string; detail:string; footer:string; id:string; captain?:boolean; own?:boolean; attention?:boolean; tone:ResearchTone; selected:boolean; open:()=>void; member?:boolean; status:string; card?:MemberData };
-const colors: Record<ResearchTone,string> = { neutral:"#596475",active:"#67a6ff",approved:"#55d6a5",attention:"#f0b85a",blocked:"#ff687d" };
+const colors: Record<ResearchTone,string> = { neutral:"var(--muted)",active:"var(--blue)",approved:"var(--green)",attention:"var(--amber)",blocked:"var(--red)" };
 function ResearchCard({data:d}:NodeProps<Node<CardData>>) {
   return <div className={`rt-node ${d.member ? "rt-member" : "rt-task"} tone-${d.tone} ${d.selected ? "is-selected" : ""}`}>
     <Handle type="target" position={Position.Top} id="in-top" />
@@ -63,7 +63,7 @@ export function ResearchTopology({state,project,target,open,owners,relations,arc
     }
     return {nodes,edges};
   },[project,state,target,open,owners,relations,archived]);
-  return <ReactFlowProvider key={nodes.length}><ReactFlow nodes={nodes} edges={edges} nodeTypes={nodeTypes} edgeTypes={edgeTypes} fitView fitViewOptions={{padding:.18,maxZoom:1}} minZoom={.3} maxZoom={1.5} nodesDraggable={false} nodesConnectable={false} elementsSelectable={false} proOptions={{hideAttribution:false}} colorMode="dark" ariaLabelConfig={{"controls.zoomIn.ariaLabel":"放大画布","controls.zoomOut.ariaLabel":"缩小画布","controls.fitView.ariaLabel":"适应画布"}}>
-    <Background color="#25303e" gap={24} size={1}/><Controls showInteractive={false}/>
+  return <ReactFlowProvider key={nodes.length}><ReactFlow nodes={nodes} edges={edges} nodeTypes={nodeTypes} edgeTypes={edgeTypes} fitView fitViewOptions={{padding:.18,maxZoom:1}} minZoom={.3} maxZoom={1.5} nodesDraggable={false} nodesConnectable={false} elementsSelectable={false} proOptions={{hideAttribution:false}} colorMode="light" ariaLabelConfig={{"controls.zoomIn.ariaLabel":"放大画布","controls.zoomOut.ariaLabel":"缩小画布","controls.fitView.ariaLabel":"适应画布"}}>
+    <Background color="var(--line)" gap={24} size={1}/><Controls showInteractive={false}/>
   </ReactFlow></ReactFlowProvider>;
 }

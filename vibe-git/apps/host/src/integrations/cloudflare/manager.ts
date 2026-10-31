@@ -23,9 +23,11 @@ export class CloudflareTunnelManager implements CloudflareManager {
   private child: ChildProcessWithoutNullStreams | null = null;
   private operation: Promise<CloudflareTunnelStatus> | null = null;
 
-  constructor(readonly binaryPath: string, readonly targetUrl = process.env.VIBE_GIT_TUNNEL_TARGET ?? `http://127.0.0.1:${process.env.PORT ?? "8787"}`) {
+  constructor(readonly binaryPath: string, private readonly target: string | (() => string) = process.env.VIBE_GIT_TUNNEL_TARGET ?? `http://127.0.0.1:${process.env.PORT ?? "8787"}`) {
     this.installer = new CloudflaredInstaller(binaryPath);
   }
+
+  get targetUrl(): string { return typeof this.target === "function" ? this.target() : this.target; }
 
   async status(): Promise<CloudflareTunnelStatus> {
     if (!this.version) this.version = await this.installer.installedVersion();

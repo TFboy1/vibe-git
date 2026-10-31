@@ -1,6 +1,6 @@
 # Vibe-Git Research · 可核查的科研交接
 
-> **队友接手入口：[资料、源码与未完成事项](TEAM-HANDOFF.md)。** 后续整合、视频重剪与正式提交由接手队友完成。现有视频操作画面不够清楚，尚未获使用者认可；新录制只有两张截图，没有完成新版成片。
+> **队友接手入口：[SciencePal 实跑、Agent 配置与提交续办](docs/submission/sciencepal-handoff/README.md) · [原材料与视频制作源](TEAM-HANDOFF.md)。** SciencePal 新核验与原字节交付包已完成；视频保持原样，等待队友处理。正式问卷仍为草稿，尚无提交回执。
 
 **让 Codex 与 SciencePAL 在同一份研究协议下合作，把经过复核的成果、版本和批准依据一起交给下一步。**
 
@@ -24,7 +24,7 @@
 
 [本次多 Agent 整合与防漂移说明](docs/research/MULTI-AGENT-INTEGRATION.md) · [完整展示与讲解](docs/research/SHOWCASE.md) · [原版能力对照](docs/research/COMPARISON.md) · [队友三步接入](vibe-git/SCIENCEPAL-QUICKSTART.md) · [架构与扩展](docs/research/ARCHITECTURE.md) · [验证与边界](docs/research/VALIDATION.md) · [全部材料导航](docs/research/INDEX.md)
 
-![当前科研版：原拓扑中的工具、参数、结果与独立复核](docs/research/images/research-evidence-current.png)
+![历史科研界面：原拓扑中的工具、参数、结果与独立复核](docs/research/images/research-evidence-current.png)
 
 *实际构建界面的只读历史回放。单个真实 SciencePAL 账号与 Codex，两种工作流身份；不代表两位真实用户已经联调。*
 
@@ -32,9 +32,20 @@
 
 ## 黑客松提交材料
 
-[提交包与缺项清单](docs/submission/README.md) · [5 页技术说明](docs/submission/project-brief.pdf) · [▶ 直接播放故事演示（英文配音）](https://weihanchen000.github.io/vibe-git-research/submission/watch.html) · [原创性与资源说明](docs/submission/ORIGINALITY-RESOURCES.md)
+[提交包与缺项清单](docs/submission/README.md) · [更新后的 5 页技术说明](docs/submission/sciencepal-handoff/project-brief-updated.pdf) · [▶ 现有视频（待队友处理）](https://weihanchen000.github.io/vibe-git-research/submission/watch.html) · [原创性与资源说明](docs/submission/ORIGINALITY-RESOURCES.md)
 
-材料不等于已经提交。队伍身份、最终声明和问卷回执仍需队长完成；SciencePAL 展示链接的访问状态见提交包。
+身份信息已填入表单草稿，分工与最终声明仍需队伍核实；尚无提交回执。SciencePal 运行权限和视频续办状态见下方接手说明。
+
+## SciencePal 接手与最新实跑（2026-10-31）
+
+- **实际运行记录：**[新的 SciencePal 公开回放](https://sciencepal.ai/share/026c4e92-32d3-462a-8f6d-6b54d48aeca6)。点击“跳到结尾”可查看最终交付；首轮核验 **190 项**、新增交接请求后的追问 **192 项**通过。这是核验原有真实案例，不是重新计算 SASA，不能与历史 11 次科研作业混算。
+- **拿到文件：**下载[原字节包](docs/submission/sciencepal-handoff/sciencepal-evidence-originals.zip)，或从上述回放下载同名 ZIP。含六份核验/交接文件、原输入包、新请求和 manifest；8 份源文件已逐字节比对。ZIP SHA256：`24b8a44953588071b63b87e0acaf922aa50325df3360c9f29e50a22cdd3a9b91`。
+- **继续操作：**Agent 名称为 `Vibe-Git Research｜科研交接核验`；[系统提示词](docs/submission/sciencepal-handoff/agent-system-prompt.txt)、[任务与追问指令](docs/submission/sciencepal-handoff/SCIENCEPAL-TASK.txt)、[新增请求](docs/submission/sciencepal-handoff/followup-request.json)均已保存。用本人 SciencePal 账号获得 Agent 共享，或按配置新建自己的 Agent，再上传样例包。详见[完整接手步骤](docs/submission/sciencepal-handoff/README.md)。
+- **权限与提交：**公开回放只读；自定义 Agent 目前按邮箱共享，评审账号尚未提供，运行权限待开通。视频等待队友处理；三人分工是待核实的责任草稿，最终声明与提交回执仍待完成。
+
+当前产品通过 TypeScript 直接调用 SciencePal 官方 HTTP API；[官方 SDK 文档](https://sciencepal.ai/help/sdk)也提供该方式，不要求改用 Python SDK。四类连接/恢复问题及同类路径已修复；科研 **310**、兼容 **40**、前端 **59** 项测试通过，另有 **20** 项完整协作模拟和隔离安装包检查。各测试组有重叠，不能相加当作独立总数。真实双机/双账号仍未验收。[实际回执、交付修正和验证范围](docs/submission/sciencepal-handoff/verification-receipts.json)单独保存。
+
+SciencePal 的公开 JSON 预览导出可能重新排版或去掉末尾换行；按哈希交接请使用原字节 ZIP。平台 `complete` 曾将文字中的输入文件名误判为待交付文件，追问请求因此停止；后续原字节包交付已成功，Agent 的交付规则已修正并回读确认。历史失败记录保留，不能只凭工具卡片出现就判断交付成功。
 
 ## 先看，还是直接使用？
 

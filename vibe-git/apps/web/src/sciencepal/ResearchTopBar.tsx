@@ -1,5 +1,4 @@
 import {OriginalWorkspaceAccess} from "../OriginalWorkspaceAccess";
-import {replayResourceUrl} from './research-replay';
 import {crnScientificChecks} from "@vibe-git/protocol";
 import { isLocalResearchPlatform, researchPlatformName } from "@vibe-git/protocol";
 import {SourceFileInput,sourceInputError} from './SourceFileInput';
@@ -10,7 +9,7 @@ import caseBrief from '../../../../SCIENCEPAL-CASE-BRIEF.md?raw';
 import {Markdown} from "../Markdown";
 import {useEffect,useRef,useState} from 'react';
 import {createPortal} from 'react-dom';
-import {Bell,FolderGit2,Network,UserPlus} from 'lucide-react';
+import {Bell,BookOpen,FolderGit2,GitPullRequest,LayoutDashboard,Network,UserPlus,ListTodo,Settings} from 'lucide-react';
 import type {SPProject} from '@vibe-git/protocol';
 import {Avatar} from '../canvas/TopologyCanvas';
 import {projectCreationIssues,connectionSummary,type ResearchTarget,type TeamState} from './research-model';
@@ -22,7 +21,8 @@ export function useResearchLocal(refresh:()=>void,enabled=true){
  return {info,call};
 }
 export type LocalResearch=ReturnType<typeof useResearchLocal>;
-export function ResearchTopBar({state,p,view,setView,open,local,panel,setPanel,sync,refresh}:{state:TeamState|null;p?:SPProject;view:'graph'|'list';setView:(v:'graph'|'list')=>void;open:(t:ResearchTarget)=>void;local:LocalResearch;panel:string;setPanel:(v:string)=>void;sync:string;refresh:()=>void}){
+export type ResearchSection='overview'|'requirements'|'tasks'|'changes'|'settings';
+export function ResearchTopBar({state,p,section,setSection,open,local,panel,setPanel,sync,refresh}:{state:TeamState|null;p?:SPProject;section:ResearchSection;setSection:(v:ResearchSection)=>void;open:(t:ResearchTarget)=>void;local:LocalResearch;panel:string;setPanel:(v:string)=>void;sync:string;refresh:()=>void}){
  const [busy,setBusy]=useState(false),[error,setError]=useState(''),[message,setMessage]=useState(''),[invite,setInvite]=useState(''),[joinLink,setJoinLink]=useState(''),[apiKey,setApiKey]=useState(''),[platform,setPlatform]=useState('sciencepal'),[agents,setAgents]=useState<{id:string;name:string}[]>([]),[agentId,setAgentId]=useState('');
  const [title,setTitle]=useState(''),[selected,setSelected]=useState<string[]>([]);
  const [source,setSource]=useState<SPSourceInput>(),[sourceReady,setSourceReady]=useState(true),[sourceSelectionError,setSourceSelectionError]=useState(''),[caseTemplate,setCaseTemplate]=useState<""|"iris"|"1crn">("");
@@ -36,21 +36,40 @@ export function ResearchTopBar({state,p,view,setView,open,local,panel,setPanel,s
  const toggle=(name:string)=>{setPanel(panel===name?'':name);setError('');setMessage('');if(name==='invite'&&!state?.replay)void work(async()=>{const r=await fetch('/api/v1/invite');const d=await r.json();if(!r.ok)throw Error(d.error);setInvite(d.joinUrl);});};
  useEffect(()=>{if(local.info&&!local.info.configured)setPanel('join');},[local.info?.configured]);
  useEffect(()=>{const key=(e:KeyboardEvent)=>{if(e.key==='Escape')setPanel('');};window.addEventListener('keydown',key);return()=>window.removeEventListener('keydown',key);},[setPanel]);
+ useEffect(()=>{
+  if(!panel)return;
+  const previous=document.activeElement as HTMLElement|null,dialog=document.querySelector<HTMLElement>('.research-dialog-backdrop [role="dialog"]');
+  if(!dialog)return;
+  const focusable=()=>Array.from(dialog.querySelectorAll<HTMLElement>('button:not(:disabled),a[href],input:not(:disabled),textarea:not(:disabled),select:not(:disabled),summary,[tabindex="0"]')).filter(el=>el.getClientRects().length>0);
+  focusable()[0]?.focus();
+  const key=(event:KeyboardEvent)=>{if(event.key!=='Tab')return;const all=focusable(),first=all[0],last=all.at(-1);if(!first||!last)return;if(event.shiftKey&&(document.activeElement===first||!dialog.contains(document.activeElement))){event.preventDefault();last.focus();}else if(!event.shiftKey&&(document.activeElement===last||!dialog.contains(document.activeElement))){event.preventDefault();first.focus();}};
+  dialog.addEventListener('keydown',key);return()=>{dialog.removeEventListener('keydown',key);if(previous?.isConnected)previous.focus();};
+ },[panel]);
  useEffect(()=>{if(panel==='project'&&member?.role==='captain'&&!selected.length){const ready=state?.members.filter(m=>m.binding&&m.plan)??[];if(ready.length===2&&ready.some(m=>m.id===member.id))setSelected(ready.map(m=>m.id));}},[panel]);
  useEffect(()=>{if(binding)setPlatform(binding.agent.platform??'sciencepal');},[binding?.agent.id,binding?.agent.platform]);
  useEffect(()=>{setError('');setMessage('');if(panel==='plan'&&member)setDraft(previous=>previous?.ownerId===member.id&&previous.text!==previous.saved?previous:{ownerId:member.id,text:own?.plan?.content??'',saved:own?.plan?.content??'',base:own?.plan?{id:own.plan.id,revision:own.plan.revision}:null});},[panel,member?.id]);
  useEffect(()=>{if(!dirty&&!source&&!title&&!selected.length)return;const leave=(e:BeforeUnloadEvent)=>{e.preventDefault();};window.addEventListener('beforeunload',leave);return()=>window.removeEventListener('beforeunload',leave);},[dirty,source,title,selected.length]);
  const creationIssues=projectCreationIssues(title,selected,member?.id??'',state?.members??[],sourceReady,sourceInputError(source),{error:sourceSelectionError,hasSource:!!source});
  const names:Record<string,string>={help:'队友接入说明',join:'加入协作房间',workspace:'本地工作区',compute:'接入算力网',invite:state?.replay?'队友用自己账号接入':'邀请成员',profile:member?.label??'当前成员',plan:'我的提案',project:state?.replay?'真实案例 · 研究问题与证据':'科研项目'};
- return <><header className="command-bar research-command-bar">
-  <button className="canvas-brand" onClick={()=>toggle('project')}><img src={replayResourceUrl("/vibe-git-logo.png")} alt=""/><span>vibe-git<small>研究 R{p?.revision??0} · {sync}</small></span></button>
-  <button className="workspace-trigger" onClick={()=>toggle('workspace')}><FolderGit2 size={16}/><span>{state?.replay?'真实案例工作区':'本地工作区'}<small>{state?.replay?'只读回放 · 不启动模型':local.info?.configured?'本人身份已连接':'等待本机接入'}</small></span></button>
-  <button className="codex-trigger" onClick={()=>toggle('compute')}><Network size={16}/><span className="codex-full">{connection?.label??(binding?'已绑定 '+(researchPlatformName(binding.agent.platform??'sciencepal')):'接入算力网')}</span><span className="codex-short">算力网</span></button>
-  <div className="segmented view-switch" aria-label="画布视角"><button className={view==='graph'?'selected':''} onClick={()=>setView('graph')}>人员拓扑</button><button className={view==='list'?'selected':''} onClick={()=>setView('list')}>项目甘特</button></div>
-  <div className="personal-actions"><button onClick={()=>toggle('plan')}>我的提案</button><button disabled={!p} title={!p?'建立项目后可提出研究变更':undefined} onClick={()=>open({type:'next'})}>我的研究变更</button></div>
-  {member?.role==='captain'&&<button onClick={()=>toggle('invite')} aria-label="邀请成员"><UserPlus size={17}/><span className="wide-label">邀请成员</span></button>}
-  <button className="notification-trigger" aria-label="活动通知" disabled={!p} title={!p?"建立项目后查看执行与评审记录":undefined} onClick={()=>open({type:'history'})}><Bell size={18}/></button><button className="profile-trigger" aria-label="当前成员" onClick={()=>toggle('profile')}><Avatar id={member?.id??'pending'} captain={member?.role==='captain'}/></button>
- </header>{panel&&createPortal(<section className={`top-popover research-popover ${panel}`} aria-label={names[panel]??panel}><header><h3>{names[panel]??panel}</h3><button aria-label="关闭弹层" onClick={()=>setPanel('')}>×</button></header>
+  return <><header className="research-repository-header">
+   <div className="command-bar research-command-bar">
+    <button className="canvas-brand" onClick={()=>toggle('project')} aria-label="vibe-git 科研项目"><span className="research-brand-mark" aria-hidden="true">vg<i/></span><span className="research-breadcrumb"><span>Vibe-Git</span><b>/</b><strong>Research</strong></span></button>
+    <div className="research-header-tools">
+     <button className="workspace-trigger" onClick={()=>toggle('workspace')}><FolderGit2 size={16}/><span>{state?.replay?'真实案例工作区':'本地工作区'}<small>{state?.replay?'只读回放 · 不启动模型':local.info?.configured?'本人身份已连接':'等待本机接入'}</small></span></button>
+     <button className="codex-trigger" onClick={()=>toggle('compute')}><Network size={16}/><span className="codex-full">{connection?.label??(binding?'已绑定 '+(researchPlatformName(binding.agent.platform??'sciencepal')):'接入算力网')}</span><span className="codex-short">算力网</span></button>
+     {member?.role==='captain'&&<button onClick={()=>toggle('invite')} aria-label="邀请成员"><UserPlus size={17}/><span className="wide-label">邀请成员</span></button>}
+     <button className="notification-trigger" aria-label="活动通知" disabled={!p} title={!p?"建立项目后查看执行与评审记录":undefined} onClick={()=>open({type:'history'})}><Bell size={18}/></button><button className="profile-trigger" aria-label="当前成员" onClick={()=>toggle('profile')}><Avatar id={member?.id??'pending'} captain={member?.role==='captain'}/></button>
+    </div>
+   </div>
+   <nav className="research-repository-nav" aria-label="科研工作区导航">
+    <button className={section==='overview'?'selected':''} aria-current={section==='overview'?'page':undefined} onClick={()=>setSection('overview')}><LayoutDashboard size={18}/>工作台</button>
+    <button className={section==='requirements'?'selected':''} aria-current={section==='requirements'?'page':undefined} onClick={()=>setSection('requirements')}><BookOpen size={18}/>需求</button>
+    <button className={section==='tasks'?'selected':''} aria-current={section==='tasks'?'page':undefined} onClick={()=>setSection('tasks')}><ListTodo size={18}/>任务{p&&<span className="research-nav-count">{p.tasks.filter(t=>t.status!=='APPROVED').length}</span>}</button>
+    <button className={section==='changes'?'selected':''} aria-current={section==='changes'?'page':undefined} onClick={()=>setSection('changes')}><GitPullRequest size={18}/>变更{p&&p.changes.some(c=>!['APPLIED','DISMISSED','REJECTED'].includes(c.status))&&<span className="research-nav-count">{p.changes.filter(c=>!['APPLIED','DISMISSED','REJECTED'].includes(c.status)).length}</span>}</button>
+    <button className={section==='settings'?'selected':''} aria-current={section==='settings'?'page':undefined} onClick={()=>setSection('settings')}><Settings size={18}/>设置</button>
+    <span className="research-sync"><i className={state&&!sync.includes('重连')?'connected':''}/>{sync}<span>R{p?.revision??0}</span></span>
+   </nav>
+  </header>{panel&&createPortal(<div className="research-dialog-backdrop" onClick={e=>{if(e.target===e.currentTarget)setPanel('');}}><section role="dialog" aria-modal="true" className={`top-popover research-popover ${panel}`} aria-label={names[panel]??panel}><header><h3>{names[panel]??panel}</h3><button aria-label="关闭弹层" onClick={()=>setPanel('')}>×</button></header>
  {panel==='help'?<><button onClick={()=>setPanel(local.info?.configured?'compute':'join')}>{local.info?.configured?'返回本人算力网':'返回填写邀请'}</button><Markdown>{quickGuide}</Markdown><details><summary>完整接入说明：队长配置、升级与故障处理</summary><Markdown>{teamGuide}</Markdown></details></>:state?.replay?<>{panel==='project'?<Markdown>{state.replay.brief??caseBrief}</Markdown>:panel==='invite'?<><Markdown>{quickGuide}</Markdown><details><summary>完整接入说明：队长配置、升级与故障处理</summary><Markdown>{teamGuide}</Markdown></details></>:panel==='compute'?<><p>这里展示当时冻结的执行平台，不查询你的账号，也不启动连接器。</p>{p?.team?.members.map(m=><p key={m.nodeId}><b>{m.label}</b> · {researchPlatformName(m.agent.platform??'sciencepal')}</p>)}<button onClick={()=>setPanel('invite')}>队友用自己账号接入</button></>:<><p>真实运行记录的只读回放。本案例含 {p?.team?.members.length??0} 个工作流身份，来自同一位操作者；不代表真人双账号验证。</p><button onClick={()=>{setPanel('');open({type:panel==='plan'?'protocol':'history'});}}>{panel==='plan'?'查看冻结提案与协议':'查看真实执行与接续记录'}</button><button onClick={()=>setPanel('invite')}>队友用自己账号接入</button>{import.meta.env.VITE_PUBLIC_REPLAY!=='1'&&!new URLSearchParams(location.search).has('standalone')&&<p><a href="/sciencepal/team">返回当前工作区</a></p>}</>}</>:<>
  {panel==='join'&&<><button onClick={()=>setPanel('help')}>第一次接入？查看队友步骤</button><p>使用自己的成员身份加入房间。</p>{local.info?<><label>队长的邀请链接<input aria-label="邀请链接" value={joinLink} onChange={e=>setJoinLink(e.target.value)} placeholder="https://…/join/…"/></label><button disabled={busy||!joinLink||local.info.joining} onClick={()=>void work(async()=>{await local.call('join',{invite:joinLink});setJoinLink('');setPanel('compute');})}>加入房间</button>{local.info.joining&&<p role="alert">上次加入结果待确认，请队长核对已有成员，不要重复注册。</p>}</>:<><code>npm run research:open</code><p>在解压并构建后的接入包目录运行，打开本人本机入口。</p></>}</>}
  {panel==='workspace'&&<><p>{local.info?.workspace??'远端房间面板'}</p><OriginalWorkspaceAccess localPanel={!!local.info||!!state?.localResearch}/><p>{local.info?.configured?'本人身份已连接，密钥与连接器日志保存在本人电脑。':'请先从本人本机入口加入房间。'}</p>{local.info?.host&&<code>{local.info.host}</code>}<button onClick={()=>toggle(local.info?.configured?'compute':'join')}>{local.info?.configured?'管理本人算力网':'加入房间'}</button><details><summary>示例与验证记录</summary><p><a href="/sciencepal/team?replay=1&case=1crn&step=completed">回放真实科研案例 ↗</a></p><small>查看 1CRN / Iris 示例 · 只读记录，不启动模型</small></details><details><summary>本机入口命令</summary><code>npm run research:open{member?.role==='captain'?' -- --captain':''}</code></details></>}
@@ -74,5 +93,5 @@ export function ResearchTopBar({state,p,view,setView,open,local,panel,setPanel,s
  {panel==='project'&&<><p>{p?.title??'从你们自己的研究问题开始；可上传数据，也可选择公开示例。成员先绑定各自 Agent 并保存提案。'}</p>{p&&<button onClick={()=>{setPanel('');open({type:'protocol'});}}>查看研究协议</button>}{member?.role==='captain'&&local.info?.configured&&<details open={!p}><summary>建立科研项目</summary><small>建项前的名称、成员选择和上传文件仅保存在当前页面。关闭弹层会保留；刷新或关闭浏览器会丢失，请先完成建项。</small><label>项目名称<input aria-label="科研项目名称" value={title} onChange={e=>setTitle(e.target.value)} maxLength={120}/></label>{state?.members.map(m=><label className="research-member-check" key={m.id}><input type="checkbox" disabled={!m.binding||!m.plan} checked={selected.includes(m.id)} onChange={e=>setSelected(v=>e.target.checked?[...v,m.id]:v.filter(id=>id!==m.id))}/>{m.label}<small>{!m.binding?'未接入算力网':!m.plan?'未提交提案':'可加入研究'}</small></label>)}<SourceFileInput source={source} onChange={changeSource} onReadyChange={setSourceReady} selectionError={sourceSelectionError} onSelectionError={setSourceSelectionError} disabled={busy} templateHint="只设置项目标题、输入文件及成果格式；成员提案仍由各人自己保存。" onCrnExample={v=>{setSource(v);setTitle(CRN_CASE.title);setCaseTemplate("1crn");}} onExample={v=>{setSource(v);setTitle(IRIS_CASE.title);setCaseTemplate("iris");}}/>{caseTemplate&&<details className="research-result-contract"><summary>{caseTemplate==="1crn"?"1CRN 方法与成果格式":"Iris 固定验收与成果格式"}</summary><p>{caseTemplate==="1crn"?"geometry 核验原始结构，sasa 使用 BioPython；1.4 Å 探针、960 点，独立 NumPy 5000 点参考；自动启用求和、逐残基及总量数值门禁。两个分工分别保存本人提案。":"data_audit 核验原始数据，species_summary 独立复算统计。"} 格式通过不等同科学正确。</p><pre>{JSON.stringify(caseTemplate==="1crn"?CRN_RESULT_SCHEMAS:IRIS_RESULT_SCHEMAS,null,2)}</pre></details>}{creationIssues.length>0&&<div role="status"><p>建项前还需要：</p><ul>{creationIssues.map(issue=><li key={issue}>{issue}</li>)}</ul></div>}<button disabled={busy||creationIssues.length>0} onClick={()=>void work(async()=>{await proxy('/api/sciencepal-team/projects',{governanceVersion:1,title,coordinatorNodeId:member.id,documentIds:state!.members.filter(m=>selected.includes(m.id)).map(m=>m.plan!.id),...(source?{source}:{}),...(caseTemplate?{resultSchemas:caseTemplate==="1crn"?CRN_RESULT_SCHEMAS:IRIS_RESULT_SCHEMAS,...(caseTemplate==="1crn"?{scientificChecks:crnScientificChecks()}: {})}:{})});setPanel('');setTitle('');setSelected([]);setSource(undefined);setCaseTemplate("");})}>冻结提案并建立项目</button><small>选择 2–4 人，包含队长；恰好两位已就绪成员会预先勾选，提交前可更改。执行平台随项目冻结。</small></details>}</>}
  </>}
  {error&&<p role="alert" className="form-error">{error}</p>}{message&&<p role="status" className="success">{message}</p>}{busy&&<p role="status">处理中…</p>}
- </section>,document.body)}</>;
+ </section></div>,document.body)}</>;
 }

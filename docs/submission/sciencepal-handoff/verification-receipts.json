@@ -1,0 +1,170 @@
+{
+  "date": "2026-10-31",
+  "scope": "New SciencePal evidence verification and byte-preserving delivery; not a new SASA computation or multi-account collaboration test.",
+  "publicReplay": "https://sciencepal.ai/share/026c4e92-32d3-462a-8f6d-6b54d48aeca6",
+  "sciencepalProjectId": "157c663b-1b3c-4ed0-83a8-7447651b1863",
+  "threadId": "026c4e92-32d3-462a-8f6d-6b54d48aeca6",
+  "agentName": "Vibe-Git Research｜科研交接核验",
+  "modelRecorded": "deepseek/deepseek-v4-flash",
+  "pythonRecorded": "3.11.14",
+  "firstVerification": {
+    "checks": 190,
+    "exitCode": 0,
+    "generatedAtUtc": "2026-10-31T12:58:28.475392+00:00"
+  },
+  "followupVerification": {
+    "checks": 192,
+    "exitCode": 0,
+    "generatedAtUtc": "2026-10-31T13:07:50.468359+00:00",
+    "newInputReceipt": {
+      "filename": "followup-request.json",
+      "sha256": "f9d16a6690361eadd3f59c753116ab9af045d3cab7de2005a51585f59e90a7c1",
+      "size": 535,
+      "requestId": "submission-followup-report-reuse-001",
+      "projectId": "85455c15-1857-4c5f-a876-85ca8b6cf7fa"
+    }
+  },
+  "bundle": {
+    "file": "sciencepal-evidence-originals.zip",
+    "size": 394748,
+    "sha256": "24b8a44953588071b63b87e0acaf922aa50325df3360c9f29e50a22cdd3a9b91",
+    "verifiedOriginalFiles": 8,
+    "files": {
+      "verification.json": {
+        "sha256": "db6cfc39bffb4c65b897392d8c59bb9a18bc17f0184692c26a2ab240e3290e94",
+        "size": 22729,
+        "source_path": "/workspace/gov_verify/extracted/verification.json"
+      },
+      "handoff.json": {
+        "sha256": "41b65f0f9af31e6f6323287e7e9e56263c372e57bd807e94cb105923653744ee",
+        "size": 10901,
+        "source_path": "/workspace/gov_verify/extracted/handoff.json"
+      },
+      "handoff.txt": {
+        "sha256": "a363c878a7711e855b84b1be86d686eaab04ffa313b461a96068bfd24090fe95",
+        "size": 6272,
+        "source_path": "/workspace/gov_verify/extracted/handoff.txt"
+      },
+      "verification-followup.json": {
+        "sha256": "6613d869f9ea251b78e003c9c7ec522e973673c963ec5fbab63ee044bf8b3c93",
+        "size": 24155,
+        "source_path": "/workspace/gov_verify/extracted/verification-followup.json"
+      },
+      "handoff-followup.json": {
+        "sha256": "e5fa08be98482a48cc31bccdbc7a3f4d3efe7237537eafbdc203f6fea246b1aa",
+        "size": 4800,
+        "source_path": "/workspace/gov_verify/extracted/handoff-followup.json"
+      },
+      "handoff-followup.txt": {
+        "sha256": "a4796d8c07c6e632bdf89dbf321a644f7a07059267f7b0878a4e9774fa48f3bb",
+        "size": 3935,
+        "source_path": "/workspace/gov_verify/extracted/handoff-followup.txt"
+      },
+      "sciencepal-governance-inputs.zip": {
+        "sha256": "6304faf47b4ba06481c845337038ccd2dd0ba7a8db7a811188337bae4d3be4eb",
+        "size": 379872,
+        "source_path": "/workspace/sciencepal-governance-inputs.zip"
+      },
+      "followup-request.json": {
+        "sha256": "f9d16a6690361eadd3f59c753116ab9af045d3cab7de2005a51585f59e90a7c1",
+        "size": 535,
+        "source_path": "/workspace/followup-request.json"
+      }
+    }
+  },
+  "deliveryHistory": [
+    {
+      "step": 20,
+      "success": false,
+      "status": "delivery_attachments_required",
+      "code": "DELIVERY_ATTACHMENTS_REQUIRED",
+      "missing_attachments": [
+        "sciencepal-governance-inputs.zip"
+      ],
+      "attachments": []
+    },
+    {
+      "step": 21,
+      "success": true,
+      "status": "complete",
+      "code": null,
+      "missing_attachments": [],
+      "attachments": [
+        "gov_verify/extracted/verification.json",
+        "gov_verify/extracted/handoff.json",
+        "gov_verify/extracted/handoff.txt"
+      ]
+    },
+    {
+      "step": 28,
+      "success": false,
+      "status": "delivery_attachments_required",
+      "code": "DELIVERY_ATTACHMENTS_REQUIRED",
+      "missing_attachments": [
+        "followup-request.json",
+        "sciencepal-governance-inputs.zip"
+      ],
+      "attachments": []
+    },
+    {
+      "step": 29,
+      "success": false,
+      "status": "delivery_attachments_required",
+      "code": "DELIVERY_ATTACHMENTS_REQUIRED",
+      "missing_attachments": [
+        "followup-request.json",
+        "sciencepal-governance-inputs.zip"
+      ],
+      "attachments": []
+    },
+    {
+      "step": 30,
+      "success": false,
+      "status": "delivery_attachments_required",
+      "code": "DELIVERY_VALIDATION_LIMIT",
+      "missing_attachments": [
+        "followup-request.json",
+        "sciencepal-governance-inputs.zip"
+      ],
+      "attachments": []
+    },
+    {
+      "step": 36,
+      "success": true,
+      "status": "complete",
+      "code": null,
+      "missing_attachments": [],
+      "attachments": [
+        "sciencepal-evidence-originals.zip",
+        "evidence-bundle-manifest.json"
+      ]
+    }
+  ],
+  "deliveryCorrection": "Round 2 verification passed, but final attachment validation stopped that request. A separate packaging request preserved the original files and completed successfully at tool step 36. Agent delivery instructions were updated and read back from the saved configuration.",
+  "publicJsonExport": {
+    "verification-followup.json": {
+      "rawSha256": "6613d869f9ea251b78e003c9c7ec522e973673c963ec5fbab63ee044bf8b3c93",
+      "previewExportSha256": "ca75e6e50588f06135155f16a483fdf897677ca610862e9f7fe54bf4296db0e7",
+      "sameJsonValues": true
+    },
+    "handoff-followup.json": {
+      "rawSha256": "e5fa08be98482a48cc31bccdbc7a3f4d3efe7237537eafbdc203f6fea246b1aa",
+      "previewExportSha256": "d6ead536adb5ba0c8c3e6bd991751f4aa67a49bfdceb8787d1ca677f6f0d7765",
+      "sameJsonValues": true
+    }
+  },
+  "localSoftwareChecks": {
+    "sciencepal": 310,
+    "compatibility": 40,
+    "web": 59,
+    "mixedSimulation": 20,
+    "installedPackageSmoke": true,
+    "overlapWarning": "Test suites overlap; do not add as unique checks. Windows CLI evidence test required a bounded 30-second test timeout after a 5-second timeout and EBUSY cleanup failure."
+  },
+  "remaining": [
+    "Reviewer runtime access: SciencePal shares custom Agents by email; reviewer addresses have not been provided. Public replay is read-only.",
+    "Video unchanged at user request; teammate will handle it.",
+    "Team contributions are a proposed draft and need factual confirmation.",
+    "Final declaration and official submission are not complete; no submission receipt."
+  ]
+}

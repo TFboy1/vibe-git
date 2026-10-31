@@ -58,7 +58,7 @@
     "research:acceptance:export": "node apps/host/scripts/export-isolated-acceptance.mjs",
     "test:isolated-acceptance": "node scripts/verify-isolated-acceptance.mjs",
     "research:replay:build-public": "node scripts/build-public-replay.mjs",
-    "test:compatibility": "npm run build -w @vibe-git/protocol && npm run build -w @vibe-git/relay && vitest run apps/host/test/v20.test.ts apps/host/test/v21-contract.test.ts apps/relay/test apps/cli/test apps/web/src/OriginalWorkspaceAccess.test.tsx",
+    "test:compatibility": "npm run build -w @vibe-git/protocol && npm run build -w @vibe-git/relay && vitest run apps/host/test/v20.test.ts apps/host/test/v21-contract.test.ts apps/host/test/cloudflare-target.test.ts apps/relay/test apps/cli/test apps/web/src/OriginalWorkspaceAccess.test.tsx",
     "test:installed-package": "node scripts/verify-installed-package.mjs",
     "test:anti-drift": "npm run build -w @vibe-git/protocol && npm run build -w @vibe-git/relay && vitest run apps/host/test/sciencepal-pipeline.test.ts apps/host/test/sciencepal-team.test.ts apps/web/src/sciencepal/ResearchGovernanceEvidence.test.tsx apps/web/src/sciencepal/research-model.test.ts -t \"Research anti-drift|governance survives|keeps captain conflict|retains full source|rejects a forged|Governance evidence|keeps origin|keeps legacy all-pass|reuses approvals through|keeps optional reviewer|takes a failed review\"",
     "test:workflow-experiments": "node apps/host/scripts/verify-workflow-experiments.mjs",

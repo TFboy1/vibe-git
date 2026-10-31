@@ -521,6 +521,7 @@ export class SciencePALPipeline {
     return this.locked(projectId, p => {
       const r = this.memberRun(p, nodeId, runId);
       if (isLocalResearchPlatform(r.agent.platform)) throw badRequest("本地任务不接受远端运行状态");
+      if ((status === "FAILED" || status === "UNKNOWN") && r.status === status && location === undefined) return r;
       if (!["STARTING", "RUNNING", "NEEDS_INPUT"].includes(r.status)) throw invalidState("当前运行不接受状态更新");
       let remoteProjectId = r.projectId;
       if (location !== undefined) {

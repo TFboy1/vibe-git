@@ -1,0 +1,7 @@
+{
+  "requestId": "submission-followup-report-reuse-001",
+  "projectId": "85455c15-1857-4c5f-a876-85ca8b6cf7fa",
+  "taskKey": "report",
+  "question": "请重新读取冻结证据，判断第二轮报告变更能否复用第一轮 SASA 计算和审查。请给出 executionId、artifactId、reviewId、revision 及两份报告 SHA256，指出结论不适用的任务或输入改变。",
+  "scope": "This file is a new controlled demonstration request, not historical scientific evidence. Do not modify original artifacts or verdicts."
+}
