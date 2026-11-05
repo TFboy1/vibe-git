@@ -1,8 +1,29 @@
 # Vibe-Git 0.20
 
-当前 `codex/frontend-rebuild` 分支的 Vue 工作台以当前行动为入口：队长简述目标，AI 用三方案和自定义答案补齐需求，审核正文与分工后一次发布；成员可以只接任务，复制指令给现有开发 AI，通过 Skill 同步与汇报。主导航为工作台、需求、任务、变更、设置；个人想法是可选输入。`npm run build` 同时构建前后端，`vibe-git open` 打开本机工作台。启动与操作步骤见[超敏捷协作](docs/AGILE-WORKFLOW.md)；下文保留历史流程说明。
+当前 `codex/frontend-rebuild` 分支的 Vue 工作台以当前行动为入口：队长简述目标，AI 仅追问关键歧义，按项目介入偏好准备或发布需求与分工；成员可以只接任务，复制指令给现有开发 AI，通过 Skill 同步与汇报。主导航为工作台、需求、任务、变更、设置；个人想法是可选输入。`npm run build` 同时构建前后端，`vibe-git open` 打开本机工作台。启动与操作步骤见[超敏捷协作](docs/AGILE-WORKFLOW.md)；下文保留历史流程说明。
 
 Vibe-Git 是一个 **CLI 主导、网页观察** 的多人 Codex 协作控制面。队长只启动一个 Host 和 Cloudflare Quick Tunnel；每位成员从自己的 Git 工作区连接，不需要填写项目名称、成员名字或固定 A/B/C 身份。
+
+## 安装后，一句话开始
+
+安装并加载当前源码随附的 Skill 后，在你的产品项目里对 Codex 说：
+
+> 用 Vibe-Git 帮我们开发一个记账工具。
+
+首次仅选择“偏自动”或“多人工介入”，选择按本机项目保存。偏自动在当前授权范围内整理需求、生成分工并派发；多人工介入会先准备完整结果，在发布前集中确认。以后直接说“继续我的任务”“修改需求”或“现在进展如何”。工作台用于查看进度和人工接管，正常协作不要求打开网页。
+
+加入已有团队时把队长邀请交给 Codex；已有连接和未完成流程优先恢复。缺少 AI 登录或关键需求时，Codex 会明确说明需要补充什么。派发给离线成员不代表成员已经开工。
+
+可用自然语言更改偏好，也可在设置中修改。高级命令：
+
+```powershell
+vibe-git preference show
+vibe-git preference set automatic
+vibe-git preference set assisted
+vibe-git compute status
+```
+
+本功能以当前源码构建的 CLI 与仓库随附 Skill 为准；若已发布包或独立 Skill 仓库尚未同步，请勿认为旧版本已具备这些能力。
 
 ## 安装
 

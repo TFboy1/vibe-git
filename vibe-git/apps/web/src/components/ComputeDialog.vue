@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { failureMessage } from "../api";
 import { computed, onMounted, onBeforeUnmount, ref } from "vue";
 import type { LocalComputeStatus } from "@vibe-git/protocol";
 import { useWorkspace } from "../store";
@@ -21,7 +22,7 @@ onBeforeUnmount(() => { if (!props.embedded) previousFocus?.focus(); });
 async function refreshStatus() {
   loading.value = true;
   try { await Promise.all([store.refresh(), store.refreshCompute(true)]); error.value = store.computeError; }
-  catch (e) { error.value = e instanceof Error ? e.message : String(e); }
+  catch (e) { error.value = failureMessage(e); }
   finally { loading.value = false; }
 }
 function keys(event: KeyboardEvent) {
@@ -41,16 +42,16 @@ async function save(test = false) {
     apiKey.value = ""; configured.value = status.configured; clearKey.value = false;
     await store.refresh();
     if (test) { await request("/api/local/compute/test", {}); message.value = "Responses 连接和结构化输出测试通过。"; }
-    else message.value = store.batchReviewEnabled ? "算力设置已保存，批量分析、冲突追问、需求生成与任务修订将使用这项配置。" : "本机算力设置已保存，API 可在此测试连接。";
-  } catch (e) { error.value = e instanceof Error ? e.message : String(e); }
+    else message.value = store.batchReviewEnabled ? "AI 连接设置已保存，批量分析、冲突追问、需求生成与任务修订将使用这项配置。" : "本机AI 连接设置已保存，API 可在此测试连接。";
+  } catch (e) { if ((e as { code?: string }).code === "WRITE_UNCERTAIN") await refreshStatus(); error.value = failureMessage(e); }
   finally { await store.refreshCompute(); loading.value = false; }
 }
 </script>
 <template>
   <div :class="embedded ? 'compute-inline-wrapper' : 'modal-backdrop'" @click.self="!embedded && !loading && emit('close')">
     <section ref="panel" :class="embedded ? 'compute-inline' : 'modal compute-modal'" :role="embedded ? undefined : 'dialog'" :aria-modal="embedded ? undefined : true" aria-labelledby="compute-title" :tabindex="embedded ? undefined : -1" @keydown="!embedded && keys($event)">
-      <header class="section-head"><span class="eyebrow">COMPUTE / 协作算力</span><button v-if="!embedded" class="icon-btn" aria-label="关闭算力设置" :disabled="loading" @click="emit('close')"><Icon name="close" /></button></header>
-      <h2 id="compute-title">协作算力与连接状态</h2><p class="muted">{{ store.batchReviewEnabled ? '批量变更分析、冲突追问、需求文档与任务分工共用这一配置。' : 'API 配置与连接测试保存在本机。' }}</p>
+      <header class="section-head"><span class="eyebrow">COMPUTE / AI 连接</span><button v-if="!embedded" class="icon-btn" aria-label="关闭AI 连接设置" :disabled="loading" @click="emit('close')"><Icon name="close" /></button></header>
+      <h2 id="compute-title">AI 连接与连接状态</h2><p class="muted">{{ store.batchReviewEnabled ? '批量变更分析、冲突追问、需求文档与任务分工共用这一配置。' : 'API 配置与连接测试保存在本机。' }}</p>
       <div class="provider-switch"><label :class="{ active: provider === 'codex' }"><input v-model="provider" type="radio" value="codex" name="provider" /> Codex 节点池</label><label :class="{ active: provider === 'api' }"><input v-model="provider" type="radio" value="api" name="provider" /> 自定义 API</label></div>
       <div v-if="provider === 'codex'" class="codex-pool"><div class="compute-state"><span class="presence" :class="{ online: store.codex?.status === 'available' }"></span><strong>{{ store.codex ? codexLabels[store.codex.status] : '正在读取本机状态…' }}</strong><button class="text-button" :disabled="loading" @click="refreshStatus">刷新节点池</button></div><p v-if="store.codex?.reason" class="field-help">{{ store.codex.reason }}</p><p v-if="store.codex?.status !== 'available'" class="field-help">本机登录与设备授权统一在 <RouterLink to="/settings#usage" class="text-button" @click="emit('close')">Codex 连接与额度</RouterLink> 中管理。</p><p>节点池：{{ store.data?.auditPool.available ?? 0 }} 个可用 · {{ store.data?.auditPool.busy ?? 0 }} 个忙碌。使用在线节点，按当前负载分配分析。</p><div v-for="node in store.data?.nodes" :key="node.id" class="pool-row"><span class="presence" :class="{ online: node.connected && node.codex === 'available' }"></span><strong>{{ node.label }}</strong><span class="muted">{{ !node.connected ? '离线' : node.codex === 'available' ? '已连接' : node.codex === 'unverified' ? '需要登录' : '未就绪' }}</span><small>{{ node.activeJobCount }} 个作业</small></div><p class="footnote">也可以在终端运行 <code>vibe-git codex bind</code> 完成登录。</p></div>
       <div v-else class="api-fields">

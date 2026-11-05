@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { failureMessage } from "../api";
 import { ref } from "vue";
 import type { LocalProjects } from "@vibe-git/protocol";
 import { request } from "../api";
@@ -10,13 +11,13 @@ const dialog = ref<HTMLDialogElement>(), projects = ref<LocalProjects | null>(nu
 async function show() {
   dialog.value?.showModal(); error.value = ""; loading.value = true;
   try { projects.value = await request<LocalProjects>("/api/local/projects"); path.value = ""; }
-  catch (e) { error.value = e instanceof Error ? e.message : String(e); }
+  catch (e) { error.value = failureMessage(e); }
   finally { loading.value = false; }
 }
 async function chooseFolder() {
   loading.value = true;
   try { const result = await request<{ path: string | null }>("/api/local/projects/pick", {}, undefined, { timeoutMs: 180000 }); if (result.path) path.value = result.path; }
-  catch (e) { error.value = e instanceof Error ? e.message : String(e); }
+  catch (e) { error.value = failureMessage(e); }
   finally { loading.value = false; }
 }
 async function change() {
@@ -28,7 +29,7 @@ async function change() {
     store.projectSwitching = true; store.stop();
     await request("/api/local/projects/switch", { path: path.value.trim(), expectedRoomId: store.data?.room.id }, undefined, { timeoutMs: 240000 });
     window.location.replace("/");
-  } catch (e) { error.value = e instanceof Error ? e.message : String(e); store.projectSwitching = false; await store.start(); }
+  } catch (e) { error.value = failureMessage(e); store.projectSwitching = false; await store.start(); }
   finally { loading.value = false; }
 }
 </script>

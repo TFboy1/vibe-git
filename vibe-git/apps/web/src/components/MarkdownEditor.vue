@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { failureMessage } from "../api";
 import { nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { CrepeBuilder } from "@milkdown/crepe/builder";
 import { blockEdit } from "@milkdown/crepe/feature/block-edit";
@@ -57,7 +58,7 @@ onMounted(async () => {
     if (destroyed) { await crepe.destroy(); return; }
     mounted = true; loading.value = false; observeOutline();
     if (crepe.getMarkdown() !== props.modelValue) { syncing = true; crepe.editor.action(replaceAll(props.modelValue)); syncing = false; }
-  } catch (e) { loading.value = false; emit("error", e instanceof Error ? e.message : String(e)); }
+  } catch (e) { loading.value = false; emit("error", failureMessage(e)); }
 });
 watch(() => props.modelValue, async value => {
   if (!crepe || !mounted || value === crepe.getMarkdown()) return;
@@ -73,7 +74,7 @@ async function importFile(event: Event) {
     if (!/\.md$/i.test(selected.name) || selected.size > 256 * 1024) throw new Error("请选择不超过 256 KiB 的 UTF-8 Markdown 文件");
     const markdown = new TextDecoder("utf-8", { fatal: true }).decode(await selected.arrayBuffer());
     emit("update:modelValue", markdown);
-  } catch (e) { emit("error", e instanceof Error ? e.message : String(e)); }
+  } catch (e) { emit("error", failureMessage(e)); }
   finally { input.value = ""; }
 }
 function download() {

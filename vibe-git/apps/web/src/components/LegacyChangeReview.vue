@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { failureMessage } from "../api";
 import { computed, onBeforeUnmount, ref, watch } from "vue";
 import { taskContentChanged } from "@vibe-git/protocol";
 import type { ChangeImpact, CoordinationChange, TaskChangeContent, TaskRevisionDraft } from "@vibe-git/protocol";
@@ -68,7 +69,7 @@ async function loadImpact() {
     });
     impact.value = result;
     if (skipped) hint.value = "部分任务已更新，已读取最新内容，请重新确认这些任务的影响和修订。";
-  } catch (e) { if (version === generation) { impact.value = null; error.value = e instanceof Error ? e.message : String(e); } }
+  } catch (e) { if (version === generation) { impact.value = null; error.value = failureMessage(e); } }
   finally { if (version === generation) loading.value = false; }
 }
 watch([() => props.change.id, () => editable.value, () => stale.value], () => {
@@ -114,7 +115,7 @@ async function generateRevisions(taskIds = rows.value.filter(row => row.affected
       if (row && taskIds.includes(row.taskId)) { row.goal = item.update.goal; row.boundary = item.update.boundary; row.acceptance = item.update.acceptance.join("\n"); }
     }
     hint.value = "已生成 " + result.updates.length + " 项具体修订。请核对下方标红的差异，再确认发布。";
-  } catch (e) { if (version === generation) { error.value = e instanceof Error ? e.message : String(e); hint.value = "生成失败，原任务和已有审核草稿保留，可重试或手动修改。"; } }
+  } catch (e) { if (version === generation) { error.value = failureMessage(e); hint.value = "生成失败，原任务和已有审核草稿保留，可重试或手动修改。"; } }
   finally { revising.value = false; revisionController = null; }
 }
 async function apply() {

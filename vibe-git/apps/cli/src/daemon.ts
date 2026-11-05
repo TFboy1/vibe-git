@@ -1,3 +1,4 @@
+import { jobFailureCode } from "@vibe-git/protocol";
 import { rm, stat } from "node:fs/promises";
 import { appendLog } from "@vibe-git/protocol/logging";
 import { execFileSync } from "node:child_process";
@@ -74,7 +75,11 @@ async function heartbeat(connection: ClientConfig, taskId?: string, captain = fa
     if (fingerprint) gitState.fingerprint = fingerprint;
   }
   if (captain && (!contextCache || Date.now() - contextCache.at > 60_000 || contextCache.value?.headSha !== gitState?.headSha)) {
-    contextCache = { at: Date.now(), value: gitState ? await repositoryContext(config.workspace).catch(() => null) : null };
+    const snapshot = gitState ? await api<V20BootstrapPayload>(config, "/api/v1/bootstrap").catch(() => null) : null;
+    const flow = snapshot?.agile?.activeFlow;
+    const focusPaths = [...(flow?.tasks.flatMap(task => task.ownedPaths) ?? []), ...(snapshot?.tasks.flatMap(task => task.brief?.ownedPaths ?? []) ?? [])];
+    contextCache = { at: Date.now(), value: gitState ? await repositoryContext(config.workspace,
+      flow?.draftMarkdown || snapshot?.room.currentRequirementMarkdown || "", focusPaths).catch(() => null) : null };
   }
   const input: NodeHeartbeatInput = {
     apiReady: captain && computeStatus(config).ready,
@@ -219,7 +224,7 @@ async function executeJob(config: ClientConfig, job: AgentJob): Promise<void> {
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
     await log(`${job.kind} ${job.id} 失败：${detail}`);
-    if (job.leaseToken) await report(config, job, { phase: "failed", error: detail }).catch(() => undefined);
+    if (job.leaseToken) await report(config, job, { phase: "failed", error: detail, ...(jobFailureCode(error) ? { errorCode: jobFailureCode(error) } : {}) }).catch(() => undefined);
   } finally { await activity.flush(); reporters.delete(job.id); jobControllers.delete(job.id); }
 }
 

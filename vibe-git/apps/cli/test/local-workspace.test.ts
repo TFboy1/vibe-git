@@ -124,4 +124,27 @@ describe("独立项目工作区", () => {
       expect((await readJson<{ port: number }>(localPanelPath()))?.port).toBe(panel.port);
     } finally { await panel.close(); }
   });
+
+  it("同机不同端口的本机面板保留各自的登录会话", async () => {
+    const root = await mkdtemp(resolve(tmpdir(), "vibe-git-workspace-")); roots.push(root);
+    process.env.VIBE_GIT_HOME = resolve(root, "config");
+    const config: ClientConfig = { hostUrl: "http://localhost:8787", nodeId: "node", nodeToken: "test-token", workspace: root,
+      workTransport: "auto", daemonPid: null, connectedAt: new Date().toISOString() };
+    const captain = await startLocalPanel(config);
+    const member = await startLocalPanel({ ...config });
+    const captainBase = `http://127.0.0.1:${captain.port}`;
+    const memberBase = `http://127.0.0.1:${member.port}`;
+    try {
+      const open = async (base: string) => {
+        const response = await fetch(base + "/_local/ticket", { method: "POST", headers: { "x-vibe-git-control": config.nodeToken } });
+        const ticket = await response.json() as { url: string };
+        return (await fetch(ticket.url, { redirect: "manual" })).headers.get("set-cookie")!.split(";")[0]!;
+      };
+      const jar = new Map<string, string>();
+      for (const cookie of [await open(captainBase), await open(memberBase)]) jar.set(cookie.split("=", 1)[0]!, cookie);
+      const cookie = [...jar.values()].join("; ");
+      expect((await fetch(captainBase + "/api/local/capabilities", { headers: { cookie } })).status).toBe(200);
+      expect((await fetch(memberBase + "/api/local/capabilities", { headers: { cookie } })).status).toBe(200);
+    } finally { await Promise.all([captain.close(), member.close()]); }
+  });
 });

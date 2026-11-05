@@ -14,13 +14,12 @@ function Invoke-NodeStep {
 Push-Location $Root
 try {
     Invoke-NodeStep -CliArgs @($Tsc, '-p', 'packages/protocol/tsconfig.build.json')
-    foreach ($Project in @('packages/protocol', 'apps/host', 'apps/relay', 'apps/cli')) {
+    foreach ($Project in @('packages/protocol', 'apps/host', 'apps/cli')) {
         Write-Host "Typecheck: $Project"
         Invoke-NodeStep -CliArgs @($Tsc, '-p', "$Project/tsconfig.json", '--noEmit')
     }
-    Invoke-NodeStep -CliArgs @($Vitest, 'run', 'apps/host/test/v20.test.ts', 'apps/host/test/v21-contract.test.ts', 'apps/host/test/coordination.test.ts', 'apps/host/test/agile.test.ts', 'apps/cli/test', 'apps/relay/test')
+    Invoke-NodeStep -CliArgs @($Vitest, 'run', 'apps/host/test', 'apps/cli/test')
     Invoke-NodeStep -CliArgs @($Tsc, '-p', 'apps/host/tsconfig.build.json')
-    Invoke-NodeStep -CliArgs @($Tsc, '-p', 'apps/relay/tsconfig.build.json')
     Invoke-NodeStep -CliArgs @($Tsc, '-p', 'apps/cli/tsconfig.build.json')
     Invoke-NodeStep -CliArgs @('node_modules/vue-tsc/bin/vue-tsc.js', '-p', 'apps/web/tsconfig.json', '--noEmit')
     Invoke-NodeStep -CliArgs @('node_modules/vite/bin/vite.js', 'build', 'apps/web')

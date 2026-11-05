@@ -11,13 +11,15 @@ import { fileURLToPath } from "node:url";
 import { probeCodex } from "./codex.js";
 import { chatWithCodex, draftProposalWithCodex, listCodexModels, codexModelSettings, saveCodexModel } from "./local-chat.js";
 import { projectController } from "./projects.js";
+import { collaborationPreference, saveCollaborationPreference } from "./preferences.js";
+import { startupStatus } from "./startup.js";
 import { clarifyIntentWithCodex, endIntentSession } from "./intent-clarifier.js";
 import { clarifyIntentWithOpenAI, openAIStatus, saveOpenAIConfig } from "./openai-intent.js";
 import { computeStatus, savePanelCompute, testCompute } from "./agile-ai.js";
 import { generateTaskRevisionDraft } from "./task-revision-draft.js";
 import type { TaskRevisionDraftInput } from "@vibe-git/protocol";
 import { api, ApiError } from "./api.js";
-import { saveConfig, vibeHome, writeJson, type ClientConfig } from "./config.js";
+import { vibeHome, writeJson, type ClientConfig } from "./config.js";
 
 const WEB_DIST = resolve(fileURLToPath(new URL("../../web/dist-agile", import.meta.url)));
 export const localPanelPath = () => resolve(vibeHome(), "local-panel.json");
@@ -62,7 +64,9 @@ export async function startLocalPanel(config: ClientConfig, controls: { busy(): 
     let tracked = false;
     try {
       const url = new URL(req.url ?? "/", "http://127.0.0.1");
-      const origin = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+      const panelPort = (server.address() as { port: number }).port;
+      const origin = `http://127.0.0.1:${panelPort}`;
+      const cookieName = `vg_local_${panelPort}`;
       if (req.method === "POST" && url.pathname === "/_local/ticket") {
         if (!equal(String(req.headers["x-vibe-git-control"] ?? ""), config.nodeToken)) return json(res, 403, { error: "本机控制凭据无效" });
         const ticket = randomBytes(32).toString("base64url"); tickets.set(ticket, Date.now() + 120_000);
@@ -79,12 +83,13 @@ export async function startLocalPanel(config: ClientConfig, controls: { busy(): 
         const expires = tickets.get(ticket); tickets.delete(ticket);
         if (!expires || expires < Date.now()) return json(res, 403, { error: "本机面板票据已失效" });
         const session = randomBytes(32).toString("base64url"); sessions.set(session, Date.now() + 60 * 60_000);
-        res.writeHead(302, { location: "/", "set-cookie": `vg_local=${session}; HttpOnly; SameSite=Strict; Path=/`, "cache-control": "no-store" }); res.end(); return;
+        res.writeHead(302, { location: "/", "set-cookie": `${cookieName}=${session}; HttpOnly; SameSite=Strict; Path=/`, "cache-control": "no-store" }); res.end(); return;
       }
-      const session = req.headers.cookie?.split(";").map((value) => value.trim()).find((value) => value.startsWith("vg_local="))?.slice(9) ?? "";
+      const session = req.headers.cookie?.split(";").map((value) => value.trim()).find((value) => value.startsWith(`${cookieName}=`))?.slice(cookieName.length + 1) ?? "";
       if ((sessions.get(session) ?? 0) <= Date.now()) return json(res, 403, { error: "请先在本机运行 vibe-git open" });
       if (!["GET", "HEAD"].includes(req.method ?? "") && req.headers.origin !== origin) return json(res, 403, { error: "跨站请求被拒绝" });
       if (projects.isSwitching()) return json(res, 409, { error: "项目正在切换，请稍后操作" });
+      if (url.pathname === "/api/local/startup" && req.method === "GET") return json(res, 200, await startupStatus({ ...config }));
       if (url.pathname === "/api/local/projects" && req.method === "GET") return json(res, 200, await projects.list());
       if (url.pathname === "/api/local/projects/pick" && req.method === "POST") {
         if (choosingFolder) return json(res, 409, { error: "文件夹选择窗口已经打开" });
@@ -101,6 +106,12 @@ export async function startLocalPanel(config: ClientConfig, controls: { busy(): 
         catch (error) { return json(res, 409, { error: error instanceof Error ? error.message : String(error) }); }
       }
       if (!["GET", "HEAD"].includes(req.method ?? "") && url.pathname !== "/api/local/workspace/pick") { tracked = true; activeWrites++; }
+      if (url.pathname === "/api/local/preference" && req.method === "GET") return json(res, 200, await collaborationPreference(config.workspace));
+      if (url.pathname === "/api/local/preference" && req.method === "PUT") {
+        const input = await body(req);
+        if (input.mode !== "assisted" && input.mode !== "automatic") return json(res, 400, { error: "请选择偏自动或多人工介入" });
+        return json(res, 200, await saveCollaborationPreference(config.workspace, input.mode));
+      }
       if (url.pathname === "/api/local/codex/model" && req.method === "GET") return json(res, 200, await codexModelSettings(config.workspace));
       if (url.pathname === "/api/local/codex/model" && req.method === "PUT") return json(res, 200, await saveCodexModel(config, (await body(req)).model));
       if (url.pathname === "/api/local/capabilities") return json(res, 200, { local: true, chat: probeCodex().appServer });

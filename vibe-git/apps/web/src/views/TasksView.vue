@@ -1,8 +1,11 @@
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
+import { failureMessage } from "../api";
+import { computed, onBeforeUnmount, ref, watch } from "vue";
 import { useRoute } from "vue-router";
-import type { TaskExecutionPackage } from "@vibe-git/protocol";
+import type { StageTask, TaskExecutionPackage } from "@vibe-git/protocol";
+import { taskDependencyBlockers } from "@vibe-git/protocol";
 import { useWorkspace } from "../store";
+import { useHistory } from "../history";
 import { request } from "../api";
 import { taskStatus, taskNextStep } from "../team";
 import MarkdownEditor from "../components/MarkdownEditor.vue";
@@ -11,21 +14,24 @@ import Icon from "../components/Icon.vue";
 import TaskAssignment from "../components/TaskAssignment.vue";
 const store = useWorkspace(), filter = ref("active"), selected = ref(""), pack = ref<TaskExecutionPackage | null>(null), loading = ref(false), detailError = ref("");
 const route = useRoute();
+const linkedTask = ref<StageTask | null>(null);
 const statusNames = taskStatus;
 const query = computed(() => typeof route.query.q === "string" ? route.query.q.trim().toLowerCase() : "");
-const all = computed(() => [...(store.data?.tasks ?? []), ...(store.data?.agile?.archivedTasks ?? [])].filter(task => store.captain || task.assigneeNodeId === store.data?.viewer.id));
+const archive = useHistory<StageTask>("archivedTasks"), completedHistory = useHistory<StageTask>("completedTasks");
+watch(filter, value => { if (value === "archive") void archive.load(); if (value === "done") void completedHistory.load(); });
+const all = computed(() => [...new Map([...(store.data?.tasks ?? []), ...(linkedTask.value && !store.data?.tasks.some(task => task.id === linkedTask.value?.id) ? [linkedTask.value] : []), ...(store.data?.agile?.archivedTasks ?? []), ...(filter.value === "archive" ? archive.items.value : filter.value === "done" ? completedHistory.items.value.filter(task => !store.data?.tasks.some(current => current.id === task.id)) : [])].map(task => [task.id, task])).values()].filter(task => store.captain || task.assigneeNodeId === store.data?.viewer.id));
 const filtered = computed(() => all.value.filter(task =>
   (filter.value === "archive" ? task.archived : !task.archived && (filter.value === "done" ? task.status === "DONE" : task.status !== "DONE")) &&
   (!query.value || [task.id, task.title, task.goal, task.progressSummary, store.name(task.assigneeNodeId)].join(" ").toLowerCase().includes(query.value))));
 const task = computed(() => all.value.find(task => task.id === selected.value));
 const manualInstruction = ref("");
-const nextStep = computed(() => task.value ? taskNextStep(task.value, store.data?.tasks ?? [], store.name) : "");
+const nextStep = computed(() => task.value ? taskNextStep(task.value, store.data?.tasks ?? [], store.name, store.data?.contracts ?? []) : "");
 const syncOnly = computed(() => !!task.value && (task.value.status === "PAUSED" || task.value.pauseRequested || task.value.status === "DONE" ||
-  (pack.value ? pack.value.dependencies.some(item => item.status !== "DONE") : task.value.dependencies.some(id => store.data?.tasks.find(item => item.id === id)?.status !== "DONE"))));
+  taskDependencyBlockers(task.value, store.data?.tasks ?? [], store.data?.contracts ?? []).length > 0));
 const instruction = computed(() => task.value ? [
   "请使用 Vibe-Git Skill 处理我的任务。任务 ID：" + task.value.id + "；标题：" + JSON.stringify(task.value.title) + "。",
   task.value.flow === "agile" ? "先同步 task inbox，核对本人身份、暂停与修订消息，再读取该任务最新任务包。不要使用网页展示的旧版本执行或回填汇报。" : "先调用 Skill 核对历史房间的执行流程、本人身份和暂停消息，再读取该任务最新任务包。",
-  syncOnly.value ? "本次先同步状态。如果暂停或依赖未完成，请停止旧版本工作并说明等待原因；如果已完成，仅查看完成记录，不重新开工。" : "确认任务属于本人、未归档、未暂停且前置依赖已完成后，在当前开发会话按任务目标、边界和验收执行。",
+  syncOnly.value ? "本次先同步状态。如果暂停、硬依赖未完成或接口不可用，请停止旧版本工作并说明等待原因；如果已完成，仅查看完成记录，不重新开工。" : "确认任务属于本人、未归档、未暂停且硬依赖已完成或契约已发布后，在当前开发会话按任务目标、边界和验收执行。接口依赖可按契约并行开发。",
   task.value.flow === "agile" ? "每次调用 Skill 先同步需求修订，通过 Skill 汇报实际开工、进度、阻塞或完成。携带实际读取并执行的任务包与需求版本，完成附真实验收证据。不要为旧成果补填新版本号。" : "按历史任务原有的开工、同步和完成确认流程处理，保留实际验证证据，不用新版汇报命令替代旧流程。"
 ].join("\n\n") : "");
 async function copyInstruction() {
@@ -42,21 +48,30 @@ watch(() => [task.value?.id, task.value?.status, task.value?.archived] as const,
   else if (status === "DONE" && before[1] !== "DONE") filter.value = "done";
 });
 watch(filtered, tasks => { if (!tasks.some(task => task.id === selected.value)) selected.value = tasks[0]?.id ?? ""; }, { immediate: true });
-watch(() => route.query.task, id => {
-  const target = typeof id === "string" ? all.value.find(item => item.id === id) : undefined;
-  if (target) { filter.value = target.archived ? "archive" : target.status === "DONE" ? "done" : "active"; selected.value = target.id; }
+let linkedController: AbortController | undefined;
+watch(() => route.query.task, async id => {
+  linkedController?.abort(); const controller = linkedController = new AbortController();
+  if (typeof id !== "string") { linkedTask.value = null; return; }
+  try {
+    const target = all.value.find(item => item.id === id) ?? await request<StageTask>("/api/v1/workspace/tasks/" + encodeURIComponent(id), undefined, undefined, { signal: controller.signal });
+    if (controller.signal.aborted) return;
+    linkedTask.value = target; filter.value = target.archived ? "archive" : target.status === "DONE" ? "done" : "active"; selected.value = target.id;
+  } catch (e) { if (!controller.signal.aborted) detailError.value = failureMessage(e); }
 }, { immediate: true });
+onBeforeUnmount(() => linkedController?.abort());
 let generation = 0;
 watch(() => [selected.value, task.value?.packageRevision, task.value?.revision, task.value?.status, task.value?.progressSummary] as const, async ([id]) => {
   const version = ++generation; pack.value = null; detailError.value = ""; manualInstruction.value = "";
   if (!id || task.value?.archived) { loading.value = false; return; }
   loading.value = true;
   try { const result = await request<TaskExecutionPackage>("/api/v1/tasks/" + encodeURIComponent(id) + "/package"); if (version === generation) pack.value = result; }
-  catch (e) { if (version === generation) detailError.value = e instanceof Error ? e.message : String(e); }
+  catch (e) { if (version === generation) detailError.value = failureMessage(e); }
   finally { if (version === generation) loading.value = false; }
 }, { immediate: true });
 </script>
 <template>
+  <div v-if="!all.length" class="task-filter" aria-label="任务筛选"><button v-for="item in [{ value: 'active', text: '进行中' }, { value: 'done', text: '完成' }, { value: 'archive', text: '归档' }]" :key="item.value" :class="{ active: filter === item.value }" @click="filter = item.value">{{ item.text }}</button></div>
+  <div v-if="filter === 'archive' || filter === 'done'" class="button-row"><button class="btn small" @click="(filter === 'archive' ? archive : completedHistory).load()">最新一页</button><button v-if="(filter === 'archive' ? archive : completedHistory).nextCursor.value" class="btn small" :disabled="(filter === 'archive' ? archive : completedHistory).loading.value" @click="(filter === 'archive' ? archive : completedHistory).load(true)">更早记录</button><p v-if="(filter === 'archive' ? archive : completedHistory).error.value" role="alert">{{ (filter === 'archive' ? archive : completedHistory).error.value }}</p></div>
   <div class="intro-line"><p>{{ store.captain ? '让每个人拿到清楚、可执行的工作。' : '你的目标、边界和验收都在这里。' }}<span>{{ store.captain ? '先审核分工，再统一派发。' : '通过 Vibe-Git Skill 向开发 AI 传达开工和进度即可。' }}</span></p><span v-if="store.data?.room.requirementRevision" class="tag mint">当前需求 R{{ store.data.room.requirementRevision }}</span></div>
   <FlowStatus v-if="store.flow" :flow="store.flow" readonly />
   <div v-if="store.canManage && store.flow?.status === 'READY'" class="next-action"><div><strong>分工草稿已就绪</strong><p>任务包视图保留已派发记录；新分工在任务看板审核并派发。</p></div><RouterLink :to="{ path: '/projects', query: query ? { q: route.query.q } : {} }" class="btn">查看分工 <Icon name="arrow" :size="15" /></RouterLink></div>

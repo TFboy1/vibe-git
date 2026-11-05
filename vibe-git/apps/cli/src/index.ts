@@ -1,26 +1,29 @@
 #!/usr/bin/env node
 import { handleCoordinationCommand, COORDINATION_USAGE } from "./coordination-command.js";
 import { handleAgileCommand, AGILE_USAGE } from "./agile-command.js";
+import { collaborationPreference, saveCollaborationPreference } from "./preferences.js";
+import { computeStatus, savePanelCompute, testCompute } from "./agile-ai.js";
+import { startupStatus } from "./startup.js";
+import { recoveryAdvice } from "@vibe-git/protocol";
 import { spawn } from "node:child_process";
 import { closeSync, existsSync } from "node:fs";
 import { openLogFile } from "@vibe-git/protocol/logging";
 import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
-import { homedir } from "node:os";
 import { basename, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { AlignmentRun, JoinResponse, MarkdownDocument, V20BootstrapPayload, WorkTransport } from "@vibe-git/protocol";
-import { api, post } from "./api.js";
+import type { AlignmentRun, JoinResponse, MarkdownDocument, V20BootstrapPayload, WorkspaceResources, WorkTransport } from "@vibe-git/protocol";
+import { api, post, ApiError } from "./api.js";
 import { codexInvocation } from "./codex-command.js";
 import {
   defaultCodexHome, configPath, daemonLogPath, hostLogPath, hostProcessPath, loadConfig, readJson,
-  saveConfig, vibeHome, writeJson, type ClientConfig
+  saveConfig, type ClientConfig
 } from "./config.js";
 import { probeCodex } from "./codex.js";
 import { runDaemon } from "./daemon.js";
 import { localPanelPath } from "./local-panel.js";
 import { startupWorkspace } from "./local-workspace.js";
 import { startHost, stopHost, startTunnel, isAlive, type HostProcess } from "./host-process.js";
-import { rememberProject, savedProjectConnection } from "./projects.js";
+import { projectController, rememberProject, savedProjectConnection } from "./projects.js";
 
 const args = process.argv.slice(2);
 const CLI_ENTRY = fileURLToPath(import.meta.url);
@@ -30,7 +33,15 @@ const out = (value: unknown) => console.log(typeof value === "string" ? value : 
 const command = (...parts: string[]) => parts.filter(Boolean).join(" ");
 
 function usage(): string {
-  return `Vibe-Git v0.20 — CLI 驱动的多人协作
+  return `Vibe-Git — 对 Codex 说一句目标即可开始协作
+
+自然语言入口（安装并加载 Skill 后）
+  “用 Vibe-Git 帮我们开发一个记账工具” / “继续我的任务” / “修改需求” / “现在进展如何”
+  首次选择偏自动或多人工介入；工作台用于查看进度与人工接管。
+  vibe-git preference show [项目目录] | set assisted|automatic [项目目录]
+  vibe-git compute status | use codex | use api <模型名> [Base-URL] | test
+  vibe-git project list | switch <项目目录>
+  vibe-git doctor [项目目录]  查看当前使用条件，不创建房间、不启动任务
 
 队长
   vibe-git host start [项目目录] | status | stop
@@ -170,11 +181,15 @@ async function connect(joinUrlRaw: string | undefined, workspacePath?: string): 
 
 async function status(): Promise<void> {
   const config = await loadConfig(); if (!config) return;
-  const data = await api<V20BootstrapPayload>(config, "/api/v1/bootstrap");
+  let data: V20BootstrapPayload;
+  try { data = (await api<WorkspaceResources>(config, "/api/v1/workspace/resources?names=overview,members,tasks,requirements,notifications")).data as V20BootstrapPayload; }
+  catch (error) { if (!(error instanceof ApiError) || error.status !== 404) throw error; data = await api<V20BootstrapPayload>(config, "/api/v1/bootstrap"); }
   const mine = data.tasks.filter((task) => task.assigneeNodeId === config.nodeId);
   out({
     node: data.viewer, daemon: { pid: config.daemonPid, running: isAlive(config.daemonPid) },
     room: data.room, auditPool: data.auditPool, myTasks: mine.map((task) => ({ id: task.id, title: task.title, status: task.status })),
+    workspace: config.workspace, preference: await collaborationPreference(config.workspace),
+    agile: data.agile ? { enabled: data.agile.enabled, activeFlow: data.agile.activeFlow ? { id: data.agile.activeFlow.id, status: data.agile.activeFlow.status, kind: data.agile.activeFlow.kind } : null } : null,
     unreadMessages: data.notifications.filter((item) => !item.readAt).length
   });
 }
@@ -208,9 +223,42 @@ async function main(): Promise<void> {
   const [group, action, third, fourth] = args;
   if (group === "daemon") { await runDaemon(); return; }
   if (!group || group === "help" || group === "--help" || group === "-h") { out(usage()); return; }
+  if (group === "doctor") { out(await startupStatus(await loadConfig(false), action)); return; }
+  if (group === "preference") {
+    const config = await loadConfig(false);
+    const workspace = resolve((action === "set" ? fourth : third) || config?.workspace || process.cwd());
+    if (action === "show") { out(await collaborationPreference(workspace)); return; }
+    if (action === "set") { out(await saveCollaborationPreference(workspace, third)); return; }
+    throw new Error("用法：vibe-git preference show [项目目录] | set assisted|automatic [项目目录]");
+  }
 
   if (await handleAgileCommand(args, bootstrap, out)) return;
   if (await handleCoordinationCommand(args, bootstrap, out)) return;
+
+  if (group === "project") {
+    const { config, data } = await bootstrap();
+    const projects = projectController(config, {
+      busy: () => data.viewer.activeJobCount ? "active-job" : null,
+      beforeSwitch: async () => { await stopDaemon(config); },
+      changed: async () => { Object.assign(config, await spawnDaemon(config)); }
+    });
+    if (action === "list") { out(await projects.list()); return; }
+    if (action === "switch" && third) { out(await projects.select(resolve(third), data.room.id)); return; }
+    throw new Error("用法：project list | switch <项目目录>");
+  }
+
+  if (group === "compute") {
+    const { config, data } = await bootstrap();
+    if (action === "status") { out(computeStatus(config)); return; }
+    if (data.viewer.role !== "captain") throw new Error("只有队长可以更改团队 AI 连接");
+    if (action === "test") { out(await testCompute(config)); return; }
+    if (action === "use") {
+      if (data.viewer.activeJobCount) throw new Error("本机仍有作业，请结束后再切换 AI 连接");
+      out(await savePanelCompute(config, { provider: third, ...(fourth ? { model: fourth } : {}), ...(args[4] ? { baseUrl: args[4] } : {}) }, async () => { Object.assign(config, await spawnDaemon(config)); }));
+      return;
+    }
+    throw new Error("用法：compute status | use codex | use api <模型名> [Base-URL] | test；Key 使用本机 OPENAI_API_KEY，不写入命令或聊天");
+  }
 
   if (group === "host") {
     if (action === "start") return hostStart(third);
@@ -418,5 +466,8 @@ async function main(): Promise<void> {
 
 main().catch((error) => {
   console.error(`错误：${error instanceof Error ? error.message : String(error)}`);
+  const value = error as { code?: string; status?: number };
+  const recovery = recoveryAdvice(value?.code, value?.status);
+  console.error(recovery.preserved + "\n下一步：" + recovery.next);
   process.exitCode = 1;
 });

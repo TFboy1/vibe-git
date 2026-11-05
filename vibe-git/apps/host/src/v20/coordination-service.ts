@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import type { AgentJob, AlignmentRun, ApplyCoordinationChange, ChangeImpact, CollaborationNode, CoordinationChange,
   CoordinationSnapshot, DevelopmentStage, ExternalTaskReport, IntentDraft, InterfaceContract, QuickPlanInput,
   StageTask, TaskChangeContent, TaskChangeSnapshot, TaskExecutionPackage, TaskReadiness } from "@vibe-git/protocol";
-import { badRequest, forbidden, invalidState, notFound, revisionConflict, unavailable } from "../domain/errors.js";
+import { requireCaptain as captain, assertRevision as checkRevision, badRequest, forbidden, invalidState, notFound, revisionConflict } from "../domain/errors.js";
 import type { V20Repository } from "./repository.js";
 
 const time = () => new Date().toISOString();
@@ -33,8 +33,6 @@ function validateTaskUpdate(raw: unknown): TaskChangeContent {
 function contentChanged(before: TaskChangeContent, after: TaskChangeContent): boolean {
   return before.goal !== after.goal || before.boundary !== after.boundary || JSON.stringify(before.acceptance) !== JSON.stringify(after.acceptance);
 }
-function captain(node: CollaborationNode) { if (node.role !== "captain") throw forbidden("该操作仅限队长"); }
-function checkRevision(actual: number, expected: unknown) { if (actual !== expected) throw revisionConflict("内容已变化，请查看最新版本后重试"); }
 const stringList = { type: "array", items: { type: "string" } };
 const fields = (properties: Record<string, unknown>) => ({ type: "object", additionalProperties: false, required: Object.keys(properties), properties });
 const str = { type: "string" };
@@ -56,21 +54,15 @@ interface Hooks {
 /** Coordination facts, not an Agent runtime. Existing room tables remain the source of truth. */
 export class CoordinationService {
   constructor(readonly repo: V20Repository, private hooks: Hooks) {}
-  private getList<T>(key: string): T[] { return JSON.parse(this.repo.getMeta(`coordination_${key}`) ?? "[]") as T[]; }
-  private putItem<T extends { id: string }>(key: string, item: T) {
-    const list = this.getList<T>(key); const index = list.findIndex(entry => entry.id === item.id);
-    if (index < 0) list.push(item); else list[index] = item;
-    this.repo.setMeta(`coordination_${key}`, JSON.stringify(list));
-  }
   private notify(nodeId: string, title: string, body: string, entityId: string) {
     this.repo.putNotification({ id: uid("NOTICE"), recipientNodeId: nodeId, type: "TASK", title, body, entityId, readAt: null, createdAt: time() });
   }
-  snapshot(viewer: CollaborationNode): CoordinationSnapshot {
-    return { intents: this.getList<IntentDraft>("intents"), changes: this.getList<CoordinationChange>("changes"),
-      readiness: Object.fromEntries(this.repo.listTasks().filter(task => !task.archived).map(task => [task.id, this.readiness(viewer, task)])) };
+  snapshot(viewer: CollaborationNode, tasks = this.repo.listTasks()): CoordinationSnapshot {
+    return { intents: this.repo.listCoordinationIntents(), changes: this.repo.listCoordinationChanges(),
+      readiness: Object.fromEntries(tasks.filter(task => !task.archived).map(task => [task.id, this.readiness(viewer, task)])) };
   }
   intent(id: string): IntentDraft {
-    const value = this.getList<IntentDraft>("intents").find(item => item.id === id);
+    const value = this.repo.getCoordinationIntent(id);
     if (!value) throw notFound("共享需求不存在"); return value;
   }
   saveIntent(node: CollaborationNode, raw: unknown, id?: string): IntentDraft {
@@ -87,7 +79,7 @@ export class CoordinationService {
       constraints: typeof input.constraints === "string" ? input.constraints.trim().slice(0, 8000) : "",
       ownerNodeId: previous?.ownerNodeId ?? node.id, revision: (previous?.revision ?? 0) + 1,
       baseRequirementRevision: this.repo.requirementRevision(), createdAt: previous?.createdAt ?? createdAt, updatedAt: createdAt, publishedStageId: null };
-    this.repo.tx(() => { this.putItem("intents", intent); this.hooks.event("intent.saved", node.id, "intent", intent.id, { revision: intent.revision }); });
+    this.repo.tx(() => { this.repo.putCoordinationIntent( intent); this.hooks.event("intent.saved", node.id, "intent", intent.id, { revision: intent.revision }); });
     return intent;
   }
   private validatePlan(raw: unknown): QuickPlanInput {
@@ -242,7 +234,7 @@ export class CoordinationService {
       this.repo.putStage(stage); contracts.forEach(contract => this.repo.putContract(contract));
       tasks.forEach(task => { this.repo.putTask(task); this.notify(task.assigneeNodeId, "收到新任务", task.title, task.id); });
       this.repo.putAlignment({ ...alignment, status: "PUBLISHED", publishedStageId: stageId });
-      this.putItem("intents", { ...intent, publishedStageId: stageId, updatedAt: at });
+      this.repo.putCoordinationIntent( { ...intent, publishedStageId: stageId, updatedAt: at });
       this.hooks.event("stage.published", node.id, "stage", stageId, { alignmentId, taskCount: tasks.length, requirementRevision: revision });
     });
     return stage;
@@ -253,11 +245,8 @@ export class CoordinationService {
     if (task.flow === "agile") throw invalidState("超敏捷任务请使用带任务包版本的 task report");
     checkRevision(task.revision, revision); return task;
   }
-  private contracts(task: StageTask): InterfaceContract[] {
-    return this.repo.listContracts().filter(contract => contract.stageId === task.stageId && contract.status !== "SUPERSEDED" &&
-      (contract.providerTaskId === task.id || contract.consumerTaskIds.includes(task.id)));
-  }
-  readiness(viewer: CollaborationNode, task: StageTask): TaskReadiness {
+  private contracts(task: StageTask): InterfaceContract[] { return this.repo.contractsForTask(task); }
+  readiness(viewer: CollaborationNode, task: StageTask, tasks = this.repo.workspaceTasks()): TaskReadiness {
     const reasons: string[] = [], codexReasons: string[] = [];
     const owner = this.repo.getNode(task.assigneeNodeId);
     if (task.archived || !["PUBLISHED", "READY", "FAILED"].includes(task.status)) reasons.push("当前状态不能开工");
@@ -267,7 +256,7 @@ export class CoordinationService {
     if (!stage || stage.status === "COMPLETED") reasons.push("需求阶段已结束");
     if (!owner || owner.revoked) reasons.push("负责人已退出房间");
     if (!owner?.workspaceReady) reasons.push("请先连接本机 Git 工作区");
-    const other = this.repo.listTasks().find(item => item.id !== task.id && !item.archived && item.assigneeNodeId === task.assigneeNodeId &&
+    const other = tasks.find(item => item.id !== task.id && !item.archived && item.assigneeNodeId === task.assigneeNodeId &&
       (activeStatuses.has(item.status) || !!item.pauseRequested || (item.executionMode === "external" && item.status === "BLOCKED")));
     if (other) reasons.push(`请先结束当前任务：${other.title}`);
     for (const edge of task.dependencyEdges ?? task.dependencies.map(upstreamTaskId => ({ upstreamTaskId, mode: "HARD", contractId: null, contractRevision: null }))) {
@@ -361,7 +350,7 @@ export class CoordinationService {
     this.repo.tx(() => { this.repo.putContract(updated); this.hooks.event("contract.acknowledged", node.id, "interface_contract", contract.id, { revision: contract.revision, status: updated.status }); });
     return updated;
   }
-  change(id: string): CoordinationChange { const change = this.getList<CoordinationChange>("changes").find(item => item.id === id); if (!change) throw notFound("变更不存在"); return change; }
+  change(id: string): CoordinationChange { const change = this.repo.getCoordinationChange(id); if (!change) throw notFound("变更不存在"); return change; }
   submitChange(node: CollaborationNode, raw: unknown): CoordinationChange {
     const input = object(raw), stage = this.repo.currentStage(); if (!stage) throw invalidState("还没有进行中的需求");
     checkRevision(stage.requirementRevision, input.expectedRequirementRevision);
@@ -371,7 +360,7 @@ export class CoordinationService {
     const change: CoordinationChange = { id: uid("CHANGE"), title: text(input.title, "变更标题", 160), content: text(input.content, "变更内容", 16000),
       submitterNodeId: node.id, stageId: stage.id, baseRequirementRevision: stage.requirementRevision, revision: 1, status: "PENDING", taskIds, contractIds,
       requirementRefs: strings(input.requirementRefs, "需求引用"), createdAt: time(), decidedAt: null, affectedTaskIds: [] };
-    this.repo.tx(() => { this.putItem("changes", change); const lead = this.repo.listNodes().find(item => item.role === "captain");
+    this.repo.tx(() => { this.repo.putCoordinationChange( change); const lead = this.repo.listNodes().find(item => item.role === "captain");
       if (lead) this.notify(lead.id, "待审核需求变更", change.title, change.id);
       this.hooks.event("coordination.change_submitted", node.id, "change", change.id, {}); }); return change;
   }
@@ -394,7 +383,7 @@ export class CoordinationService {
     const job = this.hooks.job("ASSESS_CHANGE", executor.id, change.id, { prompt, outputSchema: fields({ findings: { type: "array", items: fields({ taskId: str, impact: { enum: ["affected", "unaffected", "uncertain"] }, reason: str,
       update: { anyOf: [fields({ goal: str, boundary: str, acceptance: stringList }), { type: "null" }] } }) } }), requirementRevision: stage.requirementRevision });
     const updated: CoordinationChange = { ...change, suggestion: { jobId: job.id, status: "QUEUED", error: null, taskRevisions: Object.fromEntries(tasks.map(task => [task.id, task.revision])), findings: [] } };
-    this.repo.tx(() => { this.repo.putJob(job); this.putItem("changes", updated); this.hooks.event("coordination.impact_queued", node.id, "change", change.id, {}); }); return updated;
+    this.repo.tx(() => { this.repo.putJob(job); this.repo.putCoordinationChange( updated); this.hooks.event("coordination.impact_queued", node.id, "change", change.id, {}); }); return updated;
   }
   completeImpact(job: AgentJob, raw: unknown): void {
     const change = this.change(job.entityId), suggestion = change.suggestion;
@@ -414,11 +403,11 @@ export class CoordinationService {
       if (finding.impact === "affected" && update === null) throw badRequest("受影响任务需要具体修订草稿");
       seen.add(taskId); return { taskId, impact: finding.impact as "affected" | "unaffected" | "uncertain", reason: text(finding.reason, "影响理由", 1000), update };
     });
-    this.putItem("changes", { ...change, suggestion: { ...suggestion, status: "READY", error: null, findings } });
+    this.repo.putCoordinationChange( { ...change, suggestion: { ...suggestion, status: "READY", error: null, findings } });
   }
   failImpact(job: AgentJob, message: string): void {
     const change = this.change(job.entityId);
-    if (change.status === "PENDING" && change.suggestion?.jobId === job.id) this.putItem("changes", { ...change, suggestion: { ...change.suggestion, status: "FAILED", error: message } });
+    if (change.status === "PENDING" && change.suggestion?.jobId === job.id) this.repo.putCoordinationChange( { ...change, suggestion: { ...change.suggestion, status: "FAILED", error: message } });
   }
   impact(changeId: string): ChangeImpact {
     const change = this.change(changeId), stage = this.repo.getStage(change.stageId)!;
@@ -494,14 +483,14 @@ export class CoordinationService {
       this.repo.setRequirementRevision(revision); this.repo.setRequirementMarkdown(markdown);
       this.repo.putRequirementVersion({ revision, markdown, source: "review", sourceId: change.id, createdAt: at });
       this.repo.putStage({ ...stage, requirementRevision: revision, requirementMarkdown: markdown });
-      this.putItem("changes", applied); this.hooks.event("coordination.change_applied", node.id, "change", change.id, { affectedTaskIds: [...affected], requirementRevision: revision });
+      this.repo.putCoordinationChange( applied); this.hooks.event("coordination.change_applied", node.id, "change", change.id, { affectedTaskIds: [...affected], requirementRevision: revision });
     }); this.hooks.finish(stage.id); return applied;
   }
   rejectChange(node: CollaborationNode, id: string, expectedRevision: number): CoordinationChange {
     captain(node); const change = this.change(id); checkRevision(change.revision, expectedRevision);
     if (change.status !== "PENDING") throw invalidState("该变更已处理");
     const updated: CoordinationChange = { ...change, status: "REJECTED", revision: change.revision + 1, decidedAt: time() };
-    this.repo.tx(() => { this.putItem("changes", updated); this.notify(change.submitterNodeId, "变更已退回", change.title, change.id); this.hooks.event("coordination.change_rejected", node.id, "change", id, {}); }); this.hooks.finish(change.stageId); return updated;
+    this.repo.tx(() => { this.repo.putCoordinationChange( updated); this.notify(change.submitterNodeId, "变更已退回", change.title, change.id); this.hooks.event("coordination.change_rejected", node.id, "change", id, {}); }); this.hooks.finish(change.stageId); return updated;
   }
   acknowledgeChange(node: CollaborationNode, taskId: string, raw: unknown): StageTask {
     const input = object(raw), task = this.ownedTask(node, taskId, input.expectedRevision);

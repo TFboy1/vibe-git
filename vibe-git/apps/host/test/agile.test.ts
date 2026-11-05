@@ -1,14 +1,57 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
+import { createHash } from "node:crypto";
 import { afterEach, describe, expect, it } from "vitest";
-import { notificationResource, workspaceChanges } from "@vibe-git/protocol";
+import { allocationConflicts, notificationResource, workspaceChanges } from "@vibe-git/protocol";
 import type { AgileFlow, AgileTaskDraft, CollaborationNode, StageTask } from "@vibe-git/protocol";
 import { buildApp } from "../src/app.js";
 import type { V20Service } from "../src/v20/service.js";
 import { ensureV20Runtime } from "../src/v20/runtime-secrets.js";
 
 const apps: Awaited<ReturnType<typeof buildApp>>[] = [], roots: string[] = [];
+it("过期租约由作业模块恢复，非法错误码不改变租约，迟到开工被拒绝", async () => {
+  const { a, s, captain, plans } = await setup(); plans(); a.startInitial(captain, { expectedRequirementRevision: 0 });
+  const claimed = s.claimJob(captain)!;
+  expect(() => s.reportJob(captain, claimed.id, { leaseToken: claimed.leaseToken!, phase: "failed", errorCode: "unknown" as never })).toThrow("错误码");
+  expect(s.repo.getJob(claimed.id)!.status).toBe("LEASED");
+  s.repo.putJob({ ...claimed, leaseExpiresAt: "2000-01-01T00:00:00.000Z" });
+  s.claimJob(captain);
+  expect(s.repo.getJob(claimed.id)).toMatchObject({ status: "FAILED", leaseToken: null, leaseExpiresAt: null });
+  expect(() => s.reportJob(captain, claimed.id, { leaseToken: claimed.leaseToken!, phase: "started" })).toThrow("租约");
+});
+it("作业结果处理回滚后不广播成功，失败收敛到单一终态并隔离迟到结果", async () => {
+  const { a, s, captain, plans } = await setup(); plans();
+  const flow = a.startInitial(captain, { expectedRequirementRevision: 0 }), claimed = s.claimJob(captain)!;
+  const events: Array<{ type: string; payload: unknown }> = [], unsubscribe = s.hub.subscribe(event => events.push(event));
+  const original = a.complete.bind(a);
+  a.complete = () => {
+    s.repo.setMeta("rolled-back-result", "bad");
+    (s as unknown as { event(type: string, actor: string, kind: string, id: string, payload: unknown): unknown }).event("agile.updated", captain.id, "agile", flow.id, { rolledBack: true });
+    throw new Error("结果校验失败");
+  };
+  try {
+    const result = s.reportJob(captain, claimed.id, { leaseToken: claimed.leaseToken!, phase: "completed", result: {} });
+    await Promise.resolve();
+    expect(result.status).toBe("FAILED"); expect(result.leaseToken).toBeNull();
+    expect(s.repo.getMeta("rolled-back-result")).toBeUndefined();
+    expect(events.filter(event => event.type === "job.failed")).toHaveLength(1);
+    expect(events.some(event => event.type === "job.completed" || (event.payload as { rolledBack?: boolean })?.rolledBack)).toBe(false);
+    expect(() => s.reportJob(captain, claimed.id, { leaseToken: claimed.leaseToken!, phase: "completed", result: {} })).toThrow();
+  } finally { a.complete = original; unsubscribe(); }
+});
+it("相同需求变更重试复用原记录；介入偏好不能绕过队长权限或发布版本", async () => {
+  const { a, s, captain, member, publishInitial } = await setup();
+  publishInitial();
+  const input = { title: "增加导出", content: "支持导出 CSV", filename: "change.md", expectedRequirementRevision: 1 };
+  const first = a.submitPR(member, input);
+  expect(a.submitPR(member, input).id).toBe(first.id);
+  expect(s.repo.listPullRequests()).toHaveLength(1);
+  expect(() => a.startReview(member, { expectedRequirementRevision: 1 })).toThrow("仅限队长");
+  const review = a.startReview(captain, { expectedRequirementRevision: 1 });
+  expect(a.submitPR(member, input).id).toBe(first.id);
+  expect(() => a.publish(captain, review.id, { expectedRevision: review.revision - 1 })).toThrow("版本");
+});
 afterEach(async () => {
   for (const app of apps.splice(0)) await app.close();
   for (const root of roots.splice(0)) {
@@ -25,13 +68,20 @@ async function setup() {
   const runtime = await ensureV20Runtime(s.repo, root);
   const captain = s.repo.getNode(runtime.captain.nodeId)!;
   const joined = s.join(runtime.inviteToken, "http://localhost"), member = joined.node;
-  const beat = { workspaceReady: true, codex: "available" as const, workTransport: "auto" as const, rateLimits: [], currentTaskId: null, git: null };
+  const summary = "HEAD " + "a".repeat(40) + "\nfeatures/room\nfeatures/client\nfeatures/messages\n入口与模型由各功能独占";
+  const beat = { workspaceReady: true, codex: "available" as const, workTransport: "auto" as const, rateLimits: [], currentTaskId: null,
+    git: { branch: "main", headSha: "a".repeat(40), dirty: false, observedAt: new Date().toISOString() },
+    repositoryContext: { headSha: "a".repeat(40), dirty: false, summary, sha256: createHash("sha256").update(summary).digest("hex"), createdAt: new Date().toISOString() } };
   s.heartbeat(captain, beat); s.heartbeat(member, { ...beat, codex: "offline" });
   const latest = (flow: AgileFlow) => s.repo.getAgileFlow(flow.id)!;
   const finish = (flow: AgileFlow, result: unknown) => {
     const current = latest(flow), job = s.repo.getJob(current.agentJobId!)!;
     const node = s.repo.getNode(job.targetNodeId)!;
     const claimed = s.claimJob(node)!; expect(claimed.id).toBe(job.id);
+    if (job.kind === "AGILE_ALLOCATE" && result && typeof result === "object" && Array.isArray((result as { tasks?: unknown }).tasks)) {
+      const allocation = result as { tasks: AgileTaskDraft[] };
+      result = { contracts: [], ...result, tasks: allocation.tasks.map(t => ({ ...t, dependencyEdges: t.dependencyEdges ?? t.dependencies.map(upstreamKey => ({ upstreamKey, mode: "HARD", contractKey: null, reason: "等待实际交付" })) })) };
+    }
     const returned = s.reportJob(node, claimed.id, { leaseToken: claimed.leaseToken!, phase: "completed", result });
     return { flow: latest(flow), job: returned };
   };
@@ -41,13 +91,18 @@ async function setup() {
   };
   const task = (key: string, owner: CollaborationNode, sourceTaskId: string | null = null): AgileTaskDraft => ({
     key, sourceTaskId, title: key, goal: "实现 " + key, boundary: "仅处理 " + key, acceptance: ["后端验证通过"],
-    assigneeNodeId: owner.id, dependencies: [], ownedPaths: [], excludedPaths: [], requirementRefs: []
+    assigneeNodeId: owner.id, dependencies: [], ownedPaths: ["features/" + key], excludedPaths: [], requirementRefs: [],
+    interfaceNotes: [], integrationSteps: ["合并功能分支后执行验证"], verificationCommands: ["npm test"], mockStrategy: "", handoff: "提供分支提交及验证证据"
   });
-  const publishInitial = () => {
+  const draftAllocation = () => {
     plans(); let flow = a.startInitial(captain, { expectedRequirementRevision: 0 });
     flow = finish(flow, { summary: "计划一致", affectedTaskIds: [], decisions: [], issues: [] }).flow;
     flow = finish(flow, { summary: "首轮需求", markdown: "# 需求 R1\n\n## 房间\n支持多人计划\n\n## 客户端\n支持 Markdown" }).flow;
     flow = a.allocate(captain, flow.id, { expectedRevision: flow.revision });
+    return flow;
+  };
+  const publishInitial = () => {
+    let flow = draftAllocation();
     flow = finish(flow, { summary: "三项任务", tasks: [task("room", captain), task("client", member), task("messages", captain)], removedTaskIds: [] }).flow;
     flow = a.publish(captain, flow.id, { expectedRevision: flow.revision });
     const tasks = s.repo.listTasks(flow.stageId!);
@@ -61,13 +116,16 @@ async function setup() {
       { key: "room", title: "房间", goal: "实现多人房间", boundary: "只改房间", acceptance: ["房间可以加入"], assigneeNodeId: captain.id, dependencies: [] },
       { key: "client", title: "客户端", goal: "编辑个人计划", boundary: "只改客户端", acceptance: ["计划可以保存"], assigneeNodeId: member.id, dependencies: [] }
     ], contracts: [], issues: [] } });
-    const stage = s.publishAlignment(captain, draft.id), tasks = s.repo.listTasks(stage.id);
+    const stage = s.publishAlignment(captain, draft.id), tasks = s.repo.listTasks(stage.id).map(t => ({ ...t,
+      brief: { deliverables: t.acceptance, ownedPaths: ["features/" + t.title], excludedPaths: [], requirementRefs: [], interfaceNotes: [],
+        mockStrategy: "", integrationSteps: ["合并功能分支后执行验证"], verificationCommands: ["npm test"], handoff: "提供分支提交及验证证据" } }));
+    for (const t of tasks) s.repo.putTask(t);
     return { stage, room: tasks.find(task => task.title === "房间")!, client: tasks.find(task => task.title === "客户端")! };
   };
   const report = (owner: CollaborationNode, t: StageTask, action: "started" | "progress" | "blocked" | "completed", reportId = "report-" + Math.random()) =>
     a.report(owner, t.id, { reportId, taskRevision: t.packageRevision, requirementRevision: t.requirementRevision, action,
       summary: action + " 说明", ...(action === "completed" ? { evidence: ["vitest：全部通过"] } : {}) });
-  return { root, app, s, a, captain, member, beat, finish, latest, plans, task, publishInitial, publishLegacy, report, runtime, joined };
+  return { root, app, s, a, captain, member, beat, finish, latest, plans, task, draftAllocation, publishInitial, publishLegacy, report, runtime, joined };
 }
 function conflict(flow: AgileFlow, id = "conflict-1") {
   return { id, title: "交付范围冲突", reason: "两份计划对首轮范围有不同要求",
@@ -76,6 +134,179 @@ function conflict(flow: AgileFlow, id = "conflict-1") {
 }
 
 describe("超敏捷协作", () => {
+  it.each([1, 2, 5])("按实际 %i 人团队提供分工上下文，不把任务数绑定人数", async count => {
+    const h = await setup(), { s, a, captain, member, task, finish } = h;
+    if (count === 1) s.repo.putNode({ ...s.repo.getNode(member.id)!, revoked: true });
+    for (let i = 2; i < count; i++) s.join(h.runtime.inviteToken, "http://localhost");
+    let flow = h.draftAllocation();
+    const prompt = String(s.repo.getJob(flow.agentJobId!)!.payload.prompt);
+    const data = JSON.parse(prompt.split("<untrusted_collaboration_data>\n")[1]!.split("\n</untrusted_collaboration_data>")[0]!);
+    expect(data.team).toHaveLength(count);
+    expect(prompt).toContain("人数、任务数和并行数分别决定");
+    expect(data.repositoryContext.headSha).toBe(h.beat.git.headSha);
+    if (count > 1) expect(data.team.some((n: { id: string }) => n.id === member.id)).toBe(true);
+    flow = finish(flow, { summary: "两个完整功能；多余成员不虚构任务", tasks: [task("create", captain), task("query", count > 1 ? member : captain)], removedTaskIds: [] }).flow;
+    expect(flow.status).toBe("READY"); expect(flow.tasks).toHaveLength(2);
+    a.publish(captain, flow.id, { expectedRevision: flow.revision });
+    expect(s.repo.listTasks()).toHaveLength(2);
+  });
+
+  it("同一路径不能通过硬依赖豁免，自动重排两次后保留全部候选并阻止发布", async () => {
+    const h = await setup(), { a, s, captain, member, task, finish } = h;
+    let flow = h.draftAllocation();
+    const first = { ...task("priority", captain), ownedPaths: ["backend/app/main.py"] };
+    const second = { ...task("date", member), ownedPaths: ["backend/app/main.py"], dependencies: [first.key] };
+    for (let i = 0; i < 3; i++) {
+      const result = finish(flow, { summary: "候选 " + i, tasks: [first, second], removedTaskIds: [] });
+      flow = result.flow;
+      expect(flow.allocationAttempts).toHaveLength(i + 1);
+      expect(flow.allocationConflicts![0]!.path).toBe("backend/app/main.py");
+      expect(flow.allocationConflicts![0]!.tasks.map(t => t.key)).toEqual([first.key, second.key]);
+      expect(flow.status).toBe(i < 2 ? "PLANNING" : "FAILED");
+      if (i < 2) {
+        const prompt = String(s.repo.getJob(flow.agentJobId!)!.payload.prompt);
+        expect(prompt).toContain("backend/app/main.py"); expect(prompt).toContain("allocationFeedback");
+      }
+    }
+    expect(flow.allocationRepairCount).toBe(2);
+    expect(flow.error).toContain("自动调整两次");
+    expect(() => a.publish(captain, flow.id, { expectedRevision: flow.revision })).toThrow("请根据最新需求");
+    expect(s.repo.requirementRevision()).toBe(0); expect(s.repo.listTasks()).toHaveLength(0);
+    // The failed candidate remains editable and can be repaired without losing the requirement.
+    flow = a.saveAllocation(captain, flow.id, { expectedRevision: flow.revision, draftRevision: flow.draftRevision,
+      tasks: [first, { ...second, ownedPaths: ["backend/app/dates.py"] }], removedTaskIds: [] });
+    expect(flow.status).toBe("READY"); expect(flow.allocationConflicts).toEqual([]);
+  });
+
+  it("冲突反馈后修正为独立文件，保存和发布入口也返回具体冲突", async () => {
+    const h = await setup(), { a, s, captain, member, task, finish } = h;
+    let flow = h.draftAllocation();
+    const tasks = [{ ...task("api", captain), ownedPaths: ["src/**"] }, { ...task("client", member), ownedPaths: ["src/App.vue"] }];
+    flow = finish(flow, { summary: "有重叠", tasks, removedTaskIds: [] }).flow;
+    flow = finish(flow, { summary: "拆为独立模块，共享入口唯一负责", tasks: [tasks[0], { ...tasks[1], ownedPaths: ["frontend/client.vue"] }], removedTaskIds: [] }).flow;
+    expect(flow.status).toBe("READY"); expect(flow.allocationAttempts).toHaveLength(2);
+    for (const path of ["allocation", "publish"]) {
+      if (path === "publish") s.repo.putAgileFlow({ ...flow, tasks });
+      const response = await h.app.inject({ method: "POST", url: "/api/v1/agile/flows/" + flow.id + "/" + path,
+        headers: { authorization: "Bearer " + h.runtime.captain.nodeToken },
+        payload: { expectedRevision: flow.revision, draftRevision: flow.draftRevision, tasks, removedTaskIds: [] } });
+      expect(response.statusCode).toBe(400);
+      expect(response.json().details.conflicts[0]).toMatchObject({ path: "src/app.vue", tasks: [{ key: "api" }, { key: "client" }] });
+    }
+    expect(s.repo.requirementRevision()).toBe(0);
+  });
+
+  it("契约随任务发布，消费方可在提供方未完成时开工，真实硬依赖仍等待", async () => {
+    const h = await setup(), { a, s, captain, member, task, finish, report } = h;
+    let flow = h.draftAllocation();
+    const api = task("api", captain), ui = { ...task("ui", member), dependencies: [api.key],
+      dependencyEdges: [{ upstreamKey: api.key, mode: "CONTRACT" as const, contractKey: "todo-api", reason: "按已确定的 API 并行" }],
+      interfaceNotes: ["GET /api/todos 返回 Todo[]"], mockStrategy: "按样例提供本地 API fixture，最终换成真实实现" };
+    const contract = { key: "todo-api", providerTaskKey: api.key, consumerTaskKeys: [ui.key, "integration"], kind: "http", name: "Todo 列表", signature: "GET /api/todos -> Todo[]",
+      behavior: ["返回全部待办"], examples: ["[]"], errors: ["500 查询失败"], testCommand: "npm test", handoff: "提供 API 提交与真实集成证据" };
+    flow = finish(flow, { summary: "通过接口并行", tasks: [api, ui, { ...task("integration", captain), dependencies: [api.key, ui.key],
+      dependencyEdges: [{ upstreamKey: api.key, mode: "HARD", contractKey: "todo-api", reason: "最终集成需要真实 API 交付，同时保留接口约定引用" },
+        { upstreamKey: ui.key, mode: "HARD", contractKey: null, reason: "等待 UI 交付" }] }], contracts: [contract], removedTaskIds: [] }).flow;
+    expect(flow.status).toBe("READY");
+    flow = a.publish(captain, flow.id, { expectedRevision: flow.revision });
+    const tasks = s.repo.listTasks(), consumer = tasks.find(t => t.title === "ui")!, integration = tasks.find(t => t.title === "integration")!;
+    expect(s.repo.listContracts()[0]!.status).toBe("PUBLISHED");
+    expect(report(member, consumer, "started").status).toBe("IN_PROGRESS");
+    expect(() => report(captain, integration, "started")).toThrow("依赖任务尚未完成");
+    const pack = a.package(member, consumer.id);
+    expect(pack.nextStep).not.toContain("等待"); expect(pack.baselineSha).toBe(h.beat.git.headSha);
+    expect(pack.markdown).toContain(ui.mockStrategy); expect(pack.brief!.verificationCommands).toEqual(["npm test"]);
+    expect(pack.markdown).toContain("500 查询失败"); expect(pack.markdown).toContain("提供 API 提交与真实集成证据");
+    const c = s.repo.listContracts()[0]!; s.repo.putContract({ ...c, revision: c.revision + 1 });
+    expect(() => report(member, consumer, "progress")).toThrow("接口不可用");
+  });
+
+  it("成员加入后重排使用最新团队，成员退出后的旧归属会进入自动修正", async () => {
+    const h = await setup(), { a, s, captain, member, task, finish } = h;
+    let flow = h.draftAllocation();
+    const joined = s.join(h.runtime.inviteToken, "http://localhost").node;
+    s.repo.putNode({ ...s.repo.getNode(member.id)!, revoked: true });
+    flow = finish(flow, { summary: "旧归属", tasks: [task("feature", member)], removedTaskIds: [] }).flow;
+    expect(flow.status).toBe("PLANNING");
+    expect(flow.allocationTeam!.map(n => n.id)).toContain(joined.id);
+    expect(flow.allocationTeam!.map(n => n.id)).not.toContain(member.id);
+    flow = finish(flow, { summary: "交给当前成员", tasks: [task("feature", joined)], removedTaskIds: [] }).flow;
+    flow = a.allocate(captain, flow.id, { expectedRevision: flow.revision });
+    expect(flow.allocationTeam).toHaveLength(2);
+  });
+
+  it("仓库基线变化后旧分工被隔离，重新生成必须等待有效仓库摘要", async () => {
+    const h = await setup(), { s, a, captain, task, finish } = h;
+    const flow = h.draftAllocation();
+    s.repo.putNode({ ...s.repo.getNode(captain.id)!, git: { ...h.beat.git, headSha: "b".repeat(40) } });
+    const failed = finish(flow, { summary: "旧基线", tasks: [task("feature", captain)], removedTaskIds: [] });
+    expect(failed.job.status).toBe("FAILED"); expect(failed.flow.error).toContain("仓库基线已变化");
+    expect(() => a.retry(captain, flow.id, { expectedRevision: failed.flow.revision })).toThrow("仓库摘要尚未就绪");
+    expect(s.repo.listTasks()).toHaveLength(0);
+  });
+
+  it.each([
+    ["src/**", "SRC\\App.vue", [], 1], ["./src/./App.vue", "src/App.vue", [], 1],
+    ["src/**", "src/App.vue", ["src/App.vue"], 0], ["src", "src-old/app.vue", [], 0]
+  ] as const)("写入路径规范化和排除范围：%s / %s", async (left, right, excluded, expected) => {
+    const task = (key: string, path: string, excludedPaths: string[]) => ({ key, title: key, assigneeNodeId: key, ownedPaths: [path], excludedPaths });
+    expect(allocationConflicts([task("a", left, [...excluded]), task("b", right, [])])).toHaveLength(expected);
+  });
+
+  it("空负责范围会要求模型修正，不能静默绕过发布检查", async () => {
+    const h = await setup(); let flow = h.draftAllocation();
+    flow = h.finish(flow, { summary: "空路径", tasks: [{ ...h.task("feature", h.captain), ownedPaths: [] }], removedTaskIds: [] }).flow;
+    expect(flow.status).toBe("PLANNING"); expect(flow.allocationConflicts![0]!.reason).toContain("非空");
+  });
+
+  it("检查保留任务的写入范围，修正新增影响后才暂停对应任务并保留进度", async () => {
+    const h = await setup(), { a, s, captain, member, task, finish, report } = h;
+    const initial = h.publishInitial(); report(member, initial.client, "started");
+    const beforeProgress = s.repo.getTask(initial.client.id)!.reportEvidence;
+    const pr = a.submitPR(captain, { title: "房间历史", content: "增加历史查询", expectedRequirementRevision: 1 });
+    let flow = a.startReview(captain, { expectedRequirementRevision: 1 });
+    flow = finish(flow, { summary: "仅房间受影响", affectedTaskIds: [initial.room.id], issues: [], decisions: [{ changeId: pr.id, verdict: "accept", rationale: "补充历史" }] }).flow;
+    flow = a.requirement(captain, flow.id, { expectedRevision: flow.revision });
+    flow = finish(flow, { summary: "完整需求", markdown: "# R2\n房间历史与客户端功能" }).flow;
+    const summary = "HEAD " + "b".repeat(40) + "\nfeatures/room\nfeatures/client\nfeatures/messages";
+    s.heartbeat(s.repo.getNode(captain.id)!, { ...h.beat, git: { ...h.beat.git, headSha: "b".repeat(40) },
+      repositoryContext: { ...h.beat.repositoryContext, headSha: "b".repeat(40), summary, sha256: createHash("sha256").update(summary).digest("hex") } });
+    flow = a.allocate(captain, flow.id, { expectedRevision: flow.revision });
+    const room = { ...task("room-v2", captain, initial.room.id), ownedPaths: initial.client.brief!.ownedPaths };
+    flow = finish(flow, { summary: "遗漏保留任务", tasks: [room], removedTaskIds: [] }).flow;
+    expect(flow.status).toBe("PLANNING");
+    expect(flow.allocationConflicts![0]!.tasks.map(t => t.key)).toContain(initial.client.id);
+    expect(s.repo.getTask(initial.client.id)!.status).toBe("IN_PROGRESS");
+    flow = finish(flow, { summary: "明确调整新增影响", tasks: [room, { ...task("client-v2", member, initial.client.id), ownedPaths: ["features/new-client"] }], removedTaskIds: [] }).flow;
+    expect(flow.status).toBe("READY"); expect(s.repo.getTask(initial.client.id)!.status).toBe("PAUSED");
+    a.publish(captain, flow.id, { expectedRevision: flow.revision });
+    expect(s.repo.getTask(initial.client.id)!.status).toBe("IN_PROGRESS");
+    expect(s.repo.getTask(initial.client.id)!.reportEvidence).toEqual(beforeProgress);
+    expect(s.repo.getTask(initial.messages.id)!.brief).toEqual(initial.messages.brief);
+    expect(a.package(captain, initial.room.id).baselineSha).toBe("b".repeat(40));
+    expect(a.package(captain, initial.messages.id).baselineSha).toBe("a".repeat(40));
+  });
+
+  it("自动修正期间编辑需求会取消旧作业，迟到分工不能覆盖新正文", async () => {
+    const h = await setup(); let flow = h.draftAllocation();
+    const bad = [h.task("first", h.captain), { ...h.task("second", h.member), ownedPaths: ["features/first"] }];
+    flow = h.finish(flow, { summary: "冲突", tasks: bad, removedTaskIds: [] }).flow;
+    const job = h.s.claimJob(h.captain)!;
+    const edited = h.a.saveDraft(h.captain, flow.id, { expectedRevision: flow.revision, markdown: "# 已编辑需求\n新的完整目标" });
+    expect(edited.status).toBe("DRAFT"); expect(edited.tasks).toEqual([]); expect(edited.allocationConflicts).toEqual([]);
+    expect(() => h.s.reportJob(h.captain, job.id, { leaseToken: job.leaseToken!, phase: "completed", result: { summary: "迟到结果" } })).toThrow();
+    expect(h.s.repo.getAgileFlow(flow.id)!.draftMarkdown).toContain("已编辑需求");
+  });
+
+  it("已发布任务改派也不能重新引入跨成员写入冲突，失败保持所有任务不变", async () => {
+    const h = await setup(), initial = h.publishInitial();
+    const messages = { ...initial.messages, brief: { ...initial.messages.brief!, ownedPaths: initial.room.brief!.ownedPaths } };
+    h.s.repo.putTask(messages);
+    const response = await h.app.inject({ method: "POST", url: "/api/v1/tasks/assign", headers: { authorization: "Bearer " + h.runtime.captain.nodeToken },
+      payload: { taskIds: [messages.id], assigneeNodeId: h.member.id, expectedTaskRevisions: { [messages.id]: messages.revision } } });
+    expect(response.statusCode).toBe(400); expect(response.json().details.conflicts[0].path).toBe("features/room");
+    expect(h.s.repo.getTask(messages.id)!.assigneeNodeId).toBe(h.captain.id); expect(h.s.repo.getTask(messages.id)!.revision).toBe(messages.revision);
+  });
   it.each(["agile", "legacy"] as const)("%s 房间直接改派，保留进度证据和需求版本，旧负责人不能再汇报", async mode => {
     const { s, a, app, captain, member, runtime, joined, publishInitial, publishLegacy, report } = await setup();
     const original = mode === "agile" ? publishInitial().client : publishLegacy().client;
@@ -601,11 +832,11 @@ describe("超敏捷协作", () => {
     flow = finish(flow, { summary: "新增历史", markdown: "# 完整 R2\n房间包含历史" }).flow;
     flow = a.allocate(captain, flow.id, { expectedRevision: flow.revision });
     const copy: AgileTaskDraft = { ...task("new-key", captain, initial.room.id), title: initial.room.title, goal: initial.room.goal,
-      boundary: initial.room.boundary, acceptance: initial.room.acceptance, requirementRefs: ["房间包含历史"] };
-    const failed = finish(flow, { summary: "错误地照搬任务", tasks: [copy], removedTaskIds: [] });
-    expect(failed.job.status).toBe("FAILED"); expect(failed.flow.error).toContain("没有具体变化"); expect(failed.flow.draftMarkdown).toBe("# 完整 R2\n房间包含历史");
+      boundary: initial.room.boundary, acceptance: initial.room.acceptance, ownedPaths: initial.room.brief!.ownedPaths, requirementRefs: ["房间包含历史"] };
+    for (let attempt = 0; attempt < 3; attempt++) flow = finish(flow, { summary: "错误地照搬任务", tasks: [copy], removedTaskIds: [] }).flow;
+    expect(flow.status).toBe("FAILED"); expect(flow.error).toContain("没有具体变化"); expect(flow.draftMarkdown).toBe("# 完整 R2\n房间包含历史");
     expect(s.repo.getTask(initial.room.id)!.goal).toBe(initial.room.goal); expect(s.repo.requirementRevision()).toBe(1);
-    flow = a.retry(captain, flow.id, { expectedRevision: failed.flow.revision });
+    flow = a.retry(captain, flow.id, { expectedRevision: flow.revision });
     flow = finish(flow, { summary: "真实修订", tasks: [{ ...copy, goal: "实现多人房间和最近一轮历史" }], removedTaskIds: [] }).flow;
     expect(flow.status).toBe("READY"); expect(flow.tasks[0]!.goal).not.toBe(initial.room.goal);
   });

@@ -67,37 +67,3 @@ export function gitExecutable(env: NodeJS.ProcessEnv = process.env): string {
 
   throw new Error("未找到 Git。请安装 Git for Windows 并重新打开 Vibe-Git，或把 git.exe 的绝对路径设置为 GIT_BIN。已创建的项目文件不会丢失。");
 }
-
-export function ghExecutable(env: NodeJS.ProcessEnv = process.env): string | null {
-  const configured = env.GH_BIN?.trim();
-  if (configured && existsSync(configured)) return resolve(configured);
-
-  const pathEntries = (env.Path ?? env.PATH ?? "")
-    .split(delimiter)
-    .map((entry) => entry.replace(/^"|"$/g, ""))
-    .filter(Boolean);
-
-  for (const directory of pathEntries) {
-    const candidate = join(directory, process.platform === "win32" ? "gh.exe" : "gh");
-    if (existsSync(candidate)) return candidate;
-  }
-
-  if (process.platform === "win32") {
-    const programFiles = env.ProgramFiles || "C:\\Program Files";
-    const programFilesX86 = env["ProgramFiles(x86)"] || "C:\\Program Files (x86)";
-    const localAppData = env.LOCALAPPDATA || "";
-
-    const standardPaths = [
-      join(programFiles, "GitHub CLI", "gh.exe"),
-      join(programFilesX86, "GitHub CLI", "gh.exe"),
-      join(localAppData, "Programs", "GitHub CLI", "bin", "gh.exe"),
-      join(localAppData, "GitHub CLI", "bin", "gh.exe"),
-    ];
-
-    for (const p of standardPaths) {
-      if (existsSync(p)) return p;
-    }
-  }
-
-  return null;
-}

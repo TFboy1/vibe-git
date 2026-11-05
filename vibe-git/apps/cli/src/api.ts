@@ -23,6 +23,10 @@ export async function api<T>(config: Pick<ClientConfig, "hostUrl" | "nodeToken">
       throw new ApiError(response.status, shaped?.error || `Host 返回 ${response.status}`, shaped?.code);
     }
     return value as T;
+  } catch (error) {
+    if (error instanceof ApiError) throw error;
+    const write = !["GET", "HEAD"].includes(init.method ?? "GET");
+    throw new ApiError(0, write ? "连接中断，操作结果尚未确认" : "连接中断或响应超时", write ? "WRITE_UNCERTAIN" : controller.signal.aborted ? "TIMEOUT" : "NETWORK_ERROR");
   } finally { clearTimeout(timeout); }
 }
 

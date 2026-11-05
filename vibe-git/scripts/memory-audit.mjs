@@ -156,6 +156,50 @@ async function idleHost() {
   } finally { stalled?.destroy(); app.server.closeAllConnections(); await app.close(); }
 }
 
+async function historySnapshots() {
+  const dataDir = resolve(temp, "history-host");
+  const app = await buildApp({ dbPath: resolve(temp, "history.db"), dataDir, backupDatabase: false, staticDir: false });
+  const captain = JSON.parse(await readFile(resolve(dataDir, "captain.json"), "utf8"));
+  const service = app.v20Service, headers = { authorization: `Bearer ${captain.nodeToken}` };
+  const samples = [];
+  service.repo.putStage({ id: "audit-current", sequence: 100000, status: "ACTIVE", requirementRevision: 1, requirementMarkdown: "# 当前需求" });
+  try {
+    for (let batch = 1; batch <= 4; batch++) {
+      service.repo.tx(() => {
+        for (let i = 1; i <= 250; i++) service.repo.putRequirementVersion({ revision: (batch - 1) * 250 + i,
+          markdown: "隔离历史正文".repeat(1000), source: "alignment", sourceId: "fixture", createdAt: new Date().toISOString() });
+        for (let i = 1; i <= 250; i++) {
+          const n = (batch - 1) * 250 + i, id = "history-" + n, at = "2026-01-01T00:00:00.000Z";
+          service.repo.putStage({ id, sequence: n, status: "COMPLETED", requirementMarkdown: "历史正文".repeat(1000) });
+          service.repo.putWorkstream({ id, alignmentId: id, stageId: id, title: id });
+          service.repo.putContract({ id, alignmentId: id, stageId: id, status: "SUPERSEDED", providerTaskId: id, consumerTaskIds: [] });
+          service.repo.putPullRequest({ id, stageId: id, createdAt: at, status: "APPLIED" });
+          service.repo.putCoordinationIntent({ id, content: "历史草稿".repeat(1000), publishedStageId: id });
+          service.repo.putCoordinationChange({ id, stageId: id, createdAt: at, status: "APPLIED", content: "历史变更".repeat(1000) });
+          service.repo.putAgileFlow({ id, createdAt: at, status: "PUBLISHED", draftMarkdown: "历史需求".repeat(1000), draftHistory: [] });
+        }
+      });
+      let maxResponseBytes = 0, maxQueryMs = 0;
+      for (let round = 0; round < 20; round++) {
+        const started = performance.now();
+        const response = await app.inject({ url: "/api/v1/workspace/resources", headers });
+        maxQueryMs = Math.max(maxQueryMs, performance.now() - started);
+        assert.equal(response.statusCode, 200);
+        const snapshot = response.json().data;
+        assert.equal(snapshot.requirementVersions, undefined); assert.equal(snapshot.pullRequests.length, 0);
+        assert.equal(snapshot.agile.flows.length, 0); assert.equal(snapshot.coordination.intents.length, 0);
+        maxResponseBytes = Math.max(maxResponseBytes, Buffer.byteLength(response.body));
+      }
+      const page = (await app.inject({ url: "/api/v1/history/requirements", headers })).json();
+      assert.equal(page.items.length, 100); assert(page.items.every(item => item.markdown === undefined));
+      await immediate(); samples.push({ historiesPerKind: batch * 250, maxResponseBytes, maxQueryMs: +maxQueryMs.toFixed(2), ...memory() });
+    }
+    assert.equal(samples[0].maxResponseBytes, samples.at(-1).maxResponseBytes, "轻量快照随历史增长");
+    assert(samples.at(-1).heapUsed - samples[0].heapUsed < 8, "历史快照排空后堆内存持续增长");
+    report("history-workspace", { samples });
+  } finally { await app.close(); }
+}
+
 async function liveCodex() {
   const originalSpawn = childProcess.spawn, children = [], closed = [];
   childProcess.spawn = (...args) => {
@@ -182,7 +226,7 @@ async function liveCodex() {
 }
 
 try {
-  await activityQueue(); await slowProxy(); await idleHost();
+  await activityQueue(); await slowProxy(); await idleHost(); await historySnapshots();
   if (process.argv.includes("--live-codex")) await liveCodex();
 } finally {
   if (previousHome === undefined) delete process.env.VIBE_GIT_HOME; else process.env.VIBE_GIT_HOME = previousHome;

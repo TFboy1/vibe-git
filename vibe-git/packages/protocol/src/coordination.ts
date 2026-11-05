@@ -26,6 +26,20 @@ export interface TaskExecutionPackage {
   contracts: InterfaceContract[]; dependencies: Array<{ id: string; title: string; owner: string; status: string }>;
   ownedPaths: string[]; excludedPaths: string[]; progress: string;
   changes: string[]; nextStep: string; markdown: string;
+  baselineSha?: string | null; brief?: import("./v20.js").TaskBrief;
+  dependencyEdges?: StageTask["dependencyEdges"];
+}
+
+export function taskDependencyBlockers(task: Pick<StageTask, "dependencies" | "dependencyEdges">, tasks: StageTask[], contracts: InterfaceContract[]): string[] {
+  return task.dependencies.flatMap(id => {
+    const upstream = tasks.find(t => t.id === id);
+    if (!upstream || upstream.archived) return ["依赖任务不存在或已归档：" + id];
+    const edge = task.dependencyEdges?.find(e => e.upstreamTaskId === id);
+    const waiting = edge?.mode !== "CONTRACT" && upstream.status !== "DONE" ? ["等待前置任务实际交付：" + upstream.title] : [];
+    if (edge?.mode !== "CONTRACT" && !edge?.contractId) return waiting;
+    const contract = contracts.find(c => c.id === edge.contractId);
+    return contract?.status === "PUBLISHED" && contract.revision === edge.contractRevision ? waiting : [...waiting, "等待接口更新：" + (contract?.name ?? edge.contractId)];
+  });
 }
 export interface TaskChangeContent {
   goal: string; boundary: string; acceptance: string[];

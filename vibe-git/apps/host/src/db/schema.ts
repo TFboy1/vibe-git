@@ -5,66 +5,11 @@ CREATE TABLE IF NOT EXISTS meta (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
 );
-CREATE TABLE IF NOT EXISTS requirements (
-  id TEXT PRIMARY KEY,
-  data TEXT NOT NULL
+CREATE TABLE IF NOT EXISTS coordination_intents (id TEXT PRIMARY KEY, data TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS coordination_changes (
+  id TEXT PRIMARY KEY, stage_id TEXT NOT NULL, status TEXT NOT NULL, created_at TEXT NOT NULL, data TEXT NOT NULL
 );
-CREATE TABLE IF NOT EXISTS requirement_revisions (
-  revision INTEGER PRIMARY KEY,
-  data TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS tasks (
-  id TEXT PRIMARY KEY,
-  data TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS change_requests (
-  id TEXT PRIMARY KEY,
-  data TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS conflicts (
-  id TEXT PRIMARY KEY,
-  data TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS conflict_reviews (
-  id TEXT PRIMARY KEY,
-  data TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS git_references (
-  task_id TEXT PRIMARY KEY,
-  data TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS work_unit_git_references (
-  work_unit_id TEXT PRIMARY KEY,
-  data TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS devices (
-  member_id TEXT PRIMARY KEY,
-  data TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS execution_leases (
-  id TEXT PRIMARY KEY,
-  idempotency_key TEXT NOT NULL UNIQUE,
-  data TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS execution_commands (
-  id TEXT PRIMARY KEY,
-  data TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS proposals (id TEXT PRIMARY KEY, data TEXT NOT NULL);
-CREATE TABLE IF NOT EXISTS consensus_revisions (id TEXT PRIMARY KEY, data TEXT NOT NULL);
-CREATE TABLE IF NOT EXISTS delegation_policies (id TEXT PRIMARY KEY, data TEXT NOT NULL);
-CREATE TABLE IF NOT EXISTS decision_records (id TEXT PRIMARY KEY, data TEXT NOT NULL);
-CREATE TABLE IF NOT EXISTS modules (id TEXT PRIMARY KEY, data TEXT NOT NULL);
-CREATE TABLE IF NOT EXISTS work_units (id TEXT PRIMARY KEY, data TEXT NOT NULL);
-CREATE TABLE IF NOT EXISTS plan_reviews (id TEXT PRIMARY KEY, data TEXT NOT NULL);
-CREATE TABLE IF NOT EXISTS idea_reviews (id TEXT PRIMARY KEY, data TEXT NOT NULL);
-CREATE TABLE IF NOT EXISTS issues (id TEXT PRIMARY KEY, data TEXT NOT NULL);
-CREATE TABLE IF NOT EXISTS milestones (id TEXT PRIMARY KEY, data TEXT NOT NULL);
-CREATE TABLE IF NOT EXISTS freeze_policies (id TEXT PRIMARY KEY, data TEXT NOT NULL);
-CREATE TABLE IF NOT EXISTS freeze_exceptions (id TEXT PRIMARY KEY, data TEXT NOT NULL);
-CREATE TABLE IF NOT EXISTS execution_decisions (id TEXT PRIMARY KEY, data TEXT NOT NULL);
-CREATE TABLE IF NOT EXISTS evidence_bundles (id TEXT PRIMARY KEY, data TEXT NOT NULL);
-CREATE TABLE IF NOT EXISTS acceptance_records (id TEXT PRIMARY KEY, data TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS coordination_changes_stage_status ON coordination_changes(stage_id, status);
 CREATE TABLE IF NOT EXISTS v20_nodes (
   id TEXT PRIMARY KEY,
   credential_hash TEXT NOT NULL UNIQUE,
@@ -153,11 +98,14 @@ CREATE TABLE IF NOT EXISTS events (
   payload TEXT NOT NULL,
   created_at TEXT NOT NULL
 );
-CREATE TABLE IF NOT EXISTS idempotency (
-  request_id TEXT PRIMARY KEY,
-  operation TEXT NOT NULL,
-  response TEXT NOT NULL,
-  created_at TEXT NOT NULL
-);
 CREATE TABLE IF NOT EXISTS agile_flows (id TEXT PRIMARY KEY, created_at TEXT NOT NULL, data TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS coordination_changes_status ON coordination_changes(status,created_at);
+CREATE INDEX IF NOT EXISTS coordination_open_intents ON coordination_intents(id) WHERE json_extract(data,'$.publishedStageId') IS NULL;
+CREATE INDEX IF NOT EXISTS v20_workstreams_stage ON v20_workstreams(stage_id);
+CREATE INDEX IF NOT EXISTS v20_contracts_stage ON v20_interface_contracts(stage_id);
+CREATE INDEX IF NOT EXISTS v20_active_stages ON v20_stages(sequence) WHERE json_extract(data,'$.status') != 'COMPLETED';
+CREATE INDEX IF NOT EXISTS v20_active_tasks ON v20_stage_tasks(stage_id,id) WHERE coalesce(json_extract(data, '$.archived'),0) = 0 AND json_extract(data, '$.status') != 'DONE';
+CREATE INDEX IF NOT EXISTS v20_open_changes ON v20_pull_requests(created_at) WHERE json_extract(data,'$.status') IN ('QUEUED','IN_REVIEW');
+CREATE INDEX IF NOT EXISTS agile_active_flows ON agile_flows(created_at) WHERE json_extract(data, '$.status') NOT IN ('PUBLISHED','CANCELLED','REJECTED');
+CREATE INDEX IF NOT EXISTS v20_active_alignments ON v20_alignments(created_at) WHERE json_extract(data,'$.publishedStageId') IS NULL AND json_extract(data,'$.status') NOT IN ('PUBLISHED','CANCELLED');
 `;

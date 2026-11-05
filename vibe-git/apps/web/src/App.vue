@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
-import { notificationResource } from "@vibe-git/protocol";
+import { recoveryAdvice, notificationResource } from "@vibe-git/protocol";
 import type { NotificationResource } from "@vibe-git/protocol";
 import { useWorkspace } from "./store";
 import { useRepository } from "./repository";
 import { taskStatus } from "./team";
+import { request } from "./api";
 import Icon from "./components/Icon.vue";
 import ProjectSwitcher from "./components/ProjectSwitcher.vue";
 import AnalysisActivity from "./components/AnalysisActivity.vue";
@@ -17,7 +18,7 @@ const entries = [
   { path: "/requirements", icon: "book", text: "需求", title: "团队需求与可选想法", section: "requirements" },
   { path: "/projects", icon: "project", text: "任务", title: "任务与分工", section: "projects" },
   { path: "/issues", icon: "issue", text: "变更", title: "需求变更与审核", section: "issues" },
-  { path: "/settings", icon: "settings", text: "设置", title: "算力与团队设置", section: "settings" }
+  { path: "/settings", icon: "settings", text: "设置", title: "AI 连接与团队设置", section: "settings" }
 ];
 const unread = computed(() => store.data?.notifications.filter(note => !note.readAt).length ?? 0);
 const notifications = computed(() => store.data?.notifications.map(note => ({ note, resource: notificationResource(note, store.data!) })) ?? []);
@@ -30,7 +31,17 @@ function viewNotification(resource: NotificationResource) {
     resource.kind === "requirement" ? { path: "/requirements", query: { revision: resource.id } } : { path: "/plans", query: { plan: resource.id } };
   void router.push(target); inboxOpen.value = false;
 }
-function toggleInbox() { inboxOpen.value = !inboxOpen.value; if (inboxOpen.value) void store.refresh().catch(e => { store.error = e instanceof Error ? e.message : String(e); }); }
+const errorAdvice = computed(() => store.recovery ?? recoveryAdvice());
+async function resolveNotification(id: string) {
+  try { const resource = await request<NotificationResource | null>("/api/v1/notifications/" + encodeURIComponent(id) + "/resource"); if (resource) viewNotification(resource); else store.notice = "关联记录暂不可用，原消息仍保留"; }
+  catch (e) { store.reportError(e); }
+}
+async function recover() {
+  if (!store.connected) { await store.start(); return; }
+  try { await store.refresh(); store.error = ""; store.recovery = null; if (store.local) await store.refreshStartup(); }
+  catch (e) { store.reportError(e); }
+}
+function toggleInbox() { inboxOpen.value = !inboxOpen.value; if (inboxOpen.value) void store.refresh(["notifications"]).catch(e => { store.reportError(e); }); }
 function find() {
   if (!searchPlaceholder.value) return;
   const query = { ...route.query };
@@ -68,20 +79,20 @@ onBeforeUnmount(() => { store.stop(); clearTimeout(noticeTimer); window.removeEv
       <nav class="repository-nav" aria-label="仓库导航"><RouterLink v-for="entry in entries" :key="entry.path" :to="entry.path" :title="entry.title" :class="{ active: route.meta.section === entry.section }" :aria-current="route.meta.section === entry.section ? 'page' : undefined"><Icon :name="entry.icon" :size="20" /><span>{{ entry.text }}</span><b v-if="entry.section === 'issues' && store.pendingChanges.length" class="nav-count">{{ store.pendingChanges.length }}</b><b v-if="entry.section === 'projects' && activeTasks" class="nav-count">{{ activeTasks }}</b></RouterLink></nav>
     </header>
     <main class="repository-main">
-      <div v-if="store.error" class="global-error" role="alert"><span>{{ store.error }}</span><button class="icon-btn" aria-label="关闭错误提示" @click="store.error = ''"><Icon name="close" :size="16" /></button></div>
+      <div v-if="store.error" class="global-error" role="alert"><div><strong>{{ errorAdvice.title }}</strong><p>{{ store.error }}</p><small>{{ errorAdvice.preserved }}</small><p>下一步：{{ errorAdvice.next }}</p><button v-if="errorAdvice.syncFirst" class="text-button" :disabled="store.busy" @click="recover">同步实际状态</button></div><button class="icon-btn" aria-label="关闭错误提示" @click="store.error = ''"><Icon name="close" :size="16" /></button></div>
       <div v-if="!store.ready" class="loading-page"><span class="working-dot"></span><p>正在连接协作房间…</p></div>
       <section v-else-if="!store.data" class="connection-page paper"><Icon name="code" :size="32" /><h1>进入你的团队工作区</h1><p>成员先使用邀请命令连接本机项目，再运行命令打开工作台。</p><code>vibe-git open</code><button class="btn primary" @click="store.start()">重新连接 <Icon name="arrow" /></button></section>
       <template v-else>
         <section class="repository-title-row"><div class="repository-title"><Icon name="book" :size="23" /><RouterLink to="/">{{ repository.name }}</RouterLink><span class="repo-visibility">Team</span></div><div class="repository-actions"><span class="connection-label"><i class="presence" :class="{ online: store.connected }"></i>{{ store.connected ? '实时同步' : '连接恢复中' }}</span><span class="repository-stat"><Icon name="people" :size="16" />{{ store.data.nodes.filter(node => !node.revoked).length }} 位成员</span><span class="repository-stat"><Icon name="document" :size="16" />{{ store.data.room.requirementRevision ? '需求 R' + store.data.room.requirementRevision : '首轮计划' }}</span></div></section>
         <div v-if="!store.local" class="legacy-notice">请在自己的电脑运行 <code>vibe-git open</code>，进入可编辑的本机工作台。</div>
         <nav v-if="route.meta.section === 'requirements'" class="code-subnav" aria-label="需求视图"><RouterLink to="/requirements" :class="{ active: route.path === '/requirements' }" :aria-current="route.path === '/requirements' ? 'page' : undefined">团队需求</RouterLink><RouterLink to="/plans" :class="{ active: route.path === '/plans' }" :aria-current="route.path === '/plans' ? 'page' : undefined">可选想法</RouterLink></nav>
-        <div v-if="(store.agileEnabled || store.flow) && ['code', 'requirements', 'projects', 'issues'].includes(String(route.meta.section))" class="phase-rail" aria-label="协作流程"><div v-for="(step, i) in steps" :key="step" :class="{ current: i === stage, completed: i < stage }" :aria-current="i === stage ? 'step' : undefined"><span>{{ i < stage ? '✓' : i + 1 }}</span>{{ step }}<i></i></div></div>
+        <details v-if="(store.agileEnabled || store.flow) && ['requirements', 'projects', 'issues'].includes(String(route.meta.section))" class="paper workspace-disclosure phase-details"><summary><Icon name="tasks" :size="17" /><strong>协作阶段</strong><span>{{ steps[stage] }}</span><Icon name="chevron" :size="15" /></summary><div class="disclosure-body"><div class="phase-rail" aria-label="协作流程"><div v-for="(step, i) in steps" :key="step" :class="{ current: i === stage, completed: i < stage }" :aria-current="i === stage ? 'step' : undefined"><span>{{ i < stage ? '✓' : i + 1 }}</span>{{ step }}<i></i></div></div></div></details>
         <RouterView />
       </template>
     </main>
     <AnalysisActivity />
     <footer class="repository-footer"><span class="footer-brand">vg</span><span>Vibe-Git · 团队协作工作台</span></footer>
     <div v-if="store.notice" class="toast" role="status"><Icon name="check" />{{ store.notice }}</div>
-    <div v-if="inboxOpen" class="drawer-backdrop" @click.self="inboxOpen = false"><aside class="notification-drawer" aria-label="协作消息"><header class="section-head"><h2>Inbox <span class="count">{{ unread }}</span></h2><button class="icon-btn" aria-label="关闭消息" @click="inboxOpen = false"><Icon name="close" /></button></header><p class="muted small-text">消息保留事件记录，关联状态随房间同步。</p><div v-if="!notifications.length" class="empty-state">暂时没有消息。</div><article v-for="item in notifications" :key="item.note.id" class="notification-item" :class="{ unread: !item.note.readAt }"><small>{{ new Date(item.note.createdAt).toLocaleString('zh-CN') }}</small><h3>{{ item.note.title }}</h3><p>{{ item.note.body }}</p><div v-if="item.resource" class="notification-context"><span class="tag">当前状态 · {{ resourceStatus(item.resource) }}</span><button class="text-button" @click="viewNotification(item.resource)">查看{{ item.resource.kind === 'change' ? 'Issue' : item.resource.kind === 'task' ? '任务包' : item.resource.kind === 'plan' ? '个人计划' : '需求文档' }} <Icon name="arrow" :size="13" /></button></div><button v-if="!item.note.readAt && store.local" class="text-button" @click="store.mutate('/api/v1/notifications/' + item.note.id + '/read', {}, '', 'POST')">标为已读</button></article></aside></div>
+    <div v-if="inboxOpen" class="drawer-backdrop" @click.self="inboxOpen = false"><aside class="notification-drawer" aria-label="协作消息"><header class="section-head"><h2>Inbox <span class="count">{{ unread }}</span></h2><button class="icon-btn" aria-label="关闭消息" @click="inboxOpen = false"><Icon name="close" /></button></header><p class="muted small-text">消息保留事件记录，关联状态随房间同步。</p><div v-if="!notifications.length" class="empty-state">暂时没有消息。</div><article v-for="item in notifications" :key="item.note.id" class="notification-item" :class="{ unread: !item.note.readAt }"><small>{{ new Date(item.note.createdAt).toLocaleString('zh-CN') }}</small><h3>{{ item.note.title }}</h3><p>{{ item.note.body }}</p><div v-if="item.resource" class="notification-context"><span class="tag">当前状态 · {{ resourceStatus(item.resource) }}</span><button class="text-button" @click="viewNotification(item.resource)">查看{{ item.resource.kind === 'change' ? '需求变更' : item.resource.kind === 'task' ? '任务包' : item.resource.kind === 'plan' ? '个人计划' : '需求文档' }} <Icon name="arrow" :size="13" /></button></div><button v-if="!item.resource && item.note.entityId" class="text-button" @click="resolveNotification(item.note.id)">查看关联记录</button><button v-if="!item.note.readAt && store.local" class="text-button" @click="store.mutate('/api/v1/notifications/' + item.note.id + '/read', {}, '', 'POST')">标为已读</button></article></aside></div>
   </div>
 </template>

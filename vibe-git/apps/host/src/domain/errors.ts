@@ -17,3 +17,7 @@ export const notFound = (message: string) => new DomainError(404, "NOT_FOUND", m
 export const revisionConflict = (message: string, details?: unknown) => new DomainError(409, "REVISION_CONFLICT", message, details);
 export const invalidState = (message: string, details?: unknown) => new DomainError(409, "INVALID_STATE", message, details);
 export const unavailable = (message: string, details?: unknown) => new DomainError(409, "CAPABILITY_UNAVAILABLE", message, details);
+export function requireCaptain(node: { role: string }): void { if (node.role !== "captain") throw forbidden("该操作仅限队长"); }
+export function assertRevision(actual: number, expected: unknown): void {
+  if (!Number.isInteger(expected) || actual !== expected) throw revisionConflict("版本已变化，请查看最新内容后重试", { actual });
+}

@@ -1,8 +1,9 @@
 import { computed, ref, watch } from "vue";
 import { defineStore } from "pinia";
-import { workspaceChanges } from "@vibe-git/protocol";
-import type { AgileFlow, LocalComputeStatus, LocalCodexStatus, LocalProjects, MarkdownDocument, RoomEvent, StageTask, V20BootstrapPayload } from "@vibe-git/protocol";
-import { request } from "./api";
+import { recoveryAdvice, WORKSPACE_RESOURCES, resourcesForEvent, workspaceChanges } from "@vibe-git/protocol";
+import type { AgileFlow, StartupStatus, RecoveryAdvice, WorkspaceResource, WorkspaceResources, CollaborationPreference, LocalComputeStatus, LocalCodexStatus, LocalProjects, MarkdownDocument, StageTask, V20BootstrapPayload } from "@vibe-git/protocol";
+import { workspaceConnection } from "./connection";
+import { useActivities } from "./activities";
 import { taskNextStep } from "./team";
 
 export interface LocalProject {
@@ -10,11 +11,15 @@ export interface LocalProject {
 }
 
 export const useWorkspace = defineStore("workspace", () => {
+  const connection = workspaceConnection();
+  const request = connection.request;
+  const startup = ref<StartupStatus | null>(null), recovery = ref<RecoveryAdvice | null>(null);
+  const preference = ref<CollaborationPreference>({ mode: "assisted", configured: false });
   const data = ref<V20BootstrapPayload | null>(null), ready = ref(false), local = ref(false), connected = ref(false);
   const project = ref<LocalProject | null>(null), projectError = ref(""), chatAvailable = ref(false);
   const connections = ref<LocalProjects | null>(null);
   const error = ref(""), notice = ref(""), pending = ref(0);
-  const projectSwitching = ref(false), activities = ref<RoomEvent[]>([]), activityError = ref(""), moreActivities = ref(false);
+  const projectSwitching = ref(false);
   const draftSavers = new Set<() => Promise<boolean>>();
   const compute = ref<LocalComputeStatus | null>(null), computeError = ref(""), codex = ref<LocalCodexStatus | null>(null);
   const captain = computed(() => data.value?.viewer.role === "captain");
@@ -23,17 +28,8 @@ export const useWorkspace = defineStore("workspace", () => {
   const batchReviewEnabled = computed(() => agileEnabled.value || data.value?.agile?.batchReviewEnabled === true);
   const flow = computed(() => data.value?.agile?.activeFlow ?? null);
   const activityFlow = computed(() => flow.value ?? data.value?.agile?.flows.at(-1) ?? null);
-  async function loadActivities(older = false) {
-    const current = activityFlow.value, roomId = data.value?.room.id;
-    if (!current) return;
-    try {
-      const result = await request<{ events: RoomEvent[]; hasMore: boolean }>("/api/v1/agile/flows/" + current.id + "/activity" + (older && activities.value[0] ? "?before=" + activities.value[0].seq : ""));
-      if (roomId !== data.value?.room.id || current.id !== activityFlow.value?.id) return;
-      activities.value = [...new Map([...result.events, ...activities.value].map(event => [event.seq, event])).values()].sort((a, b) => a.seq - b.seq);
-      moreActivities.value = result.hasMore; activityError.value = "";
-    } catch (e) { activityError.value = e instanceof Error ? e.message : String(e); }
-  }
-  watch(() => [data.value?.room.id, activityFlow.value?.id], () => { activities.value = []; moreActivities.value = false; if (activityFlow.value) void loadActivities(); });
+  const { activities, moreActivities, activityError, browsingActivities, newActivities, loadingActivities, loadActivities, receiveActivity } = useActivities(
+    () => ({ room: data.value?.room.id, flow: activityFlow.value?.id }), connection);
   function registerDraftSaver(save: () => Promise<boolean>) { draftSavers.add(save); return () => draftSavers.delete(save); }
   async function saveProjectDrafts(): Promise<boolean> {
     if (busy.value) { error.value = "当前操作尚未完成，请稍后切换"; return false; }
@@ -111,7 +107,7 @@ export const useWorkspace = defineStore("workspace", () => {
     if (planDraftConflict.value) return "本机草稿与已提交版本不同，请先导出草稿并核对已提交内容。";
     if (planDraftDirty.value && !planDraft.value.trim()) return "目标或想法为空，请填写内容或恢复已提交内容。";
     if (!planDraft.value.trim() && !data.value?.plans.length) return "先简述一个目标，或导入已有 Markdown。";
-    if (!computeAvailable.value) return "协作算力尚未就绪，请在设置中配置后继续。";
+    if (!computeAvailable.value) return "AI 连接尚未就绪，请在设置中配置后继续。";
     return "";
   });
   const myTasks = computed(() => (data.value?.tasks ?? []).filter(task => !task.archived && task.assigneeNodeId === data.value?.viewer.id && task.status !== "DONE")
@@ -128,84 +124,122 @@ export const useWorkspace = defineStore("workspace", () => {
     if (current) {
       if (current.status === "FAILED") return { title: "本次分析需要重试", body: current.error ?? "回答与草稿已保留，请进入原流程继续。", path: flowPath, label: "处理失败" };
       if (current.status === "DECIDING") return { title: "有待确认的需求问题", body: "比较各方案的取舍，选择一个或写下自己的决定。", path: flowPath, label: "继续确认" };
+      if (preference.value.mode === "automatic" && ["DRAFT", "READY"].includes(current.status)) return { title: current.status === "DRAFT" ? "需求已整理，可以继续生成分工" : "分工已就绪，可以继续派发", body: "Codex 会在当前授权内继续推进；会话未运行时不会自行开工。你可以查看结果或人工接管。", path: current.status === "DRAFT" ? "/requirements" : "/projects", label: "查看结果与接管" };
       if (current.status === "DRAFT") return { title: "需求草稿已就绪", body: "审核正文，再生成分工；正式需求与任务包将在最后一起发布。", path: "/requirements", label: "审核需求" };
       if (current.status === "READY") return { title: "分工已就绪，等待你发布", body: "检查负责人、目标、边界与验收，一次发布需求和任务包。", path: "/projects", label: "审核并发布" };
       return { title: current.status === "PLANNING" ? "AI 正在生成分工" : "AI 正在整理需求", body: "已提交的内容与决定会保留，可以稍后回到当前流程。", path: flowPath, label: "查看进度" };
     }
-    if (!data.value?.room.requirementRevision) return { title: "从一个目标开始", body: "简述希望解决的问题，AI 会用选择题补齐关键需求。成员可以按需补充想法。", path: "/requirements", label: "创建需求" };
+    if (!data.value?.room.requirementRevision) return { title: "从一个目标开始", body: "简述希望解决的问题，AI 只会追问影响方向的关键问题。成员可以按需补充想法。", path: "/requirements", label: "创建需求" };
     if (pendingChanges.value.length) return { title: pendingChanges.value.length + " 项需求变更待审核", body: "选择本轮要处理的变更，统一分析影响并形成新版需求。", path: "/issues", label: "处理需求变更" };
     return { title: "团队正在按正式需求开发", body: "查看任务进度、依赖和阻碍；需要调整目标时提交需求变更。", path: "/projects", label: "查看团队任务" };
   });
-  let events: EventSource | null = null, refreshTimer: ReturnType<typeof setTimeout> | undefined;
-  let refreshPromise: Promise<void> | null = null, refreshAgain = false;
-  async function refresh(): Promise<void> {
-    if (refreshPromise) { refreshAgain = true; return refreshPromise; }
-    refreshPromise = (async () => {
-      do {
-        refreshAgain = false;
-        const received = await request<V20BootstrapPayload>("/api/v1/bootstrap");
-        if (projectSwitching.value) return;
-        if (data.value && data.value.room.id !== received.room.id) { window.location.replace("/"); return; }
-        data.value = received;
-        if (local.value && captain.value) await refreshCompute();
-      } while (refreshAgain);
+  let refreshPromise: Promise<void> | null = null;
+  const dirtyResources = new Set<WorkspaceResource>();
+  async function refresh(names: readonly WorkspaceResource[] = WORKSPACE_RESOURCES): Promise<void> {
+    for (const name of names) dirtyResources.add(name);
+    if (refreshPromise) return refreshPromise;
+    const signal = connection.signal;
+    const promise = (async () => {
+      while (dirtyResources.size && !signal.aborted) {
+        const requested = [...dirtyResources]; dirtyResources.clear();
+        const received = await request<WorkspaceResources>("/api/v1/workspace/resources?names=" + requested.join(","));
+        if (signal.aborted || projectSwitching.value) return;
+        if (data.value && data.value.room.id !== received.roomId) { window.location.replace("/"); return; }
+        const previous: V20BootstrapPayload = data.value ?? {
+          room: received.data.room!, viewer: received.data.viewer!, nodes: [], plans: [], modules: [], moduleRevision: 0,
+          alignments: [], stages: [], tasks: [], workstreams: [], contracts: [], pullRequests: [], reviews: [],
+          requirementVersions: [], alignmentDraftVersions: [], alignmentReads: [], notifications: [],
+          auditPool: { online: 0, available: 0, busy: 0 }, tunnel: null
+        };
+        data.value = { ...previous, ...received.data,
+          room: { ...(received.data.room ?? previous.room), seq: received.seq },
+          coordination: { intents: [], changes: [], readiness: {}, ...previous.coordination, ...received.data.coordination }
+        };
+      }
     })();
-    try { await refreshPromise; } finally { refreshPromise = null; }
+    refreshPromise = promise;
+    try { await promise; } finally { if (refreshPromise === promise) refreshPromise = null; }
   }
   async function start() {
-    stop();
+    stop(); connection.reset();
+    error.value = ""; recovery.value = null;
+    const signal = connection.signal;
     try {
       await refresh();
+      if (signal.aborted) return;
       try { const capabilities = await request<{ local: boolean; chat: boolean }>("/api/local/capabilities"); local.value = capabilities.local; chatAvailable.value = capabilities.chat; }
-      catch { local.value = false; chatAvailable.value = false; }
-      if (local.value) await refreshProject();
+      catch { if (!signal.aborted) { local.value = false; chatAvailable.value = false; } }
+      if (signal.aborted) return;
+      if (local.value) {
+        await refreshProject(); if (signal.aborted) return;
+        preference.value = await request<CollaborationPreference>("/api/local/preference");
+      }
+      if (signal.aborted) return;
       if (local.value) { try { connections.value = await request<LocalProjects>("/api/local/projects"); } catch { /* older local panels still display the working directory */ } }
       if (local.value && captain.value) await refreshCompute();
+      if (signal.aborted) return;
       ready.value = true;
-      events = new EventSource("/api/v1/events?since=" + data.value!.room.seq);
-      events.onopen = () => { connected.value = true; void refresh().catch(() => undefined); };
-      events.onerror = () => { connected.value = false; };
-      events.onmessage = event => {
-        try {
-          const value = JSON.parse(event.data) as RoomEvent;
-          if (projectSwitching.value) return;
-          if (data.value) data.value.room.seq = value.seq;
-          const payload = value.payload as { flowId?: string };
-          if (payload?.flowId === activityFlow.value?.id || (value.entityType === "agile" && value.entityId === activityFlow.value?.id)) {
-            activities.value = [...new Map([...activities.value, value].map(item => [item.seq, item])).values()].sort((a, b) => a.seq - b.seq);
-          }
-          if (value.type === "job.progress") return;
-          clearTimeout(refreshTimer);
-          refreshTimer = setTimeout(() => void refresh().catch(e => { error.value = message(e); }), 100);
-        } catch { /* reconnect will restore a full snapshot */ }
-      };
-    } catch (e) { error.value = message(e); ready.value = true; }
+      if (local.value) void refreshStartup();
+      void loadActivities();
+      connection.listen(data.value!.room.seq, value => {
+        if (projectSwitching.value) return;
+        if (data.value) data.value.room.seq = value.seq;
+        const payload = value.payload as { flowId?: string };
+        if (payload?.flowId === activityFlow.value?.id || (value.entityType === "agile" && value.entityId === activityFlow.value?.id)) receiveActivity(value);
+        const resources = resourcesForEvent(value.type);
+        if (resources === null) for (const name of WORKSPACE_RESOURCES) dirtyResources.add(name);
+        else for (const name of resources) dirtyResources.add(name);
+        if (dirtyResources.size) connection.schedule(() => void refresh([]).catch(e => { if (!signal.aborted) error.value = message(e); }));
+        if (value.type === "agile.compute" && local.value && captain.value) void refreshCompute();
+      }, () => { connected.value = true; void refresh().catch(() => undefined); }, () => { connected.value = false; });
+    } catch (e) { if (!signal.aborted) { error.value = message(e); ready.value = true; } }
   }
   async function refreshProject() {
+    const signal = connection.signal;
     try { project.value = await request<LocalProject>("/api/local/workspace"); projectError.value = ""; }
-    catch (e) { projectError.value = message(e); }
+    catch (e) { if (!signal.aborted) projectError.value = message(e); }
   }
   async function refreshCompute(includeCodex = false) {
+    const signal = connection.signal;
     try { compute.value = await request<LocalComputeStatus>("/api/local/compute"); computeError.value = ""; }
-    catch (e) { computeError.value = message(e); }
+    catch (e) { if (!signal.aborted) computeError.value = message(e); }
     if (includeCodex) {
       try {
         codex.value = await request<LocalCodexStatus>("/api/local/codex");
         const capabilities = await request<{ chat: boolean }>("/api/local/capabilities"); chatAvailable.value = capabilities.chat;
       }
-      catch (e) { computeError.value = message(e); }
+      catch (e) { if (!signal.aborted) computeError.value = message(e); }
     }
   }
-  function stop() { events?.close(); events = null; clearTimeout(refreshTimer); }
-  function message(e: unknown) { return e instanceof Error ? e.message : String(e); }
+  async function refreshStartup() {
+    const signal = connection.signal;
+    try { startup.value = await request<StartupStatus>("/api/local/startup"); preference.value = startup.value.preference; }
+    catch (e) { if (!signal.aborted) { error.value = message(e); } }
+  }
+  function stop() { connection.stop(); refreshPromise = null; dirtyResources.clear(); connected.value = false; }
+  async function savePreference(mode: CollaborationPreference["mode"]) {
+    const saved = await perform(() => request<CollaborationPreference>("/api/local/preference", { mode }, "PUT"), "介入偏好已保存");
+    if (saved) { preference.value = saved; await refreshStartup(); }
+  }
+  function message(e: unknown) { const value = e as { code?: string; status?: number; recovery?: RecoveryAdvice }; recovery.value = value?.recovery ?? recoveryAdvice(value?.code, value?.status); return e instanceof Error ? e.message : String(e); }
+  function reportError(reason: unknown) { if (!connection.signal.aborted) error.value = message(reason); }
   async function perform<T>(work: () => Promise<T>, success = ""): Promise<T | null> {
-    pending.value++; error.value = "";
+    const signal = connection.signal;
+    pending.value++; error.value = ""; recovery.value = null;
     try {
       const result = await work();
-      await refresh();
+      if (signal.aborted) return null;
+      try { await refresh(); }
+      catch (e) { if (!signal.aborted) error.value = "操作已收到成功回执，但状态同步失败：" + message(e); }
       if (success) notice.value = success;
       return result;
-    } catch (e) { error.value = message(e); return null; }
+    } catch (e) {
+      if (!signal.aborted) {
+        if ((e as { code?: string }).code === "WRITE_UNCERTAIN") await refresh().catch(() => undefined);
+        error.value = message(e);
+      }
+      return null;
+    }
     finally { pending.value--; }
   }
   const mutate = <T = AgileFlow>(path: string, body: unknown, success = "", method = "POST") =>
@@ -249,7 +283,7 @@ export const useWorkspace = defineStore("workspace", () => {
   }
   function name(id: string) { return data.value?.nodes.find(n => n.id === id)?.label ?? id.slice(-6); }
   return { data, ready, local, connected, error, notice, captain, canManage, agileEnabled, batchReviewEnabled, reviewStage, flow, changes, pendingChanges, pendingPRs, busy,
-    projectSwitching, activityFlow, activities, activityError, moreActivities, loadActivities, assignmentBlocker, registerDraftSaver, saveProjectDrafts,
+    reportError, startup, refreshStartup, recovery, preference, savePreference, browsingActivities, newActivities, loadingActivities, projectSwitching, activityFlow, activities, activityError, moreActivities, loadActivities, assignmentBlocker, registerDraftSaver, saveProjectDrafts,
     project, connections, projectError, chatAvailable, refreshProject, compute, codex, computeError, provider, computeLabel, computeAvailable, refreshCompute, start, stop, refresh, perform, mutate, checkRequirementDraft, generateAllocation, name,
     ownPlan, planDraft, planDraftDirty, planDraftConflict, editPlanDraft, resetPlanDraft, submitPlan, startRequirement, integrationBlocker, myTasks, nextAction };
 });

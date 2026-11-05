@@ -1,12 +1,14 @@
 import { registerCoordinationRoutes } from "./coordination-routes.js";
 import { registerAgileRoutes } from "./agile-routes.js";
-import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
+import type { FastifyInstance, FastifyRequest } from "fastify";
 import type { AssignTasksInput, CollaborationNode, JobResultInput, NodeHeartbeatInput, ProjectModule } from "@vibe-git/protocol";
-import { badRequest, forbidden, notFound, unavailable } from "../domain/errors.js";
+import { requireCaptain, badRequest, forbidden, notFound, unavailable } from "../domain/errors.js";
 import type { CloudflareManager } from "../integrations/cloudflare/manager.js";
 import type { V20Service } from "./service.js";
 import { taskMarkdown, workstreamMarkdown } from "./contract-format.js";
 import { streamEvents } from "../events/hub.js";
+import { historySources } from "./repository.js";
+import { WORKSPACE_RESOURCES, type WorkspaceResource } from "@vibe-git/protocol";
 
 type MarkdownBody = { filename?: string; content?: string };
 type PlanUpdateBody = MarkdownBody & { expectedRevision?: number };
@@ -38,9 +40,6 @@ function authenticate(request: FastifyRequest, service: V20Service): Collaborati
   return service.authenticateSession(firstHeader(request.headers.cookie));
 }
 
-function requireCaptain(node: CollaborationNode): void {
-  if (node.role !== "captain") throw forbidden("该操作仅限队长");
-}
 
 function markdownBody(body: MarkdownBody | undefined, purpose: string): { filename: string; content: string } {
   if (!body || typeof body.filename !== "string" || typeof body.content !== "string") {
@@ -81,6 +80,47 @@ export async function registerV20Routes(app: FastifyInstance, service: V20Servic
   });
 
   app.get("/api/v1/bootstrap", async (request) => service.bootstrap(authenticate(request, service)));
+  app.get("/api/v1/workspace", async request => service.bootstrap(authenticate(request, service), true));
+  app.get<{ Querystring: { names?: string } }>("/api/v1/workspace/resources", async request => {
+    const viewer = authenticate(request, service), names = request.query.names?.split(",") ?? [...WORKSPACE_RESOURCES];
+    if (!names.length || names.some(name => !WORKSPACE_RESOURCES.includes(name as WorkspaceResource))) throw badRequest("资源名称无效");
+    return service.workspace.snapshot(viewer, names as WorkspaceResource[]);
+  });
+  app.get<{ Params: { id: string } }>("/api/v1/notifications/:id/resource", async request => service.workspace.notification(authenticate(request, service), request.params.id));
+  app.get<{ Params: { id: string } }>("/api/v1/workspace/changes/:id", async request => { authenticate(request, service); return service.workspace.changeDetail(request.params.id); });
+  app.get<{ Params: { id: string } }>("/api/v1/workspace/tasks/:id", async request => {
+    const viewer = authenticate(request, service), task = service.repo.getTask(request.params.id);
+    if (!task) throw notFound("任务不存在");
+    if (viewer.role !== "captain" && task.assigneeNodeId !== viewer.id) throw forbidden("只能查看本人的任务");
+    return task;
+  });
+  app.get<{ Params: { kind: string }; Querystring: { before?: string } }>("/api/v1/history/:kind", async request => {
+    const viewer = authenticate(request, service);
+    if (!Object.hasOwn(historySources, request.params.kind)) throw notFound("未知历史类型");
+    const before = request.query.before === undefined ? Number.MAX_SAFE_INTEGER : Number(request.query.before);
+    if (!Number.isSafeInteger(before) || before < 1) throw badRequest("历史游标无效");
+    return service.repo.historyPage(request.params.kind, before, 100, viewer.role === "member" ? viewer.id : undefined);
+  });
+  app.get<{ Params: { revision: string } }>("/api/v1/history/requirements/:revision", async request => {
+    authenticate(request, service);
+    const revision = Number(request.params.revision);
+    if (!Number.isSafeInteger(revision) || revision < 1) throw badRequest("需求版本无效");
+    const value = service.repo.requirementVersion(revision);
+    if (!value) throw notFound("需求版本不存在");
+    return value;
+  });
+  app.get<{ Params: { kind: string; id: string } }>("/api/v1/history/:kind/:id", async request => {
+    authenticate(request, service);
+    const value = service.repo.historyDetail(request.params.kind, request.params.id);
+    if (!value) throw notFound("历史记录不存在");
+    return value;
+  });
+  app.get<{ Params: { id: string } }>("/api/v1/agile/flows/:id", async request => {
+    authenticate(request, service);
+    const flow = service.repo.getAgileFlow(request.params.id);
+    if (!flow) throw notFound("流程不存在");
+    return flow;
+  });
   app.post<{ Body: AssignTasksInput }>("/api/v1/tasks/assign", async request => service.assignTasks(authenticate(request, service), request.body));
   app.get<{ Params: { id: string }; Querystring: { before?: string } }>("/api/v1/agile/flows/:id/activity", async request => {
     authenticate(request, service);

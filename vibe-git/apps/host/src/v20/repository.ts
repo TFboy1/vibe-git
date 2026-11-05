@@ -2,9 +2,9 @@ import type { DatabaseSync } from "node:sqlite";
 import type {
   AgentJob, AlignmentRun, CollaborationNode, DevelopmentStage, ImpactReviewBatch,
   MarkdownDocument, Notification, RoomEvent, StageTask, VibePullRequest, Workstream, InterfaceContract,
-  RequirementVersion, AlignmentDraftVersion, AlignmentReadReceipt, CoordinationChange
+  RequirementVersion, AlignmentDraftVersion, AlignmentReadReceipt, CoordinationChange, IntentDraft, Page
 } from "@vibe-git/protocol";
-import { transaction } from "../db/database.js";
+import { afterCommit, transaction } from "../db/database.js";
 
 export interface V20RoomRecord {
   id: string;
@@ -12,11 +12,75 @@ export interface V20RoomRecord {
 }
 
 const parse = <T>(row: { data: string } | undefined): T | undefined => row ? JSON.parse(row.data) as T : undefined;
+const historySummary = "json_object('id',json_extract(data,'$.id'),'title',coalesce(json_extract(data,'$.title'),json_extract(data,'$.name'),'历史记录'),'summary',substr(coalesce(json_extract(data,'$.summary'),json_extract(data,'$.summaryMarkdown'),''),1,500),'status',json_extract(data,'$.status'),'sequence',json_extract(data,'$.sequence'),'createdAt',json_extract(data,'$.createdAt'))";
+export const historySources: Record<string, { table: string; where?: string; projection?: string }> = {
+  requirements: { table: "v20_requirement_versions", projection: "json_remove(data, '$.markdown')" },
+  flows: { table: "agile_flows", where: "json_extract(data, '$.status') IN ('PUBLISHED','CANCELLED','REJECTED')", projection: "json_object('id',id,'kind',json_extract(data,'$.kind'),'status',json_extract(data,'$.status'),'createdAt',created_at,'summary',json_extract(data,'$.summary'))" },
+  archivedTasks: { table: "v20_stage_tasks", where: "json_extract(data, '$.archived') = 1" },
+  completedTasks: { table: "v20_stage_tasks", where: "json_extract(data, '$.status') = 'DONE' AND coalesce(json_extract(data, '$.archived'),0) = 0" },
+  reviews: { table: "v20_impact_reviews", projection: historySummary },
+  alignments: { table: "v20_alignments", projection: historySummary },
+  stages: { table: "v20_stages", projection: historySummary }, workstreams: { table: "v20_workstreams", projection: historySummary }, contracts: { table: "v20_interface_contracts", projection: historySummary },
+  intents: { table: "coordination_intents", where: "json_extract(data,'$.publishedStageId') IS NOT NULL", projection: "json_remove(data,'$.content')" },
+  changes: { table: "workspace_changes", where: "status IN ('APPLIED','REJECTED')" }
+};
 
 export class V20Repository {
   constructor(readonly db: DatabaseSync) {}
 
   tx<T>(work: () => T): T { return transaction(this.db, work); }
+  afterCommit(callback: () => void): void { afterCommit(this.db, callback); }
+
+  activeJobCount(nodeId: string): number {
+    return (this.db.prepare("SELECT count(*) AS total FROM v20_agent_jobs WHERE target_node_id = ? AND status IN ('QUEUED','LEASED','RUNNING')").get(nodeId) as { total: number }).total;
+  }
+  activeJobs(): AgentJob[] {
+    return (this.db.prepare("SELECT data FROM v20_agent_jobs WHERE status IN ('QUEUED','LEASED','RUNNING') ORDER BY created_at").all() as { data: string }[]).map(row => JSON.parse(row.data));
+  }
+
+  // The allowlist is also used by the paginated history API; SQL identifiers never come from a request.
+  historyPage(kind: string, before = Number.MAX_SAFE_INTEGER, limit = 100, ownerNodeId?: string): Page<unknown> {
+    const source = historySources[kind];
+    if (!source || !Object.hasOwn(historySources, kind)) throw new Error("未知历史类型");
+    if (kind === "changes") return this.changeHistory(before, limit);
+    const owner = ownerNodeId && ["archivedTasks", "completedTasks"].includes(kind) ? ownerNodeId : null;
+    const args = owner ? [before, owner, limit + 1] : [before, limit + 1];
+    const rows = this.db.prepare(`SELECT rowid AS cursor, ${source.projection ?? "data"} AS data FROM ${source.table} WHERE rowid < ? AND (${source.where ?? "1"}) ${owner ? "AND assignee_node_id=?" : ""} ORDER BY rowid DESC LIMIT ?`).all(...args) as { cursor: number; data: string }[];
+    const page = rows.slice(0, limit);
+    return { items: page.map(row => JSON.parse(row.data)), nextCursor: rows.length > limit ? page.at(-1)!.cursor : null };
+  }
+
+  workspaceFlows(activeOnly = false): import("@vibe-git/protocol").AgileFlow[] {
+    return (this.db.prepare("SELECT json_set(data, '$.draftHistory', json('[]')) AS data FROM agile_flows WHERE json_extract(data, '$.status') NOT IN ('PUBLISHED','CANCELLED','REJECTED')" + (activeOnly ? "" : " OR rowid = (SELECT max(rowid) FROM agile_flows)") + " ORDER BY created_at, rowid").all() as { data: string }[]).map(row => JSON.parse(row.data));
+  }
+  historyDetail(kind: string, id: string): unknown {
+    if (!["stages", "workstreams", "contracts", "intents", "reviews", "alignments", "flows"].includes(kind)) return undefined;
+    const source = historySources[kind]!;
+    return parse(this.db.prepare(`SELECT data FROM ${source.table} WHERE id=?`).get(id) as { data: string } | undefined);
+  }
+
+  latestPlans(): MarkdownDocument[] {
+    return (this.db.prepare("SELECT d.data FROM v20_documents d WHERE kind = 'plan' AND entity_id IS NULL AND revision = (SELECT max(revision) FROM v20_documents WHERE kind = 'plan' AND entity_id IS NULL AND owner_node_id = d.owner_node_id)").all() as { data: string }[]).map(row => JSON.parse(row.data));
+  }
+
+  workspaceTasks(): StageTask[] {
+    return (this.db.prepare(`WITH RECURSIVE relevant(id) AS (
+      SELECT id FROM v20_stage_tasks WHERE coalesce(json_extract(data, '$.archived'),0) = 0 AND json_extract(data, '$.status') != 'DONE'
+      UNION SELECT id FROM v20_stage_tasks WHERE stage_id = (SELECT id FROM v20_stages ORDER BY sequence DESC LIMIT 1) AND coalesce(json_extract(data,'$.archived'),0) = 0
+      UNION SELECT dependency.value FROM v20_stage_tasks task JOIN relevant ON task.id = relevant.id,
+        json_each(task.data, '$.dependencies') dependency
+    ) SELECT data FROM v20_stage_tasks WHERE id IN (SELECT id FROM relevant) ORDER BY stage_id, id`).all() as { data: string }[]).map(row => JSON.parse(row.data));
+  }
+
+  requirementBySource(sourceId: string): RequirementVersion | undefined {
+    return parse(this.db.prepare("SELECT data FROM v20_requirement_versions WHERE json_extract(data,'$.sourceId')=? ORDER BY revision DESC LIMIT 1").get(sourceId) as { data: string } | undefined);
+  }
+  workspaceAlignments(): AlignmentRun[] {
+    return (this.db.prepare("SELECT data FROM v20_alignments WHERE json_extract(data,'$.publishedStageId') IS NULL AND json_extract(data,'$.status') NOT IN ('PUBLISHED','CANCELLED') ORDER BY created_at DESC LIMIT 1").all() as { data: string }[]).map(row => JSON.parse(row.data));
+  }
+  requirementVersion(revision: number): RequirementVersion | undefined {
+    return parse(this.db.prepare("SELECT data FROM v20_requirement_versions WHERE revision = ?").get(revision) as { data: string } | undefined);
+  }
 
   listAgileFlows(): import("@vibe-git/protocol").AgileFlow[] {
     return (this.db.prepare("SELECT data FROM agile_flows ORDER BY created_at, rowid").all() as { data: string }[]).map(row => JSON.parse(row.data));
@@ -32,15 +96,49 @@ export class V20Repository {
   }
 
   listCoordinationChanges(): CoordinationChange[] {
-    return JSON.parse(this.getMeta("coordination_changes") ?? "[]") as CoordinationChange[];
+    return (this.db.prepare("SELECT data FROM coordination_changes ORDER BY created_at, rowid").all() as { data: string }[]).map(row => JSON.parse(row.data));
   }
   getCoordinationChange(id: string): CoordinationChange | undefined {
-    return this.listCoordinationChanges().find(change => change.id === id);
+    return parse(this.db.prepare("SELECT data FROM coordination_changes WHERE id=?").get(id) as { data: string } | undefined);
   }
   putCoordinationChange(value: CoordinationChange): void {
-    const changes = this.listCoordinationChanges(), index = changes.findIndex(change => change.id === value.id);
-    if (index < 0) changes.push(value); else changes[index] = value;
-    this.setMeta("coordination_changes", JSON.stringify(changes));
+    this.db.prepare("INSERT INTO coordination_changes (id,stage_id,status,created_at,data) VALUES (?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET stage_id=excluded.stage_id,status=excluded.status,data=excluded.data").run(value.id,value.stageId,value.status,value.createdAt,JSON.stringify(value));
+  }
+  listCoordinationIntents(): IntentDraft[] {
+    return (this.db.prepare("SELECT data FROM coordination_intents ORDER BY rowid").all() as { data: string }[]).map(row => JSON.parse(row.data));
+  }
+  getCoordinationIntent(id: string): IntentDraft | undefined { return parse(this.db.prepare("SELECT data FROM coordination_intents WHERE id=?").get(id) as { data: string } | undefined); }
+  putCoordinationIntent(value: IntentDraft): void { this.db.prepare("INSERT INTO coordination_intents VALUES (?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data").run(value.id,JSON.stringify(value)); }
+  workspaceIntents(): IntentDraft[] {
+    return (this.db.prepare("SELECT data FROM coordination_intents WHERE json_extract(data,'$.publishedStageId') IS NULL").all() as { data: string }[]).map(row => JSON.parse(row.data));
+  }
+  workspaceCoordinationChanges(): CoordinationChange[] {
+    return (this.db.prepare("SELECT json_set(data,'$.content','') AS data FROM coordination_changes WHERE status IN ('PENDING','IN_REVIEW') ORDER BY created_at").all() as { data: string }[]).map(row => JSON.parse(row.data));
+  }
+  workspacePullRequests(): VibePullRequest[] {
+    return (this.db.prepare("SELECT data FROM v20_pull_requests WHERE json_extract(data,'$.status') IN ('QUEUED','IN_REVIEW') ORDER BY created_at").all() as { data: string }[]).map(row => JSON.parse(row.data));
+  }
+  workspaceStages(): DevelopmentStage[] {
+    return (this.db.prepare("SELECT data FROM (SELECT sequence,data FROM v20_stages WHERE json_extract(data,'$.status') != 'COMPLETED' UNION SELECT sequence,data FROM v20_stages WHERE sequence=(SELECT max(sequence) FROM v20_stages)) ORDER BY sequence").all() as { data: string }[]).map(row => JSON.parse(row.data));
+  }
+  workspaceContracts(tasks: StageTask[], stages: DevelopmentStage[]): InterfaceContract[] {
+    const ids = [...new Set(tasks.flatMap(task => task.dependencyEdges?.flatMap(edge => edge.contractId ? [edge.contractId] : []) ?? []))];
+    const stageIds = [...new Set([...stages.map(stage => stage.id), ...tasks.map(task => task.stageId)])];
+    const taskIds = JSON.stringify(tasks.map(task => task.id));
+    return (this.db.prepare(`SELECT data FROM v20_interface_contracts WHERE id IN (SELECT value FROM json_each(?)) OR
+      (stage_id IN (SELECT value FROM json_each(?)) AND json_extract(data,'$.status') != 'SUPERSEDED' AND
+      (json_extract(data,'$.providerTaskId') IN (SELECT value FROM json_each(?)) OR EXISTS
+      (SELECT 1 FROM json_each(data,'$.consumerTaskIds') WHERE value IN (SELECT value FROM json_each(?))))) ORDER BY id`)
+      .all(JSON.stringify(ids),JSON.stringify(stageIds),taskIds,taskIds) as { data: string }[]).map(row => JSON.parse(row.data));
+  }
+  workspaceWorkstreams(stages: DevelopmentStage[]): Workstream[] {
+    return (this.db.prepare("SELECT data FROM v20_workstreams WHERE stage_id IN (SELECT value FROM json_each(?)) AND json_extract(data,'$.status') != 'SUPERSEDED' ORDER BY id").all(JSON.stringify(stages.map(stage => stage.id))) as { data: string }[]).map(row => JSON.parse(row.data));
+  }
+  changeHistory(before: number, limit: number): Page<unknown> {
+    const prs = this.db.prepare("SELECT rowid*2 AS cursor, 'pr' AS source, data FROM v20_pull_requests WHERE rowid <= ? AND json_extract(data,'$.status') IN ('APPLIED','REJECTED') ORDER BY rowid DESC LIMIT ?").all(Math.floor((before-1)/2),limit+1);
+    const changes = this.db.prepare("SELECT rowid*2+1 AS cursor, 'change' AS source, json_set(data,'$.content','') AS data FROM coordination_changes WHERE rowid <= ? AND status IN ('APPLIED','REJECTED') ORDER BY rowid DESC LIMIT ?").all(Math.floor((before-2)/2),limit+1);
+    const rows = ([...prs, ...changes] as { cursor: number; source: string; data: string }[]).sort((a,b) => b.cursor-a.cursor);
+    return { items: rows.slice(0,limit).map(row => ({ source: row.source, record: JSON.parse(row.data) })), nextCursor: rows.length > limit ? rows[limit-1]!.cursor : null };
   }
 
   getMeta(key: string): string | undefined {
@@ -148,6 +246,10 @@ export class V20Repository {
     return (rows as { data: string }[]).map((row) => JSON.parse(row.data) as InterfaceContract);
   }
   getContract(id: string): InterfaceContract | undefined { return parse<InterfaceContract>(this.db.prepare("SELECT data FROM v20_interface_contracts WHERE id = ?").get(id) as { data: string } | undefined); }
+  contractsForTask(task: StageTask): InterfaceContract[] {
+    return (this.db.prepare("SELECT data FROM v20_interface_contracts WHERE stage_id=? AND json_extract(data,'$.status') != 'SUPERSEDED' AND (json_extract(data,'$.providerTaskId')=? OR EXISTS(SELECT 1 FROM json_each(data,'$.consumerTaskIds') WHERE value=?))").all(task.stageId,task.id,task.id) as { data: string }[]).map(row => JSON.parse(row.data));
+  }
+  hasPendingCoordinationChange(stageId: string): boolean { return !!this.db.prepare("SELECT 1 FROM coordination_changes WHERE stage_id=? AND status='PENDING' LIMIT 1").get(stageId); }
   putContract(value: InterfaceContract): void {
     this.db.prepare("INSERT INTO v20_interface_contracts (id, alignment_id, stage_id, data) VALUES (?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET stage_id = excluded.stage_id, data = excluded.data")
       .run(value.id, value.alignmentId, value.stageId, JSON.stringify(value));
@@ -189,9 +291,6 @@ export class V20Repository {
 
   listJobs(): AgentJob[] { return (this.db.prepare("SELECT data FROM v20_agent_jobs ORDER BY created_at").all() as { data: string }[]).map((row) => JSON.parse(row.data) as AgentJob); }
   getJob(id: string): AgentJob | undefined { return parse<AgentJob>(this.db.prepare("SELECT data FROM v20_agent_jobs WHERE id = ?").get(id) as { data: string } | undefined); }
-  nextQueuedJob(nodeId: string): AgentJob | undefined {
-    return parse<AgentJob>(this.db.prepare("SELECT data FROM v20_agent_jobs WHERE target_node_id = ? AND status = 'QUEUED' ORDER BY created_at LIMIT 1").get(nodeId) as { data: string } | undefined);
-  }
   putJob(value: AgentJob): void {
     this.db.prepare("INSERT INTO v20_agent_jobs (id, target_node_id, status, created_at, data) VALUES (?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET target_node_id = excluded.target_node_id, status = excluded.status, data = excluded.data")
       .run(value.id, value.targetNodeId, value.status, value.createdAt, JSON.stringify(value));

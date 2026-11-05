@@ -294,6 +294,7 @@ export interface StageTask {
   activeJobId: string | null;
   runtimeId: string | null;
   lastGit: GitSnapshot | null;
+  baselineSha?: string | null;
   publishedAt: string;
   startedAt: string | null;
   finishedAt: string | null;
@@ -496,12 +497,20 @@ export interface NodeHeartbeatInput {
 }
 
 export interface JobResultInput {
+  errorCode?: JobFailureCode;
   leaseToken: string;
   phase: "started" | "progress" | "completed" | "failed" | "interrupted";
   activity?: import("./runtime.js").JobActivityInput;
   runtimeId?: string | null;
   result?: unknown;
   error?: string;
+}
+
+export const JOB_FAILURE_CODES = ["REVISION_CONFLICT", "WORKSPACE_CHANGED", "EXECUTION_FAILED", "LEASE_EXPIRED"] as const;
+export type JobFailureCode = typeof JOB_FAILURE_CODES[number];
+export function jobFailureCode(error: unknown): JobFailureCode | undefined {
+  const code = error && typeof error === "object" && "code" in error ? error.code : undefined;
+  return JOB_FAILURE_CODES.includes(code as JobFailureCode) ? code as JobFailureCode : undefined;
 }
 
 export interface JoinResponse {

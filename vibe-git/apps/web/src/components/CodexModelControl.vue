@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { failureMessage } from "../api";
 import { onMounted, ref } from "vue";
 import type { CodexModelSettings } from "@vibe-git/protocol";
 import { request } from "../api";
@@ -11,13 +12,13 @@ async function refresh() {
   try {
     const [current, available] = await Promise.all([request<CodexModelSettings>("/api/local/codex/model"), request<Array<{ id: string; name: string }>>("/api/local/codex/models")]);
     settings.value = current; model.value = current.selectedModel ?? ""; models.value = available.filter(model => model.id !== "default"); error.value = current.error ?? "";
-  } catch (e) { error.value = e instanceof Error ? e.message : String(e); }
+  } catch (e) { error.value = failureMessage(e); }
   finally { loading.value = false; }
 }
 async function save() {
   loading.value = true; error.value = "";
   try { settings.value = await request<CodexModelSettings>("/api/local/codex/model", { model: model.value || null }, "PUT"); store.notice = "本机默认模型已保存，后续 Codex 作业使用此设置"; }
-  catch (e) { error.value = e instanceof Error ? e.message : String(e); }
+  catch (e) { error.value = failureMessage(e); }
   finally { loading.value = false; }
 }
 onMounted(() => { if (store.local) void refresh(); });

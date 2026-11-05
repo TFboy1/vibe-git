@@ -1,11 +1,14 @@
 <script setup lang="ts">
+import { failureMessage } from "../api";
 import { computed, onBeforeUnmount, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
-import type { AgileFlow } from "@vibe-git/protocol";
+import type { RequirementVersion, AgileFlow } from "@vibe-git/protocol";
 import { useWorkspace } from "../store";
 import MarkdownEditor from "../components/MarkdownEditor.vue";
 import FlowStatus from "../components/FlowStatus.vue";
 import PlanWizard from "../components/PlanWizard.vue";
+import { useHistory } from "../history";
+import { request } from "../api";
 import Icon from "../components/Icon.vue";
 const store = useWorkspace(), mode = ref("live"), value = ref(""), saving = ref(false), dirty = ref(false);
 const route = useRoute(), router = useRouter();
@@ -13,7 +16,31 @@ async function start() {
   const flow = await store.startRequirement();
   if (flow?.kind === "review") await router.push("/issues");
 }
-watch(() => route.query.revision, revision => { if (typeof revision === "string" && store.data?.requirementVersions.some(item => item.revision === Number(revision))) mode.value = "R:" + revision; }, { immediate: true });
+const history = useHistory<Omit<RequirementVersion, "markdown">>("requirements");
+const historicalMarkdown = ref(""), historicalError = ref("");
+const draftHistory = ref<AgileFlow["draftHistory"]>([]);
+let detailController: AbortController | undefined;
+watch(() => route.query.revision, revision => { if (typeof revision === "string") mode.value = "R:" + revision; }, { immediate: true });
+watch(mode, async selected => {
+  detailController?.abort(); historicalMarkdown.value = ""; historicalError.value = "";
+  if (!selected.startsWith("R:")) return;
+  const controller = detailController = new AbortController();
+  try {
+    const result = await request<RequirementVersion>("/api/v1/history/requirements/" + selected.slice(2), undefined, undefined, { signal: controller.signal });
+    if (!controller.signal.aborted) historicalMarkdown.value = result.markdown;
+  } catch (e) { if (!controller.signal.aborted) historicalError.value = failureMessage(e); }
+}, { immediate: true });
+async function loadDraftHistory() {
+  if (!store.flow) return;
+  const id = store.flow.id;
+  try {
+    const result = await request<AgileFlow>("/api/v1/agile/flows/" + id);
+    if (store.flow?.id === id) draftHistory.value = result.draftHistory;
+  } catch (e) { historicalError.value = failureMessage(e); }
+}
+watch(() => store.flow?.id, () => { draftHistory.value = []; });
+onBeforeUnmount(() => detailController?.abort());
+
 let timer: ReturnType<typeof setTimeout> | undefined, seenDraftRevision = -1, seenFlowId = "";
 const cacheKey = (id: string) => "vibe-requirement:" + store.data?.room.id + ":" + id;
 function cache(markdown: string) {
@@ -24,8 +51,8 @@ const current = computed(() => store.flow), liveDraft = computed(() => current.v
 const canEdit = computed(() => store.canManage && mode.value === "live" && !!liveDraft.value && current.value?.status !== "DECIDING");
 const canAllocate = computed(() => canEdit.value && (current.value?.status === "DRAFT" || (current.value?.status === "READY" && dirty.value)));
 const allocationReady = computed(() => canEdit.value && current.value?.status === "READY" && !dirty.value);
-const displayed = computed(() => mode.value.startsWith("R:") ? store.data?.requirementVersions.find(v => v.revision === Number(mode.value.slice(2)))?.markdown ?? "" :
-  mode.value.startsWith("D:") ? current.value?.draftHistory.find(v => v.revision === Number(mode.value.slice(2)))?.markdown ?? "" :
+const displayed = computed(() => mode.value.startsWith("R:") ? historicalMarkdown.value :
+  mode.value.startsWith("D:") ? draftHistory.value.find(v => v.revision === Number(mode.value.slice(2)))?.markdown ?? "" :
   liveDraft.value ? value.value : store.data?.room.currentRequirementMarkdown ?? "");
 watch(() => [current.value?.id, current.value?.draftRevision, current.value?.draftMarkdown] as const, ([id, revision, markdown]) => {
   if (id !== seenFlowId || !dirty.value) {
@@ -83,12 +110,14 @@ onBeforeUnmount(() => { unregisterDraftSaver(); clearTimeout(timer); if (!store.
     <header class="document-header"><div><span class="eyebrow">创建需求</span><h2>先说清楚想解决什么问题</h2><p>一句简述或一份已有文档都可以。AI 会给出可比较的选项，补齐关键范围与验收。</p></div></header>
     <MarkdownEditor :model-value="store.planDraft" :readonly="!store.local" :outline="false" filename="goal.md" placeholder="例如：做一个团队待办板，能创建待办、分配负责人和查看进度。" @update:model-value="store.editPlanDraft" @error="store.error = $event" />
     <div v-if="store.planDraftConflict" class="save-status"><span class="unsaved">已提交内容发生变化，本机草稿已保留。可先导出草稿，再核对版本。</span><button class="text-button" @click="store.resetPlanDraft">恢复已提交内容</button></div>
-    <footer class="paper-footer"><div><span class="muted small-text">{{ store.planDraftDirty ? '本机草稿尚未提交。生成需求时会先保存这份输入。' : store.ownPlan ? '目标已提交，可以继续生成需求。' : '其他成员的想法可选，无需等所有人提交。' }}</span><p v-if="store.integrationBlocker" id="requirement-start-reason" class="field-help" role="status">{{ store.integrationBlocker }} <RouterLink v-if="!store.computeAvailable && store.canManage" to="/settings#compute" class="text-button">配置协作算力</RouterLink></p></div><div class="button-row"><button class="btn" :disabled="!store.local || store.busy || !store.planDraft.trim() || (!store.planDraftDirty && !!store.ownPlan) || store.planDraftConflict" @click="store.submitPlan">保存目标</button><button class="btn primary" :disabled="store.busy || !!store.integrationBlocker" :aria-describedby="store.integrationBlocker ? 'requirement-start-reason' : undefined" @click="start">生成需求 <Icon name="arrow" /></button></div></footer>
+    <footer class="paper-footer"><div><span class="muted small-text">{{ store.planDraftDirty ? '本机草稿尚未提交。生成需求时会先保存这份输入。' : store.ownPlan ? '目标已提交，可以继续生成需求。' : '其他成员的想法可选，无需等所有人提交。' }}</span><p v-if="store.integrationBlocker" id="requirement-start-reason" class="field-help" role="status">{{ store.integrationBlocker }} <RouterLink v-if="!store.computeAvailable && store.canManage" to="/settings#compute" class="text-button">配置AI 连接</RouterLink></p></div><div class="button-row"><button class="btn" :disabled="!store.local || store.busy || !store.planDraft.trim() || (!store.planDraftDirty && !!store.ownPlan) || store.planDraftConflict" @click="store.submitPlan">保存目标</button><button class="btn primary" :disabled="store.busy || !!store.integrationBlocker" :aria-describedby="store.integrationBlocker ? 'requirement-start-reason' : undefined" @click="start">生成需求 <Icon name="arrow" /></button></div></footer>
   </section>
   <section v-else-if="!displayed && !liveDraft" class="paper empty-state large"><Icon name="book" :size="35" /><h2>{{ current ? '正在补齐团队需求' : '等待队长创建需求' }}</h2><p>{{ current ? '关键问题会在这里逐项确认。需求草稿生成后，由队长编辑并生成分工。' : '你可以直接等待任务，也可以按需补充想法。没有提交个人计划也能接任务。' }}</p><RouterLink v-if="!current" to="/plans" class="btn">补充想法（可选） <Icon name="arrow" /></RouterLink><RouterLink v-else-if="current.kind === 'review'" to="/issues" class="btn">查看变更审核 <Icon name="arrow" /></RouterLink></section>
   <section v-else class="paper requirements-paper">
-    <header class="document-header"><div><span class="eyebrow">{{ liveDraft && mode === 'live' ? 'WORKING DRAFT / 需求草稿' : 'REQUIREMENT / 正式需求' }}</span><h2>{{ liveDraft && mode === 'live' ? '共同需求 · R' + ((current?.baseRequirementRevision ?? 0) + 1) : '团队需求文档' }}</h2><p>{{ canEdit ? '点击正文即可编辑，改动自动保存。' : mode === 'live' && liveDraft ? '队长正在编辑，这份草稿发布后才成为正式需求。' : '此版本只读，可以通过需求变更 Issue 提出修订。' }}</p></div><label class="version-picker"><span class="sr-only">选择文档版本</span><select v-model="mode" class="input"><option value="live">{{ liveDraft ? '当前需求草稿' : '当前正式版本 R' + store.data?.room.requirementRevision }}</option><optgroup label="正式版本"><option v-for="version in [...(store.data?.requirementVersions ?? [])].reverse()" :key="version.revision" :value="'R:' + version.revision">R{{ version.revision }} · {{ new Date(version.createdAt).toLocaleDateString('zh-CN') }}</option></optgroup><optgroup v-if="current?.draftHistory.length" label="草稿历史"><option v-for="version in [...(current?.draftHistory ?? [])].reverse()" :key="version.revision" :value="'D:' + version.revision">草稿 v{{ version.revision }} · {{ new Date(version.createdAt).toLocaleTimeString('zh-CN') }}</option></optgroup></select></label></header>
+    <header class="document-header"><div><span class="eyebrow">{{ liveDraft && mode === 'live' ? 'WORKING DRAFT / 需求草稿' : 'REQUIREMENT / 正式需求' }}</span><h2>{{ liveDraft && mode === 'live' ? '共同需求 · R' + ((current?.baseRequirementRevision ?? 0) + 1) : '团队需求文档' }}</h2><p>{{ canEdit ? '点击正文即可编辑，改动自动保存。' : mode === 'live' && liveDraft ? '队长正在编辑，这份草稿发布后才成为正式需求。' : '此版本只读，可以通过需求变更提出修订。' }}</p></div><label class="version-picker"><span class="sr-only">选择文档版本</span><select v-model="mode" class="input"><option value="live">{{ liveDraft ? '当前需求草稿' : '当前正式版本 R' + store.data?.room.requirementRevision }}</option><optgroup label="正式版本"><option v-for="version in history.items.value" :key="version.revision" :value="'R:' + version.revision">R{{ version.revision }} · {{ new Date(version.createdAt).toLocaleDateString('zh-CN') }}</option></optgroup><optgroup v-if="draftHistory.length" label="草稿历史"><option v-for="version in [...draftHistory].reverse()" :key="version.revision" :value="'D:' + version.revision">草稿 v{{ version.revision }} · {{ new Date(version.createdAt).toLocaleTimeString('zh-CN') }}</option></optgroup></select></label></header>
     <div v-if="canEdit" class="save-status"><span :class="{ unsaved: dirty }"><i class="presence" :class="{ online: !dirty }"></i>{{ saving ? '保存中…' : dirty ? '有待保存的修改' : '已保存 · 草稿 v' + current?.draftRevision }}</span><button v-if="dirty" class="text-button" :disabled="saving" @click="save">立即保存</button><button v-if="dirty && seenDraftRevision !== current?.draftRevision" class="text-button" @click="restoreServer">舍弃本机草稿，恢复服务器版本</button><small>修改需求后，已有分工草稿需要重新生成。</small></div>
+    <details class="workspace-disclosure requirement-history" @toggle="($event.target as HTMLDetailsElement).open && history.load()"><summary><Icon name="clock" :size="17" /><strong>历史版本</strong><span>按需读取旧版</span><Icon name="chevron" :size="15" /></summary><div class="disclosure-body"><div class="button-row"><button class="btn small" :disabled="history.loading.value" @click="history.load()">最新一页</button><button v-if="history.nextCursor.value" class="btn small" :disabled="history.loading.value" @click="history.load(true)">更早版本</button><button v-if="current" class="btn small" @click="loadDraftHistory">读取草稿历史</button></div><p v-if="history.error.value" class="inline-error" role="alert">{{ history.error.value }}</p><p class="muted">读取后可在上方版本选择器中选择正文，每页最多 100 个版本。</p></div></details>
+    <p v-if="historicalError" class="inline-error" role="alert">{{ historicalError }}</p>
     <MarkdownEditor :model-value="displayed" :readonly="!canEdit" :filename="'requirements-' + (mode === 'live' ? 'current' : mode.replace(':', '-')) + '.md'" @update:model-value="edit" @error="store.error = $event" />
     <footer v-if="canEdit" class="paper-footer"><span class="muted small-text">{{ allocationReady ? '分工已就绪，审核后一次发布需求与任务包。' : '审核正文后生成分工，正式需求与任务包将在最后一起发布。' }}</span><RouterLink v-if="allocationReady" to="/projects" class="btn primary">审核分工并发布 <Icon name="arrow" /></RouterLink><button v-else-if="canAllocate" class="btn primary" :disabled="store.busy || saving || !value.trim()" @click="allocate">生成分工 <Icon name="arrow" /></button></footer>
   </section>

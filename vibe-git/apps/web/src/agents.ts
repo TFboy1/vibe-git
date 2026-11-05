@@ -1,3 +1,4 @@
+import { failureMessage } from "./api";
 import { computed, ref, watch } from "vue";
 import { defineStore } from "pinia";
 import type { MarkdownDocument } from "@vibe-git/protocol";
@@ -40,7 +41,7 @@ export const useAgents = defineStore("agents", () => {
       requirementRevision: data.room.requirementRevision, requirement: data.room.currentRequirementMarkdown.slice(0, 3500),
       members: data.nodes.filter(node => !node.revoked).map(node => ({ id: node.id, name: node.label, connected: node.connected, git: node.git })),
       plans: data.plans.map(plan => ({ owner: plan.ownerNodeId, revision: plan.revision, content: plan.content.slice(0, 600) })),
-      issues: workspace.pendingChanges.map(issue => ({ id: issue.id, title: issue.title, content: (issue.content || sourceDocuments.get(issue.documentId ?? "") || "正文尚未读取，请以 Issues 文档为准").slice(0, 650), baseRevision: issue.baseRequirementRevision, status: issue.status })),
+      issues: workspace.pendingChanges.map(issue => ({ id: issue.id, title: issue.title, content: (issue.content || sourceDocuments.get(issue.documentId ?? "") || "正文尚未读取，请以 需求变更 文档为准").slice(0, 650), baseRevision: issue.baseRequirementRevision, status: issue.status })),
       tasks: data.tasks.filter(task => !task.archived).map(task => ({ id: task.id, title: task.title, owner: task.assigneeNodeId, goal: task.goal.slice(0, 450), status: task.status, version: task.packageRevision ?? task.revision, progress: task.progressSummary })),
       flow: workspace.flow ? { id: workspace.flow.id, status: workspace.flow.status, summary: workspace.flow.summary } : null });
   }
@@ -52,13 +53,13 @@ export const useAgents = defineStore("agents", () => {
   async function readIssueDocuments(signal: AbortSignal) {
     const ids = [...new Set(workspace.pendingChanges.filter(issue => !issue.content && issue.documentId && !sourceDocuments.has(issue.documentId)).map(issue => issue.documentId!))].slice(0, 12);
     if (!ids.length) return;
-    status.value = "正在同步需求 Issues 正文…";
+    status.value = "正在同步需求 需求变更 正文…";
     const results = await Promise.allSettled(ids.map(id => request<MarkdownDocument>("/api/v1/documents/" + encodeURIComponent(id), undefined, "GET", { signal, timeoutMs: 20_000 })));
     results.forEach((result, index) => { if (result.status === "fulfilled" && typeof result.value.content === "string") sourceDocuments.set(ids[index]!, result.value.content); });
     if (signal.aborted) throw new Error("生成已停止，已收到的内容保留");
   }
   function prompt(message: string, omitLast = 0) {
-    const header = "请根据我的请求与当前团队状态提供中文分析或建议。Issues 是需求变更，代码 PR 由原生 Git 托管。缺少代码 diff 时明确说明需要哪些材料。当前对话为只读 Plan，实际审核和分派由工作台完成。\n";
+    const header = "请根据我的请求与当前团队状态提供中文分析或建议。需求变更 是需求变更，代码合并请求 由原生 Git 托管。缺少代码 diff 时明确说明需要哪些材料。当前对话为只读 Plan，实际审核和分派由工作台完成。\n";
     const history = messages.value.slice(0, omitLast ? -omitLast : undefined).filter(item => item.text).slice(-4).map(item => item.role + ": " + item.text.slice(0, 700)).join("\n");
     const available = 11_800 - encoder.encode(header + "\n我的请求：\n" + message).length;
     return header + "\n团队状态：\n" + clip(context(), Math.floor(available * .78)) + "\n最近对话：\n" + clip(history, Math.floor(available * .18)) + "\n我的请求：\n" + message;
@@ -93,7 +94,7 @@ export const useAgents = defineStore("agents", () => {
       });
       await workspace.refresh().catch(() => undefined);
     } catch (e) {
-      error.value = e instanceof Error ? e.message : String(e);
+      error.value = failureMessage(e);
       const current = target(); if (current) { current.interrupted = true; if (!current.text) current.text = "本次没有生成完整回答。可以重新发送或开启新对话。"; }
       pendingQuestion.value = false;
     } finally { if (controller === active) controller = null; busy.value = false; status.value = ""; persist(); }

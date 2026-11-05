@@ -1,5 +1,7 @@
 # Vibe-Git 能力状态
 
+> 历史说明：本文中的 v0.10 固定成员 Relay、fixtures 和旧接口已移除。当前能力与运行方式见 [超敏捷协作](AGILE-WORKFLOW.md)。
+
 ## 已实现并由自动化测试验证
 
 - Host + SQLite 单机权威状态、事务、room_seq、SSE 事件记录。

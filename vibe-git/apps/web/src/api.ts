@@ -1,4 +1,11 @@
+import { recoveryAdvice } from "@vibe-git/protocol";
+export function failureMessage(error: unknown): string {
+  const value = error as { code?: string; status?: number; recovery?: ReturnType<typeof recoveryAdvice> };
+  const advice = value?.recovery ?? recoveryAdvice(value?.code, value?.status);
+  return [error instanceof Error ? error.message : String(error), advice.preserved, "下一步：" + advice.next].join("\n");
+}
 export async function request<T>(path: string, body?: unknown, method?: string, options: { signal?: AbortSignal; timeoutMs?: number } = {}): Promise<T> {
+  const write = !["GET", "HEAD"].includes(method ?? (body === undefined ? "GET" : "POST"));
   const controller = new AbortController(), timer = setTimeout(() => controller.abort(), options.timeoutMs ?? (path.includes("/compute/test") ? 310_000 : 30_000));
   const abort = () => controller.abort(); options.signal?.addEventListener("abort", abort, { once: true });
   if (options.signal?.aborted) controller.abort();
@@ -8,11 +15,17 @@ export async function request<T>(path: string, body?: unknown, method?: string, 
       ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
     const raw = await response.text(); let value: unknown;
     try { value = raw ? JSON.parse(raw) : null; } catch { throw new Error("服务没有返回有效内容，请确认本机 CLI 已启动"); }
-    if (!response.ok) throw new Error((value as { error?: string })?.error || "请求失败（" + response.status + "）");
+    if (!response.ok) {
+      const failure = value as { error?: string; code?: string; details?: { conflicts?: Array<{ path: string; reason: string; tasks: Array<{ title: string }> }> } } | null;
+      const conflicts = failure?.details?.conflicts?.map(c => [c.path, c.tasks.map(t => t.title).join(" ↔ "), c.reason].filter(Boolean).join("：")) ?? [];
+      throw Object.assign(new Error([failure?.error || "请求失败（" + response.status + "）", ...conflicts].join("\n")), { details: failure?.details, code: failure?.code, status: response.status });
+    }
     return value as T;
   } catch (error) {
-    if (controller.signal.aborted) throw new Error(options.signal?.aborted ? "本次生成已取消，已有草稿保留" : "请求超时，已有内容会保留，请稍后重试");
-    throw error;
+    const known = error as Error & { code?: string; status?: number; recovery?: ReturnType<typeof recoveryAdvice> };
+    const code = known.code ?? (known.status ? "REQUEST_FAILED" : options.signal?.aborted ? "CANCELLED" : write ? "WRITE_UNCERTAIN" : controller.signal.aborted ? "TIMEOUT" : "NETWORK_ERROR");
+    const advice = recoveryAdvice(code, known.status);
+    throw Object.assign(new Error(code === "WRITE_UNCERTAIN" ? advice.title : known.message), { code, status: known.status, details: (known as { details?: unknown }).details, recovery: advice });
   } finally { clearTimeout(timer); options.signal?.removeEventListener("abort", abort); }
 }
 
@@ -28,7 +41,7 @@ export async function stream(path: string, body: unknown, signal: AbortSignal, r
       headers: { "content-type": "application/json", accept: "text/event-stream" }, body: JSON.stringify(body) });
     if (!response.ok) {
       const value = await response.json().catch(() => null) as { error?: string } | null;
-      throw new Error(value?.error || "Codex 连接失败（" + response.status + "）");
+      throw Object.assign(new Error(value?.error || "Codex 连接失败（" + response.status + "）"), { status: response.status, recovery: recoveryAdvice(undefined, response.status) });
     }
     if (!response.body || !response.headers.get("content-type")?.includes("text/event-stream")) throw new Error("服务没有返回有效的对话流");
     reader = response.body.getReader();

@@ -10,7 +10,8 @@ export const AGILE_USAGE = [
   "  vibe-git task inbox | report <task-id> <report.json>",
   "  vibe-git agile start | review [pr-id ...] | list | show <flow-id> | wait <flow-id> [timeout-seconds]",
   "  vibe-git agile answer <flow-id> <answer.json> | draft <flow-id> <需求.md> | allocation <flow-id> <分工.json>",
-  "  vibe-git agile requirement|allocate|publish|retry|cancel|reject <flow-id>"
+  "  vibe-git agile requirement|allocate|publish|retry|cancel|reject <flow-id>",
+  "  vibe-git agile publish <flow-id> --revision <审核过的版本号>"
 ].join("\n") + "\n";
 async function utf8(file: string | undefined): Promise<string> {
   if (!file) throw new Error("缺少 UTF-8 文件路径");
@@ -48,8 +49,7 @@ export async function waitForAgile(config: ClientConfig, flowId: string, seconds
           if (!data) continue;
           const event = JSON.parse(data) as { entityId: string };
           if (event.entityId !== flowId) continue;
-          const snapshot = await api<V20BootstrapPayload>(config, "/api/v1/bootstrap");
-          const current = snapshot.agile?.flows.find(flow => flow.id === flowId);
+          const current = await api<AgileFlow>(config, "/api/v1/agile/flows/" + encodeURIComponent(flowId));
           if (current && !["ANALYZING", "PLANNING"].includes(current.status)) return current;
         }
       }
@@ -90,7 +90,12 @@ export async function handleAgileCommand(
   if (group === "agile") {
     if (action === "list") { out(data.agile?.flows ?? []); return true; }
     if (action === "start" || action === "review") {
-      out(await post(config, "/api/v1/agile/" + (action === "start" ? "initial" : "reviews"), { expectedRequirementRevision: data.room.requirementRevision,
+      if (data.agile?.activeFlow) {
+        const current = data.agile.activeFlow;
+        if ((action === "start" && current.kind === "initial") || (action === "review" && current.kind === "review" && args.length === 2)) { out(current); return true; }
+        throw new Error("已有进行中的需求或审核，请先查看并继续：" + current.id);
+      }
+      out(await post(config, "/api/v1/agile/" + (action === "start" ? "plan-integrations" : "reviews"), { expectedRequirementRevision: data.room.requirementRevision,
         ...(action === "review" && args.length > 2 ? { changeIds: args.slice(2) } : {}) })); return true;
     }
     const flow = data.agile?.flows.find(flow => flow.id === id);
@@ -98,6 +103,10 @@ export async function handleAgileCommand(
     if (action === "show") { out(flow); return true; }
     if (action === "wait") { out(await waitForAgile(config, flow.id, file === undefined ? 600 : Number(file))); return true; }
     let body: Record<string, unknown> = { expectedRevision: flow.revision };
+    if (action === "publish" && file !== undefined) {
+      if (file !== "--revision" || !/^\d+$/.test(args[4] ?? "") || !Number.isSafeInteger(Number(args[4]))) throw new Error("用法：agile publish <flow-id> --revision <审核过的版本号>");
+      body.expectedRevision = Number(args[4]);
+    }
     if (action === "answer" || action === "decisions") body = { ...json(await utf8(file)), expectedRevision: flow.revision };
     if (action === "draft") body.markdown = await utf8(file);
     if (action === "allocation") body = { ...json(await utf8(file)), expectedRevision: flow.revision, draftRevision: flow.draftRevision };

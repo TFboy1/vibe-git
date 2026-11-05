@@ -207,12 +207,24 @@ describe("原生 Responses 协作算力", () => {
     expect(JSON.parse(String(init.body))).toEqual({ expectedRequirementRevision: 3, changeIds: ["CHANGE-a", "PR-b"] });
   });
   it("agile wait 用 SSE 阻塞至流程需要操作，不进行周期性查询", async () => {
-    let bootstrapCalls = 0;
+    let bootstrapCalls = 0, detailCalls = 0;
     vi.stubGlobal("fetch", vi.fn(async (url: string) => {
       if (url.includes("/events")) return new Response('data: {"entityId":"flow-1"}\n\n', { headers: { "content-type": "text/event-stream" } });
+      if (url.endsWith("/agile/flows/flow-1")) { detailCalls++; return new Response('{"id":"flow-1","status":"DECIDING"}'); }
       bootstrapCalls++;
       return new Response(JSON.stringify({ room: { seq: 9 }, agile: { flows: [{ id: "flow-1", status: bootstrapCalls === 1 ? "ANALYZING" : "DECIDING" }] } }));
     }));
-    expect((await waitForAgile(config, "flow-1", 2)).status).toBe("DECIDING"); expect(bootstrapCalls).toBe(2);
+    expect((await waitForAgile(config, "flow-1", 2)).status).toBe("DECIDING"); expect(bootstrapCalls).toBe(1); expect(detailCalls).toBe(1);
+  });
+  it("继续已有流程不重复创建；发布携带审核版本，不替换成最新版本", async () => {
+    const flow = { id: "flow-1", kind: "initial", status: "READY", revision: 9 };
+    const bootstrap = async () => ({ config, data: { room: { requirementRevision: 0 }, agile: { enabled: true, activeFlow: flow, flows: [flow] } } as never });
+    const fetch = vi.fn(async (..._args: unknown[]) => new Response('{"ok":true}')); vi.stubGlobal("fetch", fetch);
+    const out = vi.fn();
+    await handleAgileCommand(["agile", "start"], bootstrap, out);
+    expect(out).toHaveBeenCalledWith(flow); expect(fetch).not.toHaveBeenCalled();
+    await handleAgileCommand(["agile", "publish", flow.id, "--revision", "7"], bootstrap, out);
+    const [, init] = fetch.mock.calls[0]! as unknown as [string, RequestInit];
+    expect(JSON.parse(String(init.body)).expectedRevision).toBe(7);
   });
 });

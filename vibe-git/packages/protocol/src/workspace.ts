@@ -1,5 +1,30 @@
 import type { CoordinationChange } from "./coordination.js";
 import type { Notification, V20BootstrapPayload, VibePullRequest } from "./v20.js";
+import type { CoordinationSnapshot } from "./coordination.js";
+
+export interface Page<T> { items: T[]; nextCursor: number | null }
+export const WORKSPACE_RESOURCES = ["overview", "members", "tasks", "requirements", "changes", "notifications"] as const;
+export type WorkspaceResource = typeof WORKSPACE_RESOURCES[number];
+export type WorkspaceResourceData = Partial<Omit<V20BootstrapPayload, "coordination">> & { coordination?: Partial<CoordinationSnapshot> };
+export interface WorkspaceResources { roomId: string; seq: number; data: WorkspaceResourceData }
+export type ChangeHistoryItem = { source: "pr"; record: VibePullRequest } | { source: "change"; record: CoordinationChange };
+export interface ChangeDetail {
+  change: WorkspaceChange; pr?: VibePullRequest; legacy?: CoordinationChange;
+  flow?: import("./agile.js").AgileFlow; review?: import("./v20.js").ImpactReviewBatch;
+}
+
+export function resourcesForEvent(type: string): WorkspaceResource[] | null {
+  if (type === "job.progress") return [];
+  if (type.startsWith("node.") || type.startsWith("invite.")) return type === "node.revoked" ? ["members", "tasks", "notifications"] : ["members"];
+  if (type.startsWith("notification.")) return ["notifications"];
+  if (type.startsWith("plan.")) return ["requirements"];
+  if (type === "agile.compute") return ["members", "requirements"];
+  if (type === "agile.pr_submitted" || type === "change.submitted") return ["changes", "notifications"];
+  if (type.startsWith("task.") || type.startsWith("contract.")) return ["tasks", "members", "notifications"];
+  if (type.startsWith("agile.") || type.startsWith("stage.") || type.startsWith("review.") || type.startsWith("coordination.") || type.startsWith("intent.") || type.startsWith("alignment.") || type.startsWith("job.")) return [...WORKSPACE_RESOURCES];
+  if (type === "modules.updated") return ["overview"];
+  return null;
+}
 
 export interface WorkspaceChange {
   id: string;
