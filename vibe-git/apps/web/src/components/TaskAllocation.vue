@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from "vue";
+import { onBeforeRouteLeave, onBeforeRouteUpdate } from "vue-router";
 import { allocationConflicts } from "@vibe-git/protocol";
 import type { AgileContractDraft, AgileFlow, AgileTaskDraft, AllocationConflict } from "@vibe-git/protocol";
 import { useWorkspace } from "../store";
@@ -26,7 +27,7 @@ const payload = () => ({ tasks: tasks.value.map(task => ({ ...task, dependencyEd
   { upstreamKey, mode: "HARD" as const, contractKey: null, reason: "等待上游实际交付" }) })), contracts: contracts.value, removedTaskIds: removed.value });
 watch(() => [props.flow.id, props.flow.allocationDraftRevision, JSON.stringify(props.flow.tasks)] as const, () => {
     if (!dirty.value) { tasks.value = JSON.parse(JSON.stringify(props.flow.tasks)); contracts.value = JSON.parse(JSON.stringify(props.flow.contracts ?? [])); removed.value = [...props.flow.removedTaskIds];
-      if (!tasks.value.some(task => task.key === expanded.value)) expanded.value = tasks.value.find(task => task.sourceTaskId)?.key ?? tasks.value[0]?.key ?? ""; }
+      if (!tasks.value.some(task => task.key === expanded.value)) expanded.value = ""; }
 }, { immediate: true });
 watch(tasks, values => { selectedKeys.value = selectedKeys.value.filter(key => values.some(task => task.key === key)); }, { deep: true });
 function assignSelected() {
@@ -68,13 +69,16 @@ async function publish() {
   const saved = await save(); if (!saved) return;
   await store.mutate("/api/v1/agile/flows/" + saved.id + "/publish", { expectedRevision: saved.revision }, "正式需求与任务包已向全员派发");
 }
+onBeforeRouteLeave(async () => !dirty.value || !!(await save()));
+onBeforeRouteUpdate(async () => !dirty.value || !!(await save()));
 const unregisterDraftSaver = store.registerDraftSaver(async () => !!(await save()));
 onBeforeUnmount(unregisterDraftSaver);
 </script>
 <template>
   <section class="paper allocation-paper">
-    <header class="section-head"><div><span class="eyebrow">ALLOCATION PREVIEW / 分工预览</span><h2>把共同目标交给具体的人。</h2><p class="muted">基于需求草稿 v{{ flow.draftRevision }}。调整目标、负责人、边界和验收后，统一派发。</p></div><span class="tag mint">{{ tasks.length + preserved.filter(t => t.status !== 'DONE').length }} 项工作</span></header>
-    <div class="allocation-planning-info"><p>{{ availableMembers.length }} 位团队成员 · {{ new Set(scopes.map(t => t.assigneeNodeId)).size }} 位本轮负责人。任务数按功能与工作量规划。</p><p v-if="flow.summary">{{ flow.summary }}</p><p v-if="teamChanged" class="field-help" role="status">团队成员已变化，可以按当前团队重新规划；已派发任务的进度会保留。</p><button class="btn small" :disabled="store.busy" @click="replan">{{ dirty ? '根据当前调整让模型重排' : '按当前团队重新规划' }}</button></div>
+    <header class="section-head"><div><span class="eyebrow">分工预览</span><h2>把共同目标交给具体的人。</h2><p class="muted">基于需求草稿 v{{ flow.draftRevision }}。调整目标、负责人、边界和验收后，统一派发。</p></div><span class="tag mint">{{ tasks.length + preserved.filter(t => t.status !== 'DONE').length }} 项工作</span></header>
+    <div v-if="dirty" class="save-status"><span class="unsaved">分工有未保存的修改</span></div>
+    <details class="allocation-planning-info" :open="teamChanged"><summary>团队情况与重新规划</summary><p>{{ availableMembers.length }} 位团队成员 · {{ new Set(scopes.map(t => t.assigneeNodeId)).size }} 位本轮负责人。任务数按功能与工作量规划。</p><p v-if="flow.summary">{{ flow.summary }}</p><p v-if="teamChanged" class="field-help" role="status">团队成员已变化，可以按当前团队重新规划；已派发任务的进度会保留。</p><button class="btn small" :disabled="store.busy" @click="replan">{{ dirty ? '根据当前调整让模型重排' : '按当前团队重新规划' }}</button></details>
     <div v-if="conflicts.length" class="allocation-diagnostics" role="alert"><strong>请先解决 {{ conflicts.length }} 项分工问题</strong><ul><li v-for="(conflict, index) in conflicts" :key="index"><code v-if="conflict.path">{{ conflict.path }} · </code>{{ conflict.tasks.map(t => t.title + ' / ' + store.name(t.assigneeNodeId)).join(' ↔ ') }}：{{ conflict.reason }}</li></ul><p>可以修改负责范围，或让模型按实际代码结构重新安排。</p></div>
     <details v-if="entries.length" class="allocation-planning-info"><summary>入口与公共文件负责人</summary><p v-for="(entry, i) in entries" :key="i"><code>{{ entry.path }}</code> · {{ store.name(entry.owner) }}</p></details>
     <div class="allocation-bulk-bar"><label class="inline-check"><input type="checkbox" :disabled="store.busy" :checked="!!tasks.length && selectedKeys.length === tasks.length" :indeterminate="!!selectedKeys.length && selectedKeys.length < tasks.length" @change="selectedKeys = ($event.target as HTMLInputElement).checked ? tasks.map(task => task.key) : []" />选择任务 <span class="count">{{ selectedKeys.length }}</span></label><template v-if="selectedKeys.length"><label class="sr-only" for="allocation-assignee">批量分配负责人</label><select id="allocation-assignee" v-model="assignee" class="input"><option value="">选择负责人</option><option v-for="node in availableMembers" :key="node.id" :value="node.id">{{ node.label }} · {{ node.id.slice(-4) }}</option></select><button class="btn small" :disabled="!assignee || store.busy" @click="assignSelected">分配选中任务</button></template><span class="muted small-text">草稿确认后统一派发。</span></div>
@@ -105,7 +109,7 @@ onBeforeUnmount(unregisterDraftSaver);
   </section>
 </template>
 <style scoped>
-.allocation-planning-info { margin: 16px 0; padding: 14px; border: 1px solid var(--border, #ddd); border-radius: 8px; }
+.allocation-planning-info { margin: 16px 0; padding: 14px; border: 1px solid var(--line); border-radius: 6px; }
 .allocation-planning-info pre { white-space: pre-wrap; overflow-wrap: anywhere; }
 .allocation-diagnostics { margin: 16px 0; padding: 16px; border: 1px solid #b56e32; border-radius: 8px; background: #b56e3210; overflow-wrap: anywhere; }
 </style>

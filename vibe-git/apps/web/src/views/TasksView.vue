@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { failureMessage } from "../api";
 import { computed, onBeforeUnmount, ref, watch } from "vue";
-import { useRoute } from "vue-router";
+import { useRoute, useRouter } from "vue-router";
 import type { StageTask, TaskExecutionPackage } from "@vibe-git/protocol";
 import { taskDependencyBlockers } from "@vibe-git/protocol";
 import { useWorkspace } from "../store";
@@ -9,11 +9,15 @@ import { useHistory } from "../history";
 import { request } from "../api";
 import { taskStatus, taskNextStep } from "../team";
 import MarkdownEditor from "../components/MarkdownEditor.vue";
-import FlowStatus from "../components/FlowStatus.vue";
 import Icon from "../components/Icon.vue";
 import TaskAssignment from "../components/TaskAssignment.vue";
-const store = useWorkspace(), filter = ref("active"), selected = ref(""), pack = ref<TaskExecutionPackage | null>(null), loading = ref(false), detailError = ref("");
-const route = useRoute();
+const store = useWorkspace(), filter = ref("active"), pack = ref<TaskExecutionPackage | null>(null), loading = ref(false), detailError = ref("");
+const route = useRoute(), router = useRouter();
+const selected = computed(() => typeof route.query.task === "string" ? route.query.task : "");
+const linkedError = ref(""), linkedLoading = ref(false);
+function openTask(id: string) { void router.push({ path: route.path, query: { ...route.query, task: id } }); }
+function setOwner(value: string) { const query = { ...route.query }; if (value) query.owner = value; else delete query.owner; void router.push({ path: route.path, query }); }
+function back() { const query = { ...route.query }; delete query.task; void router.push({ path: route.path, query }); }
 const linkedTask = ref<StageTask | null>(null);
 const statusNames = taskStatus;
 const query = computed(() => typeof route.query.q === "string" ? route.query.q.trim().toLowerCase() : "");
@@ -22,6 +26,7 @@ watch(filter, value => { if (value === "archive") void archive.load(); if (value
 const all = computed(() => [...new Map([...(store.data?.tasks ?? []), ...(linkedTask.value && !store.data?.tasks.some(task => task.id === linkedTask.value?.id) ? [linkedTask.value] : []), ...(store.data?.agile?.archivedTasks ?? []), ...(filter.value === "archive" ? archive.items.value : filter.value === "done" ? completedHistory.items.value.filter(task => !store.data?.tasks.some(current => current.id === task.id)) : [])].map(task => [task.id, task])).values()].filter(task => store.captain || task.assigneeNodeId === store.data?.viewer.id));
 const filtered = computed(() => all.value.filter(task =>
   (filter.value === "archive" ? task.archived : !task.archived && (filter.value === "done" ? task.status === "DONE" : task.status !== "DONE")) &&
+  (!route.query.owner || task.assigneeNodeId === route.query.owner) &&
   (!query.value || [task.id, task.title, task.goal, task.progressSummary, store.name(task.assigneeNodeId)].join(" ").toLowerCase().includes(query.value))));
 const task = computed(() => all.value.find(task => task.id === selected.value));
 const manualInstruction = ref("");
@@ -47,20 +52,22 @@ watch(() => [task.value?.id, task.value?.status, task.value?.archived] as const,
   if (archived) filter.value = "archive";
   else if (status === "DONE" && before[1] !== "DONE") filter.value = "done";
 });
-watch(filtered, tasks => { if (!tasks.some(task => task.id === selected.value)) selected.value = tasks[0]?.id ?? ""; }, { immediate: true });
 let linkedController: AbortController | undefined;
 watch(() => route.query.task, async id => {
   linkedController?.abort(); const controller = linkedController = new AbortController();
-  if (typeof id !== "string") { linkedTask.value = null; return; }
+  linkedError.value = ""; linkedTask.value = null; linkedLoading.value = false;
+  if (typeof id !== "string") return;
+  linkedLoading.value = true;
   try {
     const target = all.value.find(item => item.id === id) ?? await request<StageTask>("/api/v1/workspace/tasks/" + encodeURIComponent(id), undefined, undefined, { signal: controller.signal });
     if (controller.signal.aborted) return;
-    linkedTask.value = target; filter.value = target.archived ? "archive" : target.status === "DONE" ? "done" : "active"; selected.value = target.id;
-  } catch (e) { if (!controller.signal.aborted) detailError.value = failureMessage(e); }
+    linkedTask.value = target; filter.value = target.archived ? "archive" : target.status === "DONE" ? "done" : "active";
+  } catch (e) { if (!controller.signal.aborted) linkedError.value = failureMessage(e); }
+  finally { if (!controller.signal.aborted) linkedLoading.value = false; }
 }, { immediate: true });
 onBeforeUnmount(() => linkedController?.abort());
 let generation = 0;
-watch(() => [selected.value, task.value?.packageRevision, task.value?.revision, task.value?.status, task.value?.progressSummary] as const, async ([id]) => {
+watch(() => [task.value?.id, task.value?.packageRevision, task.value?.revision, task.value?.status, task.value?.progressSummary] as const, async ([id]) => {
   const version = ++generation; pack.value = null; detailError.value = ""; manualInstruction.value = "";
   if (!id || task.value?.archived) { loading.value = false; return; }
   loading.value = true;
@@ -70,27 +77,31 @@ watch(() => [selected.value, task.value?.packageRevision, task.value?.revision, 
 }, { immediate: true });
 </script>
 <template>
-  <div v-if="!all.length" class="task-filter" aria-label="任务筛选"><button v-for="item in [{ value: 'active', text: '进行中' }, { value: 'done', text: '完成' }, { value: 'archive', text: '归档' }]" :key="item.value" :class="{ active: filter === item.value }" @click="filter = item.value">{{ item.text }}</button></div>
-  <div v-if="filter === 'archive' || filter === 'done'" class="button-row"><button class="btn small" @click="(filter === 'archive' ? archive : completedHistory).load()">最新一页</button><button v-if="(filter === 'archive' ? archive : completedHistory).nextCursor.value" class="btn small" :disabled="(filter === 'archive' ? archive : completedHistory).loading.value" @click="(filter === 'archive' ? archive : completedHistory).load(true)">更早记录</button><p v-if="(filter === 'archive' ? archive : completedHistory).error.value" role="alert">{{ (filter === 'archive' ? archive : completedHistory).error.value }}</p></div>
-  <div class="intro-line"><p>{{ store.captain ? '让每个人拿到清楚、可执行的工作。' : '你的目标、边界和验收都在这里。' }}<span>{{ store.captain ? '先审核分工，再统一派发。' : '通过 Vibe-Git Skill 向开发 AI 传达开工和进度即可。' }}</span></p><span v-if="store.data?.room.requirementRevision" class="tag mint">当前需求 R{{ store.data.room.requirementRevision }}</span></div>
-  <FlowStatus v-if="store.flow" :flow="store.flow" readonly />
-  <div v-if="store.canManage && store.flow?.status === 'READY'" class="next-action"><div><strong>分工草稿已就绪</strong><p>任务包视图保留已派发记录；新分工在任务看板审核并派发。</p></div><RouterLink :to="{ path: '/projects', query: query ? { q: route.query.q } : {} }" class="btn">查看分工 <Icon name="arrow" :size="15" /></RouterLink></div>
-  <section v-else-if="!all.length" class="paper empty-state large"><span class="empty-number">03</span><h2>{{ store.flow?.draftMarkdown ? '确认需求后，再开始分工。' : '任务包将在队长派发后到达。' }}</h2><p>{{ store.captain ? '先审核完整的需求 MD。AI 生成分工后，可以调整负责人和任务内容，再统一派发。' : '你不需要领取或确认。派发后，任务包会自动出现在这里。' }}</p><RouterLink v-if="store.captain" to="/requirements" class="btn">查看需求文档 <Icon name="arrow" /></RouterLink></section>
-  <div v-if="all.length" class="task-workspace">
-    <aside class="task-list-panel paper"><header class="section-head"><span class="eyebrow">{{ store.captain ? 'TEAM TASKS' : 'MY TASKS' }}</span><span class="count">{{ all.filter(t => !t.archived).length }}</span></header><h2>{{ store.captain ? '团队任务' : '我的任务' }}</h2><div class="task-filter" aria-label="任务筛选"><button v-for="item in [{ value: 'active', text: '进行中' }, { value: 'done', text: '完成' }, { value: 'archive', text: '归档' }]" :key="item.value" :class="{ active: filter === item.value }" @click="filter = item.value">{{ item.text }}</button></div>
-      <div v-if="!filtered.length" class="empty-state small">{{ query ? '当前分类没有匹配的任务，请调整顶栏搜索或切换分类。' : '这个分类还没有任务。' }}</div><button v-for="item in filtered" :key="item.id" class="task-list-row" :class="{ selected: selected === item.id }" @click="selected = item.id"><span class="task-state-dot" :class="item.status.toLowerCase()"></span><span><strong>{{ item.title }}</strong><small>{{ store.name(item.assigneeNodeId) }} · {{ item.archived ? '已归档' : statusNames[item.status] ?? item.status }}</small></span><Icon name="chevron" :size="15" /></button>
-      <p class="task-list-note">{{ store.agileEnabled ? '复制当前任务的指令给开发 AI，Skill 会同步版本并汇报。附验收证据汇报完成后，无需网页确认。' : '历史任务保留原有执行流程，调用 Skill 核对最新版任务包。' }}</p>
-    </aside>
-    <section class="paper task-document">
-      <header v-if="task" class="document-header"><div><span class="eyebrow">EXECUTION PACKAGE / 任务包</span><h2>{{ task.title }}</h2><p>{{ store.name(task.assigneeNodeId) }} · 任务包 v{{ pack?.taskRevision ?? task.packageRevision ?? task.revision }} · 需求 R{{ pack?.requirementRevision ?? task.requirementRevision ?? store.data?.room.requirementRevision }}</p></div><span class="tag" :class="{ amber: task.status === 'PAUSED', mint: task.status === 'DONE' }">{{ task.archived ? '已归档' : statusNames[task.status] ?? task.status }}</span></header>
-      <TaskAssignment v-if="task && store.canManage" :key="task.id" :tasks="[task]" />
-      <div v-if="task" class="task-handoff"><div><strong>下一步</strong><p>{{ nextStep }}</p></div><button v-if="store.local && !task.archived && task.assigneeNodeId === store.data?.viewer.id" class="btn primary" @click="copyInstruction"><Icon name="copy" :size="16" />{{ syncOnly ? '复制同步指令' : '复制给开发 AI' }}</button></div>
+  <template v-if="!selected">
+    <div class="task-list-toolbar"><div class="task-filter" aria-label="任务筛选"><button v-for="item in [{ value: 'active', text: '进行中' }, { value: 'done', text: '已完成' }, { value: 'archive', text: '已归档' }]" :key="item.value" :class="{ active: filter === item.value }" :aria-pressed="filter === item.value" @click="filter = item.value">{{ item.text }}</button></div><label v-if="store.captain" class="task-owner-filter"><span class="sr-only">按负责人筛选</span><select class="input" :value="route.query.owner ?? ''" @change="setOwner(($event.target as HTMLSelectElement).value)"><option value="">所有负责人</option><option v-for="node in store.data?.nodes ?? []" :key="node.id" :value="node.id">{{ node.label }}{{ node.revoked ? '（已移除）' : '' }}</option></select></label><span class="muted">{{ filtered.length }} 项任务</span></div>
+    <div v-if="filter !== 'active'" class="history-pagination"><button class="btn small" :disabled="(filter === 'archive' ? archive : completedHistory).loading.value" @click="(filter === 'archive' ? archive : completedHistory).load()">最新一页</button><button v-if="(filter === 'archive' ? archive : completedHistory).nextCursor.value" class="btn small" :disabled="(filter === 'archive' ? archive : completedHistory).loading.value" @click="(filter === 'archive' ? archive : completedHistory).load(true)">更早记录</button><p v-if="(filter === 'archive' ? archive : completedHistory).loading.value" role="status">正在读取记录…</p><p v-if="(filter === 'archive' ? archive : completedHistory).error.value" class="inline-error" role="alert">{{ (filter === 'archive' ? archive : completedHistory).error.value }}</p></div>
+    <div v-if="store.canManage && store.flow?.status === 'READY'" class="next-action"><div><strong>新分工等待发布</strong><p>发布后，新的任务包会出现在这里。</p></div><RouterLink to="/projects" class="text-button">前往分工 <Icon name="arrow" :size="15" /></RouterLink></div>
+    <section class="paper execution-list" aria-label="任务列表">
+      <button v-for="item in filtered" :key="item.id" class="execution-row" @click="openTask(item.id)"><span class="task-state-dot" :class="item.status.toLowerCase()"></span><span class="execution-row-body"><strong>{{ item.title }}</strong><small>{{ store.name(item.assigneeNodeId) }}<template v-if="item.blockedReason"> · {{ item.blockedReason }}</template></small></span><span class="tag" :class="{ amber: ['PAUSED', 'BLOCKED', 'FAILED'].includes(item.status) }">{{ item.archived ? '已归档' : statusNames[item.status] ?? item.status }}</span><Icon name="chevron" :size="15" /></button>
+      <div v-if="!filtered.length" class="empty-state large"><Icon name="tasks" :size="30" /><h2>{{ query || route.query.owner ? '没有匹配的任务' : filter === 'active' ? '暂时没有待执行任务' : '这个分类还没有任务' }}</h2><p>{{ query || route.query.owner ? '调整搜索条件或筛选后再查看。' : store.captain ? '确认需求与分工并发布后，任务会出现在这里。' : '任务由队长派发，你无需领取或确认。' }}</p><RouterLink v-if="filter === 'active' && !all.length" :to="store.captain ? '/projects' : '/requirements'" class="text-button">{{ store.captain ? '查看分工' : '查看团队需求' }} <Icon name="arrow" :size="14" /></RouterLink></div>
+    </section>
+  </template>
+  <template v-else>
+    <button class="text-button detail-back" @click="back"><Icon name="arrow" :size="15" />返回任务列表</button>
+    <p v-if="linkedError" class="inline-error" role="alert">{{ linkedError }}</p>
+    <div v-else-if="linkedLoading && !task" class="empty-state" role="status">正在读取任务…</div>
+    <section v-else-if="task" class="paper task-document task-detail-page">
+      <header class="document-header"><div><h2>{{ task.title }}</h2><p>{{ store.name(task.assigneeNodeId) }}</p></div><span class="tag" :class="{ amber: ['PAUSED', 'BLOCKED', 'FAILED'].includes(task.status), mint: task.status === 'DONE' }">{{ task.archived ? '已归档' : statusNames[task.status] ?? task.status }}</span></header>
+      <div class="task-goal"><h3>任务目标</h3><p>{{ task.goal }}</p><p v-if="task.blockedReason" class="inline-error" role="alert">{{ task.blockedReason }}</p></div>
+      <div class="task-handoff"><div><strong>下一步</strong><p>{{ nextStep }}</p></div><button v-if="store.local && !task.archived && task.assigneeNodeId === store.data?.viewer.id" class="btn primary" @click="copyInstruction"><Icon name="copy" :size="16" />{{ syncOnly ? '复制同步指令' : '复制给开发 AI' }}</button></div>
       <div v-if="manualInstruction" class="manual-instruction"><label for="task-instruction">无法访问剪贴板，请手动复制以下指令到开发 AI：</label><textarea id="task-instruction" :value="manualInstruction" class="input mono" rows="8" readonly @focus="($event.target as HTMLTextAreaElement).select()"></textarea></div>
       <div v-if="task?.status === 'PAUSED'" class="pause-notice"><Icon name="pause" /><div><strong>已请求暂停，等待开发 AI 同步。</strong><p>网页状态不代表 AI 已经停止。下一次 Skill 同步会读取消息；新版任务包发布后再按新版继续。</p></div></div>
       <div v-if="task?.reworkOfTaskId" class="linked-work"><Icon name="link" :size="15" /><span>这是已完成任务的后续修订，原完成与验收记录保留。</span><RouterLink v-if="all.some(item => item.id === task?.reworkOfTaskId)" :to="{ path: '/projects', query: { task: task.reworkOfTaskId, view: 'packages' } }" class="text-button">查看原任务</RouterLink><code v-else>{{ task.reworkOfTaskId }}</code></div>
       <details v-if="task?.reportEvidence?.length" class="completion-evidence"><summary>{{ task.status === 'DONE' ? '查看完成汇报与验收证据' : '查看已有汇报与证据' }}</summary><article v-for="report in task.reportEvidence" :key="report.reportId"><strong>{{ report.summary }}</strong><ul v-if="report.evidence.length"><li v-for="(evidence, index) in report.evidence" :key="index">{{ evidence }}</li></ul></article></details>
-      <div v-if="loading" class="empty-state"><span class="working-dot"></span> 正在读取任务包…</div><p v-else-if="detailError" class="inline-error">{{ detailError }}</p>
-      <MarkdownEditor v-else-if="task" :key="task.id" :model-value="content" readonly :filename="'task-' + task.id + '.md'" @error="store.error = $event" /><div v-else class="empty-state">从左侧选择一项任务。</div>
+      <p v-if="detailError" class="inline-error" role="alert">{{ detailError }}</p>
+      <details class="workspace-disclosure"><summary><Icon name="document" :size="17" /><strong>完整任务包与技术细节</strong><span>边界、验收、依赖和版本</span><Icon name="chevron" :size="15" /></summary><div class="task-version">任务包 v{{ pack?.taskRevision ?? task.packageRevision ?? task.revision }} · 需求 R{{ pack?.requirementRevision ?? task.requirementRevision ?? store.data?.room.requirementRevision }}</div><div v-if="loading" class="empty-state" role="status">正在读取任务包…</div><MarkdownEditor v-else-if="!detailError" :key="task.id" :model-value="content" readonly :outline="false" :filename="'task-' + task.id + '.md'" @error="store.error = $event" /></details>
+      <details v-if="store.canManage" class="workspace-disclosure"><summary><Icon name="people" :size="17" /><strong>调整负责人</strong><Icon name="chevron" :size="15" /></summary><div class="disclosure-body"><TaskAssignment :key="task.id" :tasks="[task]" /></div></details>
     </section>
-  </div>
+    <p v-else class="inline-error" role="alert">此任务不存在或当前身份无权查看，请返回任务列表。</p>
+  </template>
 </template>
