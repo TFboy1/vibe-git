@@ -1,32 +1,66 @@
 {
-  "name": "vibe-git",
+  "name": "@vibe-git/vibe-git",
   "version": "0.20.0",
-  "private": true,
+  "description": "CLI-first collaboration protocol for teams of Codex agents",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/TFboy1/vibe-git.git",
+    "directory": "vibe-git"
+  },
+  "bugs": {
+    "url": "https://github.com/TFboy1/vibe-git/issues"
+  },
+  "homepage": "https://github.com/TFboy1/vibe-git#readme",
+  "keywords": [
+    "codex",
+    "agents",
+    "collaboration",
+    "git",
+    "cli"
+  ],
   "type": "module",
   "workspaces": [
     "apps/*",
     "packages/*"
+  ],
+  "files": [
+    "apps/cli/dist",
+    "apps/host/dist",
+    "apps/web/dist-agile",
+    "apps/web/package.json",
+    "README.md",
+    "CHANGELOG.md"
   ],
   "bin": {
     "vibe-git": "apps/cli/dist/index.js"
   },
   "scripts": {
     "predev": "npm run build -w @vibe-git/protocol",
-    "dev": "concurrently -k -n host,web -c cyan,magenta \"npm run dev -w @vibe-git/host\" \"npm run dev -w @vibe-git/web\"",
-    "dev:relay": "npm run dev -w @vibe-git/relay",
+    "dev": "concurrently -k -n host,web \"npm run dev -w @vibe-git/host\" \"npm run dev -w @vibe-git/web\"",
+    "dev:web": "npm run dev -w @vibe-git/web",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "pretest": "npm run build -w @vibe-git/protocol",
-    "test": "npm run test -w @vibe-git/host && npm run test -w @vibe-git/cli",
+    "test": "npm run test -w @vibe-git/host && npm run test -w @vibe-git/cli && vitest run apps/web/test",
     "build": "npm run build -w @vibe-git/protocol && npm run build -w @vibe-git/host && npm run build -w @vibe-git/cli && npm run build -w @vibe-git/web",
+    "prepack": "npm run build",
+    "pack:check": "npm pack --dry-run",
     "reset": "node apps/host/scripts/reset.mjs"
+  },
+  "dependencies": {
+    "@deepseek-ai/dsh-host-directory-picker-native": "^0.1.0-rc.8",
+    "@vibe-git/protocol": "^0.1.0",
+    "fastify": "^5.6.0"
   },
   "devDependencies": {
     "@types/node": "^24.5.2",
-    "concurrently": "^9.2.1",
+    "concurrently": "^10.0.5",
     "typescript": "^5.9.2",
     "vitest": "^3.2.4"
   },
   "engines": {
     "node": ">=24"
-  }
+  },
+  "bundleDependencies": [
+    "@vibe-git/protocol"
+  ]
 }

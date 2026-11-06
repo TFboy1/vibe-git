@@ -1,5 +1,5 @@
 import { createServer } from 'node:http';
-import { readFileSync, mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { resolve, join } from 'node:path';
 import { Store } from './store.mjs';
@@ -8,15 +8,11 @@ import { assert,jsonBody,reply } from '../../plugins/agentgit/runtime/common.mjs
 
 export function createHost({dataDir=resolve('.agentgit/host')}={}) {
   const store=new Store(join(dataDir,'host.db'));
-  const web=fileURLToPath(new URL('../web/',import.meta.url));
   const server=createServer(async(req,res)=>{
     try {
       const url=new URL(req.url,'http://localhost'); const path=url.pathname;
       if(req.headers.origin) assert(req.headers.origin===`http://${req.headers.host}` || req.headers.origin===`https://${req.headers.host}`,'跨域请求已拒绝',403);
-      if(req.method==='GET'&&['/','/app.js','/style.css'].includes(path)) {
-        res.writeHead(200,{'Content-Type':path==='/'?'text/html; charset=utf-8':path.endsWith('.js')?'text/javascript; charset=utf-8':'text/css; charset=utf-8','Content-Security-Policy':"default-src 'self'; style-src 'self'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'",'Referrer-Policy':'no-referrer'});
-        return res.end(readFileSync(join(web,path==='/'?'index.html':path.slice(1))));
-      }
+      if(req.method==='GET'&&path==='/')return reply(res,503,{error:'当前分支的前端已移除，后端接口保持可用'});
       if(path==='/api/health'&&req.method==='GET')return reply(res,200,{ok:true,version:'0.1.0'});
       const token=(req.headers.authorization||'').replace(/^Bearer /,'');
       if(path==='/api/join'&&req.method==='POST'){const body=await jsonBody(req);return reply(res,200,store.join(body.invite,body.name));}

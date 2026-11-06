@@ -1,0 +1,19 @@
+<script setup lang="ts">
+import type { AgileFlow } from "@vibe-git/protocol";
+import { useWorkspace } from "../store";
+import Icon from "./Icon.vue";
+import ActionMenu from "./ActionMenu.vue";
+withDefaults(defineProps<{ flow: AgileFlow; readonly?: boolean; hideCancel?: boolean }>(), { readonly: false, hideCancel: false });
+const store = useWorkspace();
+const phaseNames: Record<string, string> = { AGILE_ANALYZE: "正在分析需求与冲突", AGILE_DIALOGUE: "正在检查回答与必要追问", AGILE_REQUIREMENT: "正在生成完整需求文档", AGILE_ALLOCATE: "正在生成任务分工" };
+</script>
+<template>
+  <div v-if="['ANALYZING', 'PLANNING'].includes(flow.status)" class="flow-status">
+    <span class="working-dot"></span><div><strong>{{ flow.phase === 'AGILE_ALLOCATE' && flow.allocationRepairCount ? '正在自动调整分工（' + flow.allocationRepairCount + '/2）' : phaseNames[flow.phase] }}</strong><p>右下角显示实时活动，点击可展开本轮记录；刷新或稍后回来仍能查看。</p></div>
+    <ActionMenu v-if="store.canManage && !readonly && !hideCancel" aria-label="更多流程操作" :disabled="store.busy"><button type="button" role="menuitem" class="danger" :disabled="store.busy" @click="store.mutate('/api/v1/agile/flows/' + flow.id + '/cancel', { expectedRevision: flow.revision })">取消本轮</button></ActionMenu>
+  </div>
+  <div v-else-if="flow.status === 'FAILED'" class="flow-status failure">
+    <Icon name="clock" /><div><strong>本次分析未完成</strong><p>{{ flow.error }}</p><small>已保留你的回答与草稿。</small></div>
+    <RouterLink v-if="store.canManage && flow.phase === 'AGILE_ALLOCATE'" to="/projects" class="text-button">查看分工与冲突</RouterLink><button v-if="store.canManage && !readonly" class="btn small" :disabled="store.busy" @click="store.mutate('/api/v1/agile/flows/' + flow.id + '/retry', { expectedRevision: flow.revision })">重试</button><RouterLink v-else-if="store.canManage" :to="flow.kind === 'initial' ? '/requirements' : '/issues'" class="text-button">查看处理流程 <Icon name="arrow" :size="14" /></RouterLink>
+  </div>
+</template>

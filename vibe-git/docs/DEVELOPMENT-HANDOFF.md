@@ -1,5 +1,7 @@
 # v0.10 续开发交接
 
+> 历史说明：本文记录 v0.10，当时的旧 Host、内嵌 reviewer、固定 A/B/C Relay 和旧测试已移除。当前使用 CLI daemon 与 `/api/v1/*`，运行方式见 [超敏捷协作](AGILE-WORKFLOW.md)。
+
 更新日期：2026-09-22。
 
 ## 恢复来源与边界

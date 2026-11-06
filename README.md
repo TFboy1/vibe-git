@@ -1,30 +1,137 @@
-# Vibe-Git 仓库
+<p align="center"><img src="docs/assets/vibe-git-logo-readme.svg" alt="Vibe-Git logo" width="180" /></p>
 
-当前 Vibe-Git CLI 与 Host 位于 [`vibe-git/`](vibe-git/README.md)，安装需在该子目录执行。给 Codex 使用的 [Vibe-Git Skill](https://github.com/TFboy1/vibe-git-skill) 独立发布，包含安装步骤和队长、成员的 CLI 工作流；本项目通过 Git submodule 绑定它。
+<h1 align="center">Vibe-Git</h1>
+<p align="center"><strong>One repo. Many agents. One intent.</strong><br />给多人 Codex 开发一条可追踪的协作协议。</p>
 
-## 历史 AgentGit M0 导出说明
+<p align="center">
 
-这是 Codex 原生协作插件的 M0 开发快照，**不是完整 M0 验收通过版**。
+[![Discord](https://img.shields.io/badge/Discord-加入讨论-5865F2?style=for-the-badge&logo=discord&logoColor=white)](https://discord.gg/DrqtEjk6)
+[![Skills.sh](https://img.shields.io/badge/Skills.sh-安装%20Skill-00C853?style=for-the-badge&logo=hackthebox&logoColor=white)](https://skills.sh/tfboy1/vibe-git-skill/vibe-git)
+[![爱发电](https://img.shields.io/badge/爱发电-支持项目-FF69B4?style=for-the-badge&logo=buy-me-a-coffee&logoColor=white)](https://www.ifdian.net/item/1a20ed042f0711f1865a52540025c377)
+[![GitHub Stars](https://img.shields.io/github/stars/TFboy1/vibe-git?style=for-the-badge&logo=github&color=yellow)](https://github.com/TFboy1/vibe-git/stargazers)
+[![Buy Me a Coffee](https://img.shields.io/badge/Buy%20Me%20a%20Coffee-☕-FFDD00?style=for-the-badge&logo=buy-me-a-coffee&logoColor=black)](https://www.creem.io/payment/prod_1yc40mIhKwwrc7iqFOG9G2)
 
-入口：M0-HANDOFF.md（安装和操作）、M0-VALIDATION.md（实测、限制和下一批任务）、DEVELOPMENT_PLAN.md（v0.4 规格）。
+</p>
 
-要求 Node.js 22.13+、Python 3、PowerShell 7 和已登录的 Codex。解压到任意工作目录后：
+<p align="center">
+
+[![简体中文](https://img.shields.io/badge/简体中文-当前语言-red?style=flat-square)](#)
+[![English](https://img.shields.io/badge/English-README-blue?style=flat-square)](docs/README_EN.md)
+[![日本語](https://img.shields.io/badge/日本語-README-blue?style=flat-square)](docs/README_JA.md)
+[![Français](https://img.shields.io/badge/Français-README-blue?style=flat-square)](docs/README_FR.md)
+[![Deutsch](https://img.shields.io/badge/Deutsch-README-blue?style=flat-square)](docs/README_DE.md)
+
+</p>
+
+<p align="center"><code>CLI-first</code> · <code>Captain-hosted</code> · <code>Git + Codex</code> · <code>v0.20</code></p>
+
+<p align="center"><a href="https://tfboy1.github.io/vibe-git/">文档站</a> · <a href="#快速开始">快速开始</a> · <a href="vibe-git/README.md">使用手册</a> · <a href="vibe-git/CHANGELOG.md">更新日志</a> · <a href="https://github.com/TFboy1/vibe-git/issues">Issues</a></p>
+
+---
+
+当前 `codex/frontend-rebuild` 分支已重建 Vue 超敏捷工作台：多人计划 → 冲突裁决 → 可编辑需求 MD → 分工与任务包；开发中的内部 PR 支持批量审核和新版派发。后端、CLI 及 v20 历史房间流程保留，成员同步与执行由 CLI daemon 承担。运行步骤与接口说明见[超敏捷协作](vibe-git/docs/AGILE-WORKFLOW.md)，下文保留历史版本的介绍。
+
+## Git 记录代码，Vibe-Git 记录团队决定
+
+多个 Codex 可以同时写出正确的代码，却可能各自实现了不同的需求。Git 擅长保存分支、提交和 diff；它不会自动告诉团队哪份提案已获确认、冲突由谁裁决、任务按哪个版本开工。
+
+Vibe-Git 在现有 Git 工作区之上管理**提案 → 对齐 → 任务 → 变更审核**。队长托管协作房间，成员在自己的机器上使用 Codex 和 Git。代码仍由 Git 管理，团队决议有了明确的版本和状态。
+
+| 团队需要知道 | Git 中可见 | Vibe-Git 增加 |
+| --- | --- | --- |
+| 要做什么 | 需求文件的修改历史 | 每位成员的当前提案、冻结版本、对齐稿和待裁决问题 |
+| 何时开工 | 分支与提交 | 队长发布任务，负责人显式启动自己的 Codex |
+| 需求变了影响谁 | 代码 diff | 内部需求变更单、逐任务影响证据和队长确认 |
+| 何时算完成 | 最终 commit | Codex 与 Git 状态同步，以及负责人的完成确认 |
+
+## 安装后，一句话开始
+
+安装并加载当前源码随附的 Skill 后，在你的产品项目里对 Codex 说：
+
+> 用 Vibe-Git 帮我们开发一个记账工具。
+
+首次仅选择“偏自动”或“多人工介入”，选择按本机项目保存。偏自动在当前授权范围内整理需求、生成分工并派发；多人工介入会先准备完整结果，在发布前集中确认。以后直接说“继续我的任务”“修改需求”或“现在进展如何”。工作台用于查看进度和人工接管，正常协作不要求打开网页。
+
+加入已有团队时把队长邀请交给 Codex；已有连接和未完成流程优先恢复。缺少 AI 登录或关键需求时，Codex 会明确说明需要补充什么。派发给离线成员不代表成员已经开工。
+
+可用自然语言更改偏好，也可在设置中修改。高级命令：
 
 ```powershell
-npm ci
-npm test
-npm start
-# 另一终端：安装完整插件并启动成员 Relay
-.\scripts\Install-AgentGit.ps1
-.\scripts\Start-Relay.ps1
+vibe-git preference show
+vibe-git preference set automatic
+vibe-git preference set assisted
+vibe-git compute status
 ```
 
-安装器会在目标电脑创建/更新个人 AgentGit 插件并生成本机路径。新开 Codex 会话加载。不要直接复制本包 MCP 模板到全局配置：安装器负责物化路径。
+本功能以当前源码构建的 CLI 与仓库随附 Skill 为准；若已发布包或独立 Skill 仓库尚未同步，请勿认为旧版本已具备这些能力。
 
-成员通过 Codex 完成加入、Plan、冻结预览、确认提交和任务读取。apps/web 是上一轮的辅助查看界面，不是 M0 操作入口。scripts/demo.mjs 仅用于明确标记的网页 fixture 演示。
+## 快速开始
 
-本包不含真实房间、成员凭据、冻结稿、数据库、私钥、API 密钥、聊天记录、依赖缓存或 cloudflared 可执行文件。首次运行会生成新的本机状态；公网验证需自行安装官方 cloudflared。
+新版工作台需要 **Node.js 24+、Git**，协作分析可选择 Codex 或自定义 API。当前 npm `0.20.0` 仍是旧流程；体验新版请构建 `codex/frontend-rebuild` 源码，并按[完整安装教程](https://tfboy1.github.io/vibe-git/guide/install.html)检查能力：
 
-历史文档 README-AGENTGIT.md、VALIDATION.md 未导出；有关旧文档的引用只说明来源，不是缺失的当前操作步骤。
+```powershell
+git clone --branch codex/frontend-rebuild --recurse-submodules https://github.com/TFboy1/vibe-git.git
+cd vibe-git/vibe-git
+npm.cmd ci
+npm.cmd run build
+npm.cmd link
+vibe-git --help
+```
 
-文件校验见 EXPORT-MANIFEST.json，去敏范围见 SANITIZATION-REPORT.md。
+确认帮助包含“超敏捷主线”后，在自己的产品工作区安装并加载 Skill：
+
+```powershell
+npx.cmd skills add TFboy1/vibe-git-skill --skill vibe-git
+```
+
+队长进入**自己的项目 Git 工作区**，启动房间并复制命令输出中的成员加入链接：
+
+```powershell
+vibe-git host start
+vibe-git open
+```
+
+成员进入**各自的项目 Git 工作区**，运行队长给出的加入命令并打开工作台。可以只接任务，也可以按需提交一份 UTF-8 Markdown 想法：
+
+```powershell
+vibe-git connect "https://xxxx.trycloudflare.com/join/xxxxx"
+vibe-git open
+# 可选：补充自己的想法
+vibe-git plan submit .\proposal.md
+```
+
+队长在“设置”配置协作算力，在“需求”简述目标或导入已有文档。AI 用选择题补齐关键需求，队长审核需求与分工后一次发布。无需收齐所有人的计划。成员在“任务”复制具体指令给现有开发 AI，Skill 同步 `task inbox` 并通过 `task report` 汇报实际结果。完整步骤见[新版使用文档](https://tfboy1.github.io/vibe-git/guide.html)。加入链接含注册密钥，只交给预期成员；下方工作流表保留历史流程说明。
+
+## 工作流
+
+| 阶段 | 操作 | 保留下来的结果 |
+| --- | --- | --- |
+| **PLAN** | 成员 `plan submit <文件.md>` | 每人一份当前提案；更新形成新版本，团队可查看 |
+| **ALIGN** | 队长 `align start`，裁决后 `tasks publish` | 冻结的提案集合、对齐稿、冲突选择与任务 |
+| **BUILD** | 负责人 `task pull`、`task start`、`task sync`、`task done` | 明确的开工动作、Git/Codex 状态与完成确认 |
+| **CHANGE** | 成员 `pr submit`，队长 `review apply` 或 `review reject` | 需求变更、影响证据和应用决定 |
+
+任务发布不会自动启动所有 Codex；Codex 结束也不会自动把任务标为完成。`pr submit` 创建的是 **Vibe-Git 内部需求变更单**，不会创建 GitHub Pull Request。
+
+## 运行方式
+
+```text
+队长电脑：Git 工作区 + Codex + Vibe-Git CLI
+                         │
+                         └── Host + SQLite + Web 房间
+                                        ▲
+                            Cloudflare Quick Tunnel
+                                        │
+成员电脑：各自的 Git 工作区 + Codex + Vibe-Git CLI
+```
+
+每位成员保留自己的 Git 工作区和日常 Codex 配置。专用审核池的凭据保存在各节点本机；Host 接收协作状态和受限证据，不接收成员的日常 Codex 凭据、完整聊天正文或工具记录。网页集中展示提案、对齐、任务和审核状态，并支持部分提案与排期操作。
+
+## 文档与当前状态
+
+- [使用手册](vibe-git/README.md)：完整 CLI 命令、队长与成员流程、数据边界。
+- [Codex Skill](https://github.com/TFboy1/vibe-git-skill)：独立发布、可通过 `npx skills add TFboy1/vibe-git-skill --skill vibe-git` 安装；主项目中的 `.agents/skills/vibe-git` 以 Git submodule 绑定。
+- [更新日志](vibe-git/CHANGELOG.md)：0.20 的界面、提案和排期更新。
+- [Issues](https://github.com/TFboy1/vibe-git/issues)：反馈问题与使用体验。
+
+当前版本为 **0.20**。Cloudflare Quick Tunnel 使用临时地址；真实跨设备房间和公网 Host 仍需在目标环境联调。仓库根目录保留的 [AgentGit M0 交接](M0-HANDOFF.md)与[验证记录](M0-VALIDATION.md)属于历史快照，不是当前版本的安装步骤。

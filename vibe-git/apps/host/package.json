@@ -7,11 +7,10 @@
     "dev": "tsx watch src/index.ts",
     "start": "node dist/index.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "vitest run test/v20.test.ts",
+    "test": "vitest run test",
     "build": "tsc -p tsconfig.build.json"
   },
   "dependencies": {
-    "@fastify/cors": "^11.1.0",
     "@vibe-git/protocol": "0.1.0",
     "fastify": "^5.6.0"
   },

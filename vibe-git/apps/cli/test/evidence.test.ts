@@ -11,6 +11,21 @@ afterEach(async () => { await Promise.all(roots.splice(0).map((root) => rm(root,
 const git = (cwd: string, ...args: string[]) => execFileSync("git", args, { cwd, encoding: "utf8", windowsHide: true, stdio: ["ignore", "pipe", "pipe"] }).trim();
 
 describe("本地只读代码证据", () => {
+  it("分工摘要包含冻结入口、模型和组件引用，不包含实现值", async () => {
+    const root = await mkdtemp(resolve(tmpdir(), "vibe-git-evidence-")); roots.push(root);
+    git(root, "init"); git(root, "config", "user.email", "test@example.test"); git(root, "config", "user.name", "Test");
+    await mkdir(resolve(root, "backend/app"), { recursive: true }); await mkdir(resolve(root, "frontend/src"), { recursive: true });
+    await writeFile(resolve(root, "backend/app/main.py"), 'from .models import Todo\n@app.get("/api/todos")\ndef list_todos():\n    return "PRIVATE_IMPLEMENTATION_VALUE"\n', "utf8");
+    await writeFile(resolve(root, "backend/app/models.py"), 'class Todo:\n    title: str\n    api_key = "PRIVATE_IMPLEMENTATION_VALUE"\n', "utf8");
+    await writeFile(resolve(root, "frontend/src/App.vue"), '<script setup>\nimport TodoList from "./TodoList.vue";\n</script>\n<template><TodoList /></template>\n', "utf8");
+    git(root, "add", "."); git(root, "commit", "-m", "base");
+    const context = await repositoryContext(root, "todo", ["backend/app/main.py"]);
+    expect(context.summary).toContain("backend/app/main.py"); expect(context.summary).toContain("from .models import Todo");
+    expect(context.summary).toContain("路由 app.get /api/todos"); expect(context.summary).toContain("字段 title: str");
+    expect(context.summary).toContain("TodoList.vue"); expect(context.summary).toContain("组件引用 TodoList");
+    expect(context.summary).not.toContain("PRIVATE_IMPLEMENTATION_VALUE");
+    expect(Buffer.byteLength(context.summary, "utf8")).toBeLessThanOrEqual(40_000);
+  });
   it("大仓库只上传受限摘要，工作树改变后指纹也改变", async () => {
     const root = await mkdtemp(resolve(tmpdir(), "vibe-git-evidence-")); roots.push(root);
     git(root, "init"); git(root, "config", "user.email", "test@example.test"); git(root, "config", "user.name", "Test");

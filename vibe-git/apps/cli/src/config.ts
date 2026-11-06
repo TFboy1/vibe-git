@@ -2,6 +2,7 @@ import { homedir } from "node:os";
 import { dirname, resolve } from "node:path";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import type { WorkTransport } from "@vibe-git/protocol";
+import { randomUUID } from "node:crypto";
 
 export interface ClientConfig {
   hostUrl: string;
@@ -11,11 +12,16 @@ export interface ClientConfig {
   workTransport: WorkTransport;
   daemonPid: number | null;
   connectedAt: string;
+  openaiApiKey?: string;
+  openaiModel?: string;
+  openaiBaseUrl?: string;
+  aiProvider?: "codex" | "api";
+  apiConnection?: { signature: string; status: "passed" | "failed"; checkedAt: string; error?: string };
 }
 
 export const vibeHome = () => resolve(process.env.VIBE_GIT_HOME?.trim() || resolve(homedir(), ".vibe-git"));
 export const configPath = () => resolve(vibeHome(), "client.json");
-export const auditCodexHome = () => resolve(vibeHome(), "audit-codex");
+export const defaultCodexHome = () => resolve(process.env.CODEX_HOME?.trim() || resolve(homedir(), ".codex"));
 export const daemonLogPath = () => resolve(vibeHome(), "daemon.log");
 export const hostProcessPath = () => resolve(vibeHome(), "host-process.json");
 export const hostLogPath = () => resolve(vibeHome(), "host.log");
@@ -27,7 +33,7 @@ export async function readJson<T>(path: string): Promise<T | null> {
 
 export async function writeJson(path: string, value: unknown): Promise<void> {
   await mkdir(dirname(path), { recursive: true, mode: 0o700 });
-  const temp = `${path}.${process.pid}.tmp`;
+  const temp = `${path}.${process.pid}.${randomUUID()}.tmp`;
   await writeFile(temp, `${JSON.stringify(value, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
   await rename(temp, path);
 }

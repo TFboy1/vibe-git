@@ -1,10 +1,40 @@
 # Vibe-Git 0.20
 
+当前 `codex/frontend-rebuild` 分支的 Vue 工作台以当前行动为入口：队长简述目标，AI 仅追问关键歧义，按项目介入偏好准备或发布需求与分工；成员可以只接任务，复制指令给现有开发 AI，通过 Skill 同步与汇报。主导航为工作台、需求、任务、变更、设置；个人想法是可选输入。`npm run build` 同时构建前后端，`vibe-git open` 打开本机工作台。启动与操作步骤见[超敏捷协作](docs/AGILE-WORKFLOW.md)；下文保留历史流程说明。
+
 Vibe-Git 是一个 **CLI 主导、网页观察** 的多人 Codex 协作控制面。队长只启动一个 Host 和 Cloudflare Quick Tunnel；每位成员从自己的 Git 工作区连接，不需要填写项目名称、成员名字或固定 A/B/C 身份。
+
+## 安装后，一句话开始
+
+安装并加载当前源码随附的 Skill 后，在你的产品项目里对 Codex 说：
+
+> 用 Vibe-Git 帮我们开发一个记账工具。
+
+首次仅选择“偏自动”或“多人工介入”，选择按本机项目保存。偏自动在当前授权范围内整理需求、生成分工并派发；多人工介入会先准备完整结果，在发布前集中确认。以后直接说“继续我的任务”“修改需求”或“现在进展如何”。工作台用于查看进度和人工接管，正常协作不要求打开网页。
+
+加入已有团队时把队长邀请交给 Codex；已有连接和未完成流程优先恢复。缺少 AI 登录或关键需求时，Codex 会明确说明需要补充什么。派发给离线成员不代表成员已经开工。
+
+可用自然语言更改偏好，也可在设置中修改。高级命令：
+
+```powershell
+vibe-git preference show
+vibe-git preference set automatic
+vibe-git preference set assisted
+vibe-git compute status
+```
+
+本功能以当前源码构建的 CLI 与仓库随附 Skill 为准；若已发布包或独立 Skill 仓库尚未同步，请勿认为旧版本已具备这些能力。
 
 ## 安装
 
-需要 Node.js 24+、Git、Codex CLI。
+需要 Node.js 24+、Git、Codex CLI。通过 npm 手动安装已发布的 CLI：
+
+```powershell
+npm install -g @vibe-git/vibe-git
+vibe-git --help
+```
+
+若要从源码构建，请先进入仓库中的 `vibe-git/` 目录，然后执行：
 
 ```powershell
 npm ci
@@ -18,22 +48,17 @@ npm link
 node .\apps\cli\dist\index.js
 ```
 
-仓库根目录提供 Codex Skill：[`.agents/skills/vibe-git/SKILL.md`](../.agents/skills/vibe-git/SKILL.md)。在本仓库使用 Codex 时可用 `$vibe-git` 调用；Skill 包含源码安装、队长与成员的 CLI 工作流，以及凭据处理约定。若要在其他项目也使用该 Skill，可将整个 `.agents/skills/vibe-git` 文件夹复制到个人 `~/.codex/skills/` 下。
-
-```powershell
-$repoRoot = (git rev-parse --show-toplevel).Trim()
-$skillHome = Join-Path $HOME ".codex\skills"
-New-Item -ItemType Directory -Path $skillHome -Force | Out-Null
-Copy-Item -LiteralPath (Join-Path $repoRoot ".agents\skills\vibe-git") -Destination $skillHome -Recurse
-```
+Codex Skill 独立发布，可运行 `npx skills add TFboy1/vibe-git-skill --skill vibe-git` 安装。在 Codex 中可用 `$vibe-git` 调用；Skill 包含安装、队长与成员的 CLI 工作流，以及凭据处理约定。本仓库以 Git submodule 绑定该 Skill。
 
 ## 1. 队长启动
 
-请先进入队长自己的 Git 工作区，再运行：
+可从任意目录启动，并指定项目工作区：
 
 ```powershell
-vibe-git host start
+vibe-git host start D:\Projects\my-app
 ```
+
+省略路径时会复用已绑定的独立项目仓库；首次使用默认创建 `~/Vibe-Git Projects/my-project`。CLI 新建目录会自动建立 `main` 分支和首个空提交，已有源码不会被自动提交。Vibe-Git 安装目录不能作为项目工作区。
 
 该命令会：
 
@@ -56,10 +81,10 @@ vibe-git host stop
 
 ## 2. 每位成员连接
 
-每位成员先进入自己的 Git 工作区，再粘贴队长给出的命令：
+每位成员可指定自己的项目目录，再粘贴队长给出的命令：
 
 ```powershell
-vibe-git connect https://xxxx.trycloudflare.com/join/xxxxx
+vibe-git connect https://xxxx.trycloudflare.com/join/xxxxx D:\Projects\my-app
 ```
 
 连接成功后会自动得到 `Member-XXXX` 和稳定节点 ID，并启动隐藏后台进程。不会上传主机名。
@@ -72,6 +97,7 @@ vibe-git disconnect
 ```
 
 `vibe-git open` 创建只能使用一次的短期票据，浏览器再换取 HttpOnly 会话；网页没有身份切换器。
+本机页面顶部的“本地工作区”通过 Windows 原生文件夹窗口选择目录，默认以文件夹名作为项目名。确认项目名后先绑定目录，再单独确认初始化 Git；选目录时不会运行 Git。单独打开 Vite 开发页 `http://localhost:4173` 没有本机控制桥。
 
 ## 3. 绑定专用 Codex 审核池
 
@@ -206,7 +232,7 @@ Captain 页面显示队长按钮，成员页面只显示自己的操作。页面
 - 节点注册后使用独立随机凭据；旧的 `x-member-id` 信任模式已移除。
 - 邀请密钥只用于首次注册，节点可由队长撤销。
 - Markdown 以纯文本结构安全渲染，不执行 HTML 或脚本。
-- SQLite 首次升级到 v0.20 前会自动备份到 `data/v20/backups/`。
+- CLI 启动的 Host 将房间 SQLite 与运行资料保存在项目工作区的 `.vibe-git/host/`，并从 Git 中排除；首次迁移旧默认数据时保留原目录。直接运行开发 Host 的数据保存在 `~/.vibe-git/development-host/`。
 - 旧表保留归档，但 v0.20 API 不再暴露；生产启动不会写入 demo seed。
 - Quick Tunnel 是临时地址，重启后用 `vibe-git host status` 或 `invite show` 获取新地址。
 - 分布式审核采用官方 Codex CLI/App Server 与隔离 `CODEX_HOME`；只借鉴 dsh-codex-connect 的本机凭据隔离、脱敏原则，不调用 ChatGPT 私有后端。
@@ -225,3 +251,44 @@ Host API 健康检查：`GET /health`。运行问题优先查看：
 vibe-git logs
 Get-Content "$HOME/.vibe-git/host.log" -Tail 100
 ```
+
+`host.log` 与 `daemon.log` 在写入前自动检查大小，每份最多 20 MiB，保留 `.1`、`.2` 两个备份；两组正常运行日志合计最多 120 MiB。重启时也会轮转超限日志，并仅保留旧大文件末尾最多 20 MiB。该策略在重启 Host 和守护进程后生效，不清理 Codex 会话、房间数据库或旧版遗留的其他日志文件。
+
+活动上报使用单个发送器，最多保留最新 100 条待发送进度和一条在途请求；拥塞时淘汰旧的中间进度，任务最终结果通过独立请求上报。Host 事件流等待发送缓冲排空，暂停期间的事件保存在数据库中并按游标补发；本机代理支持 `Last-Event-ID` 断线续传。更新后需重启 Host 与守护进程生效。
+
+构建后可运行 `node --expose-gc scripts/memory-audit.mjs`，在隔离的后端检查活动队列、慢客户端背压和闲置心跳；附加 `--live-codex` 会只读查询三次本机 Codex 额度并检查进程退出，不执行 AI 任务。
+
+
+## 快速协作
+
+网页默认工作台展示当前需求、可开工任务、等待原因和待处理事项；顶部「算力网」可设置本机 Codex 和 OpenAI API。提出需求后，由队长生成或导入任务草案并发布，负责人可以使用 Codex，也可以自行使用其他 Agent。
+
+常用命令：
+
+```powershell
+vibe-git intent submit .\intent.md
+vibe-git intent generate <intent-id>
+vibe-git intent import <intent-id> .\plan.json
+vibe-git task package <task-id> .\task.md
+vibe-git task start <task-id> --external
+vibe-git task report <task-id> .\report.json
+vibe-git change submit .\change.json
+vibe-git change suggest <change-id>
+```
+
+草案、报告和变更 JSON 的字段见 CLI '--help' 与网页版「查看格式示例」。算力池生成影响建议仅供队长参考，不会自动暂停任务；应用前必须逐项确认，未知关联不得默认视为不受影响。详细执行与兼容限制以当前工作台任务包为准。
+
+## AI 需求梳理接入
+
+需求梳理支持两种本机方式：
+
+- **本机 Codex**：使用当前 Codex CLI / App Server 登录。需求梳理调用原生 Plan 提问，模型选项由 App Server 的 `model/list` 返回。
+- **OpenAI API**：在顶部「算力网」配置 API Key 和模型，也可在需求梳理中快速配置。Key 只保存在本机；也可设置 `OPENAI_API_KEY` 环境变量。默认模型为 `gpt-5`，可按账户权限修改。
+
+CLI 也支持：
+
+```powershell
+vibe-git intent clarify
+```
+
+OpenAI API Key 不会写入房间、Host、任务或 Git 仓库。需求梳理会实时显示生成进度，可随时停止或改用另一种接入方式。

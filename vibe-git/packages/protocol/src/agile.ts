@@ -1,0 +1,159 @@
+import type { MarkdownDocument, Notification, RepositoryContext, StageTask, StageTaskStatus } from "./v20.js";
+import type { QuickPlanInput, TaskExecutionPackage } from "./coordination.js";
+
+export type AgileProvider = "codex" | "api";
+export interface LocalComputeStatus {
+  provider: AgileProvider; baseUrl: string; model: string; configured: boolean; ready: boolean;
+  keySource: "local" | "environment" | "none";
+  connection: { status: "passed" | "failed"; checkedAt: string; error?: string } | null;
+}
+export interface LocalCodexStatus {
+  status: "available" | "connecting" | "login_required" | "unavailable";
+  reason?: string; verificationUrl?: string; userCode?: string;
+  rateLimits: import("./v20.js").RateLimitWindow[];
+}
+export type AgilePhase = "AGILE_ANALYZE" | "AGILE_DIALOGUE" | "AGILE_REQUIREMENT" | "AGILE_ALLOCATE";
+export type AgileStatus = "ANALYZING" | "DECIDING" | "DRAFT" | "PLANNING" | "READY" | "PUBLISHED" | "FAILED" | "CANCELLED" | "REJECTED";
+export interface AgileIssue {
+  id: string; title: string; reason: string;
+  evidence: Array<{ sourceId: string; excerpt: string }>;
+  options: [AgileOption, AgileOption, AgileOption];
+  answer: { kind: "option"; optionId: string } | { kind: "custom"; text: string } | null;
+}
+export interface AgileOption { id: string; label: string; impact: string }
+export interface AgileDecision { changeId: string; verdict: "accept" | "reject"; rationale: string }
+export interface AgileTaskDraft {
+  key: string; sourceTaskId: string | null; title: string; goal: string; boundary: string;
+  acceptance: string[]; assigneeNodeId: string; dependencies: string[];
+  ownedPaths: string[]; excludedPaths: string[]; requirementRefs: string[];
+  dependencyEdges?: QuickPlanInput["tasks"][number]["dependencyEdges"];
+  interfaceNotes?: string[]; integrationSteps?: string[]; verificationCommands?: string[];
+  mockStrategy?: string; handoff?: string;
+}
+export type AgileContractDraft = NonNullable<QuickPlanInput["contracts"]>[number];
+export interface AllocationConflict {
+  path: string; reason: string;
+  tasks: Array<{ key: string; title: string; assigneeNodeId: string }>;
+}
+export interface AllocationAttempt {
+  summary: string; tasks: AgileTaskDraft[]; contracts: AgileContractDraft[]; removedTaskIds: string[];
+  conflicts: AllocationConflict[]; createdAt: string;
+}
+export interface AgileDraftVersion { revision: number; markdown: string; editorNodeId: string; createdAt: string }
+export interface AgileFlow {
+  id: string; kind: "initial" | "review"; status: AgileStatus; phase: AgilePhase; revision: number;
+  baseRequirementRevision: number; baseRequirementMarkdown: string; stageId: string | null;
+  stageSnapshot?: { status: import("./v20.js").DevelopmentStage["status"]; completedAt: string | null };
+  participantNodeIds: string[]; planSnapshot: MarkdownDocument[];
+  changeSnapshot: Array<{ id: string; submitterNodeId: string; baseRequirementRevision: number; document: MarkdownDocument;
+    source?: "agile_pr" | "legacy_pr" | "legacy_change"; sourceRevision?: number; title?: string;
+    taskIds?: string[]; contractIds?: string[]; requirementRefs?: string[] }>;
+  taskSnapshot: StageTask[]; taskDigests: Record<string, string>;
+  issues: AgileIssue[]; decisions: AgileDecision[]; affectedTaskIds: string[];
+  pausedTaskStates: Record<string, StageTaskStatus>;
+  pausedTaskReasons: Record<string, string | null>;
+  summary: string; draftMarkdown: string; draftRevision: number; draftHistory: AgileDraftVersion[];
+  tasks: AgileTaskDraft[]; removedTaskIds: string[]; allocationDraftRevision: number | null;
+  contracts?: AgileContractDraft[]; repositoryContext?: RepositoryContext | null;
+  allocationTeam?: Array<{ id: string; name: string }>;
+  allocationRepairCount?: number; allocationConflicts?: AllocationConflict[]; allocationAttempts?: AllocationAttempt[];
+  agentJobId: string | null; error: string | null; publishedRequirementRevision: number | null;
+  createdAt: string; updatedAt: string;
+}
+export interface AgileSnapshot {
+  enabled: boolean; compute: { provider: AgileProvider; executorNodeId: string | null };
+  batchReviewEnabled?: boolean;
+  planIntegrationEnabled?: boolean;
+  flows: AgileFlow[]; activeFlow: AgileFlow | null; archivedTasks: StageTask[];
+}
+export interface AgileTaskReport {
+  reportId: string; taskRevision: number; requirementRevision: number;
+  action: "started" | "progress" | "blocked" | "completed";
+  summary: string; evidence?: string[];
+}
+export interface AgileInbox {
+  requirementRevision: number; notifications: Notification[];
+  tasks: Array<{ task: StageTask; package: TaskExecutionPackage }>;
+  instructions: string;
+}
+
+const str = { type: "string" };
+const strings = { type: "array", items: str };
+const object = (properties: Record<string, unknown>) => ({ type: "object", additionalProperties: false, properties, required: Object.keys(properties) });
+const option = object({ id: str, label: str, impact: str });
+const issue = object({ id: str, title: str, reason: str,
+  evidence: { type: "array", items: object({ sourceId: str, excerpt: str }) },
+  options: { type: "array", minItems: 3, maxItems: 3, items: option } });
+const dependencyEdge = object({ upstreamKey: str, mode: { type: "string", enum: ["HARD", "CONTRACT"] },
+  contractKey: { type: ["string", "null"] }, reason: str });
+const contract = object({ key: str, providerTaskKey: str, consumerTaskKeys: strings,
+  kind: { type: "string", enum: ["module", "http", "event", "file"] }, name: str, signature: str,
+  behavior: { ...strings, minItems: 1 }, examples: { ...strings, minItems: 1 }, errors: strings, testCommand: str, handoff: str });
+export const AGILE_OUTPUT_SCHEMAS: Record<AgilePhase, Record<string, unknown>> = {
+  AGILE_ANALYZE: object({ summary: str, affectedTaskIds: strings,
+    decisions: { type: "array", items: object({ changeId: str, verdict: { type: "string", enum: ["accept", "reject"] }, rationale: str }) },
+    issues: { type: "array", items: issue } }),
+  AGILE_DIALOGUE: object({ summary: str, followUp: { anyOf: [issue, { type: "null" }] } }),
+  AGILE_REQUIREMENT: object({ markdown: str, summary: str }),
+  AGILE_ALLOCATE: object({ summary: str, removedTaskIds: strings, contracts: { type: "array", items: contract }, tasks: { type: "array", items: object({
+    key: str, sourceTaskId: { type: ["string", "null"] }, title: str, goal: str, boundary: str,
+    acceptance: strings, assigneeNodeId: str, dependencies: strings, ownedPaths: strings, excludedPaths: strings, requirementRefs: strings,
+    dependencyEdges: { type: "array", items: dependencyEdge }, interfaceNotes: strings, integrationSteps: strings,
+    verificationCommands: strings, mockStrategy: str, handoff: str
+  }) } })
+};
+
+/** File/directory scopes, including a trailing /* or /**; arbitrary globs are intentionally unsupported. */
+export function allocationPath(value: string): string {
+  const path = value.trim().replace(/\\/g, "/");
+  if (!path || path.startsWith("/") || /[:\u0000-\u001f]/.test(path) || path.split("/").includes("..")) throw new Error("任务路径须为工作区相对路径：" + value);
+  const normalized = path.split("/").filter(part => part && part !== ".").join("/").replace(/\/\*\*?$/, "").toLowerCase();
+  if (!normalized || normalized === "." || /[*?\[\]{}]/.test(normalized)) throw new Error("任务路径须指定文件或目录，不能覆盖整个仓库或使用任意通配符：" + value);
+  return normalized;
+}
+
+export function allocationConflicts(tasks: Array<Pick<AgileTaskDraft, "key" | "title" | "assigneeNodeId" | "ownedPaths" | "excludedPaths">>): AllocationConflict[] {
+  const covers = (scope: string, path: string) => scope === path || path.startsWith(scope + "/");
+  const scopes = tasks.map(task => ({ task, owned: [...new Set(task.ownedPaths.map(allocationPath))], excluded: task.excludedPaths.map(allocationPath) }));
+  const ref = (task: typeof tasks[number]) => ({ key: task.key, title: task.title, assigneeNodeId: task.assigneeNodeId });
+  const conflicts: AllocationConflict[] = [];
+  for (const item of scopes) if (!item.owned.some(path => !item.excluded.some(excluded => covers(excluded, path)))) {
+    conflicts.push({ path: "", reason: "任务必须声明非空、未被排除的负责路径", tasks: [ref(item.task)] });
+  }
+  for (let i = 0; i < scopes.length; i++) for (let j = i + 1; j < scopes.length; j++) {
+    const a = scopes[i]!, b = scopes[j]!;
+    if (a.task.assigneeNodeId === b.task.assigneeNodeId) continue;
+    const overlaps = new Set<string>();
+    for (const left of a.owned) for (const right of b.owned) {
+      const intersection = covers(left, right) ? right : covers(right, left) ? left : null;
+      if (intersection && ![...a.excluded, ...b.excluded].some(path => covers(path, intersection))) overlaps.add(intersection);
+    }
+    for (const path of overlaps) conflicts.push({ path, tasks: [ref(a.task), ref(b.task)], reason: "不同负责人存在写入路径重叠；请规划独立模块和唯一共享入口负责人" });
+  }
+  return conflicts;
+}
+
+// Model runners and the Host both validate structured output before use.
+export function assertJsonSchema(value: unknown, schema: Record<string, unknown>, path = "result"): void {
+  if (Array.isArray(schema.anyOf)) {
+    for (const candidate of schema.anyOf) { try { assertJsonSchema(value, candidate as Record<string, unknown>, path); return; } catch { /* another branch */ } }
+    throw new Error(`${path} 不符合输出结构`);
+  }
+  const actual = value === null ? "null" : Array.isArray(value) ? "array" : typeof value;
+  const types = Array.isArray(schema.type) ? schema.type : [schema.type];
+  if (schema.type && !types.includes(actual)) throw new Error(`${path} 类型无效`);
+  if (Array.isArray(schema.enum) && !schema.enum.includes(value)) throw new Error(`${path} 选项无效`);
+  if (actual === "object") {
+    const record = value as Record<string, unknown>, props = (schema.properties ?? {}) as Record<string, Record<string, unknown>>;
+    for (const key of (schema.required ?? []) as string[]) if (!(key in record)) throw new Error(`${path}.${key} 缺失`);
+    for (const [key, item] of Object.entries(record)) {
+      if (!props[key] && schema.additionalProperties === false) throw new Error(`${path}.${key} 为未知字段`);
+      if (props[key]) assertJsonSchema(item, props[key], `${path}.${key}`);
+    }
+  }
+  if (actual === "array") {
+    const list = value as unknown[];
+    if ((typeof schema.minItems === "number" && list.length < schema.minItems) || (typeof schema.maxItems === "number" && list.length > schema.maxItems)) throw new Error(`${path} 数量无效`);
+    for (let i = 0; i < list.length; i++) if (schema.items) assertJsonSchema(list[i], schema.items as Record<string, unknown>, `${path}[${i}]`);
+  }
+}

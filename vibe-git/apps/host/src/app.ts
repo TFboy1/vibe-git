@@ -1,6 +1,7 @@
-import { copyFileSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { backup, DatabaseSync } from "node:sqlite";
+import { homedir } from "node:os";
 import { extname, resolve, sep } from "node:path";
-import { fileURLToPath } from "node:url";
 import Fastify, { type FastifyInstance } from "fastify";
 import { openDatabase } from "./db/database.js";
 import { DomainError } from "./domain/errors.js";
@@ -11,30 +12,31 @@ import { ensureV20Runtime } from "./v20/runtime-secrets.js";
 import { registerV20Routes } from "./v20/routes.js";
 import { V20Service } from "./v20/service.js";
 
-const ROOT = resolve(fileURLToPath(new URL("../../..", import.meta.url)));
+function defaultDataRoot(): string {
+  return resolve(process.env.VIBE_GIT_DATA_DIR?.trim() || resolve(homedir(), ".vibe-git", "development-host"));
+}
 
 export interface BuildAppOptions {
   dbPath?: string;
   dataDir?: string;
+  /** 默认只提供 API；重建前端后可显式传入构建目录。 */
   staticDir?: string | false;
-  logger?: boolean;
+  logger?: boolean | { level: "warn"; stream?: NodeJS.WritableStream };
   cloudflareManager?: CloudflareManager;
-  /** 仅为兼容旧测试调用；v0.20 永远不会写入演示数据。 */
-  seedDemo?: boolean;
-  /** v0.20 的审核由节点池处理，旧内嵌 reviewer 不再使用。 */
-  conflictReviewer?: unknown;
   backupDatabase?: boolean;
 }
 
-function backupBeforeV20(dbPath: string, dataDir: string): void {
+async function backupBeforeSchemaUpgrade(dbPath: string, dataDir: string): Promise<void> {
   if (dbPath === ":memory:" || !existsSync(dbPath)) return;
-  const marker = resolve(dataDir, ".v020-database-backed-up");
+  const marker = resolve(dataDir, ".v023-database-backed-up");
   if (existsSync(marker)) return;
   const backupDir = resolve(dataDir, "backups");
   mkdirSync(backupDir, { recursive: true });
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-  const destination = resolve(backupDir, `workspace-pre-v020-${stamp}.db`);
-  copyFileSync(dbPath, destination);
+  const destination = resolve(backupDir, `workspace-pre-v023-${stamp}.db`);
+  const source = new DatabaseSync(dbPath);
+  try { await backup(source, destination); }
+  finally { source.close(); }
   writeFileSync(marker, `${destination}\n`, "utf8");
 }
 
@@ -64,15 +66,15 @@ async function registerStatic(app: FastifyInstance, staticDir: string): Promise<
 
 export async function buildApp(options: BuildAppOptions = {}) {
   const app = Fastify({ logger: options.logger ?? false, trustProxy: true, bodyLimit: 600 * 1024 });
-  const dbPath = options.dbPath ?? resolve(ROOT, "data/workspace.db");
-  const dataDir = options.dataDir ?? resolve(ROOT, "data/v20");
-  if (options.backupDatabase !== false) backupBeforeV20(dbPath, dataDir);
+  const dataRoot = defaultDataRoot();
+  const dbPath = options.dbPath ?? resolve(dataRoot, "workspace.db");
+  const dataDir = options.dataDir ?? resolve(dataRoot, "v20");
+  if (options.backupDatabase !== false) await backupBeforeSchemaUpgrade(dbPath, dataDir);
   const db = openDatabase(dbPath);
   const repo = new V20Repository(db);
-  repo.setMeta("schema_version", "20");
   const runtime = await ensureV20Runtime(repo, dataDir);
   const hub = new EventHub();
-  const cloudflareManager = options.cloudflareManager ?? new CloudflareTunnelManager(resolve(ROOT, "data/tools/cloudflared.exe"));
+  const cloudflareManager = options.cloudflareManager ?? new CloudflareTunnelManager(resolve(dataRoot, "tools/cloudflared.exe"));
   const service = new V20Service(repo, hub, dataDir, cloudflareManager, runtime.inviteToken);
 
   app.decorate("v20Service", service);
@@ -88,6 +90,6 @@ export async function buildApp(options: BuildAppOptions = {}) {
   });
 
   await registerV20Routes(app, service, cloudflareManager);
-  if (options.staticDir !== false) await registerStatic(app, options.staticDir ?? resolve(ROOT, "apps/web/dist"));
+  if (options.staticDir) await registerStatic(app, options.staticDir);
   return app;
 }

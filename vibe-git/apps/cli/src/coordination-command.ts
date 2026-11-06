@@ -1,0 +1,22 @@
+import type { ClientConfig } from "./config.js";
+import type { V20BootstrapPayload } from "@vibe-git/protocol";
+import { clarifyIntentWithCodex } from "./intent-clarifier.js";
+import { api, post } from "./api.js";
+import { readFile, stat, writeFile } from "node:fs/promises";
+import { resolve, basename } from "node:path";
+export const COORDINATION_USAGE = "\n  vibe-git intent list | submit <需求.md> | clarify [session-id] | generate <intent-id>\n  vibe-git task package <task-id> [output.md] | start <task-id> --external\n  vibe-git change list | submit <变更.json> | suggest <change-id>\n";
+async function readFileUtf8(path: string | undefined): Promise<string> { if (!path) throw new Error("缺少 UTF-8 文件路径"); const full=resolve(path), info=await stat(full); if (!info.isFile() || info.size>256*1024) throw new Error("文件须不超过 256 KiB"); return new TextDecoder("utf-8",{fatal:true}).decode(await readFile(full)); }
+function parse(value: string): Record<string, unknown> { const parsed: unknown=JSON.parse(value); if (!parsed || typeof parsed!=="object" || Array.isArray(parsed)) throw new Error("JSON 必须为对象"); return parsed as Record<string,unknown>; }
+export async function handleCoordinationCommand(args: string[], bootstrap: () => Promise<{config: ClientConfig; data: V20BootstrapPayload}>, out: (value: unknown)=>void): Promise<boolean> {
+ const [group,action,id,file]=args; const handles=group==="intent"||group==="change"||(group==="task"&&["package","start"].includes(action??"")); if(!handles)return false; const {config,data}=await bootstrap();
+ if(group==="intent"&&action==="clarify"){const rl=await import("node:readline/promises");const input=rl.createInterface({input:process.stdin,output:process.stdout});let message=await input.question("描述你想做的事： ");let start=true;try{while(true){const result=await clarifyIntentWithCodex(config,id||"default",message,start);out(result.status==="question"?result.question:result.content);if(result.status==="ready")break;message=await input.question("你的回答： ");start=false;}}finally{input.close();}return true;}
+ if(group==="intent"&&action==="list"){out(data.coordination?.intents??[]);return true;}
+ if(group==="intent"&&(action==="submit"||action==="update")){const content=await readFileUtf8(action==="submit"?id:file);const previous=action==="update"?data.coordination?.intents.find(item=>item.id===id):undefined;const title=content.match(/^#\s+(.+)$/m)?.[1]??basename(action==="submit"?id!:file! ,".md");const body={title,content,acceptance:previous?.acceptance??[],constraints:previous?.constraints??"",...(previous?{expectedRevision:previous.revision}:{})};out(previous?await api(config,`/api/v1/intents/${encodeURIComponent(previous.id)}`,{method:"PUT",body:JSON.stringify(body)}):await post(config,"/api/v1/intents",body));return true;}
+ if(group==="intent"&&action==="generate"){const item=data.coordination?.intents.find(entry=>entry.id===id);if(!item)throw new Error("需求不存在");out(await post(config,`/api/v1/intents/${encodeURIComponent(item.id)}/generate`,{expectedRevision:item.revision}));return true;}
+ if(group==="intent"&&action==="import"){const item=data.coordination?.intents.find(entry=>entry.id===id);if(!item)throw new Error("需求不存在");out(await post(config,`/api/v1/intents/${encodeURIComponent(item.id)}/plan`,parse(await readFileUtf8(file!))));return true;}
+ if(group==="task"&&action==="package"){const task=data.tasks.find(item=>item.id===id&&!item.archived);if(!task)throw new Error("任务不存在");const pack=await api<any>(config,`/api/v1/tasks/${encodeURIComponent(id!)}/package`);if(file)await writeFile(resolve(file!),file!.endsWith(".json")?JSON.stringify(pack,null,2):pack.markdown,{encoding:"utf8",flag:"wx"});else out(pack);return true;}
+ if(group==="task"&&action==="start"&&args.includes("--external")){const task=data.tasks.find(item=>item.id===id&&!item.archived);if(!task)throw new Error("任务不存在");out(await post(config,`/api/v1/tasks/${encodeURIComponent(id!)}/external-start`,{expectedRevision:task.revision}));return true;}
+ if(group==="change"&&action==="list"){out(data.coordination?.changes??[]);return true;}
+ if(group==="change"&&action==="submit"){out(await post(config,"/api/v1/changes",parse(await readFileUtf8(id!))));return true;}
+ if(group==="change"&&action==="suggest"){const item=data.coordination?.changes.find(entry=>entry.id===id);if(!item)throw new Error("变更不存在");out(await post(config,`/api/v1/changes/${encodeURIComponent(id!)}/suggest`,{expectedRevision:item.revision}));return true;}
+ throw new Error(`未知轻协作命令。${COORDINATION_USAGE}`); }

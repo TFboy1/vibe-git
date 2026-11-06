@@ -1,71 +1,72 @@
 #!/usr/bin/env node
-import { execFileSync, spawn } from "node:child_process";
-import { closeSync, existsSync, openSync } from "node:fs";
+import { handleCoordinationCommand, COORDINATION_USAGE } from "./coordination-command.js";
+import { handleAgileCommand, AGILE_USAGE } from "./agile-command.js";
+import { collaborationPreference, saveCollaborationPreference } from "./preferences.js";
+import { computeStatus, savePanelCompute, testCompute } from "./agile-ai.js";
+import { startupStatus } from "./startup.js";
+import { recoveryAdvice } from "@vibe-git/protocol";
+import { spawn } from "node:child_process";
+import { closeSync, existsSync } from "node:fs";
+import { openLogFile } from "@vibe-git/protocol/logging";
 import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
-import { homedir } from "node:os";
-import { basename, dirname, resolve } from "node:path";
+import { basename, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { AlignmentRun, BrowserTicketResponse, JoinResponse, MarkdownDocument, V20BootstrapPayload, WorkTransport } from "@vibe-git/protocol";
-import { api, post } from "./api.js";
+import type { AlignmentRun, JoinResponse, MarkdownDocument, V20BootstrapPayload, WorkspaceResources, WorkTransport } from "@vibe-git/protocol";
+import { api, post, ApiError } from "./api.js";
+import { codexInvocation } from "./codex-command.js";
 import {
-  auditCodexHome, configPath, daemonLogPath, hostLogPath, hostProcessPath, loadConfig, readJson,
-  saveConfig, vibeHome, writeJson, type ClientConfig
+  defaultCodexHome, configPath, daemonLogPath, hostLogPath, hostProcessPath, loadConfig, readJson,
+  saveConfig, type ClientConfig
 } from "./config.js";
 import { probeCodex } from "./codex.js";
 import { runDaemon } from "./daemon.js";
+import { localPanelPath } from "./local-panel.js";
+import { startupWorkspace } from "./local-workspace.js";
+import { startHost, stopHost, startTunnel, isAlive, type HostProcess } from "./host-process.js";
+import { projectController, rememberProject, savedProjectConnection } from "./projects.js";
 
 const args = process.argv.slice(2);
-const ROOT = resolve(fileURLToPath(new URL("../../..", import.meta.url)));
-const HOST_ENTRY = resolve(fileURLToPath(new URL("../../host/dist/index.js", import.meta.url)));
 const CLI_ENTRY = fileURLToPath(import.meta.url);
-const LOCAL_HOST = "http://127.0.0.1:8787";
 
-interface HostProcess { pid: number; hostUrl: string; startedAt: string; root: string }
-interface CaptainFile { roomId: string; nodeId: string; nodeToken: string }
 
 const out = (value: unknown) => console.log(typeof value === "string" ? value : JSON.stringify(value, null, 2));
 const command = (...parts: string[]) => parts.filter(Boolean).join(" ");
 
 function usage(): string {
-  return `Vibe-Git v0.20 — CLI 驱动的多人协作
+  return `Vibe-Git — 对 Codex 说一句目标即可开始协作
+
+自然语言入口（安装并加载 Skill 后）
+  “用 Vibe-Git 帮我们开发一个记账工具” / “继续我的任务” / “修改需求” / “现在进展如何”
+  首次选择偏自动或多人工介入；工作台用于查看进度与人工接管。
+  vibe-git preference show [项目目录] | set assisted|automatic [项目目录]
+  vibe-git compute status | use codex | use api <模型名> [Base-URL] | test
+  vibe-git project list | switch <项目目录>
+  vibe-git doctor [项目目录]  查看当前使用条件，不创建房间、不启动任务
 
 队长
-  vibe-git host start | status | stop
+  vibe-git host start [项目目录] | status | stop
   vibe-git invite show | rotate
   vibe-git align start | status | show <alignment-id> | resolve <alignment-id> <issue-id> <option-id> | export <alignment-id>
   vibe-git task assign <task-id> <node-id>
+  vibe-git align downgrade <alignment-id> <task-id> <upstream-task-id>
+  vibe-git stage replan <stage-id> | stage activate <alignment-id>
+  vibe-git contract list | show <contract-id> | ack <contract-id> | publish <contract-id>
   vibe-git tasks publish <alignment-id>
   vibe-git review start --force | status | apply <review-id> | reject <review-id> | cancel <review-id>
 
 每位成员
-  vibe-git connect <join-url> | status | logs | disconnect | open
+  vibe-git connect <join-url> [项目目录] | status | logs | disconnect | open
   vibe-git codex bind | status | unbind
   vibe-git config set work.transport auto|app-server|cli
   vibe-git plan submit <任意文件.md>
   vibe-git task list | pull <task-id> [output] | push <task-id> <任意文件.md>
-  vibe-git task start <task-id> | sync [task-id] | done <task-id>
-  vibe-git pr submit <任意文件.md> | list`;
-}
-
-function isAlive(pid: number | null | undefined): boolean {
-  if (!pid || !Number.isInteger(pid)) return false;
-  try { process.kill(pid, 0); return true; } catch { return false; }
-}
-
-async function waitForHost(base: string, timeoutMs = 25_000): Promise<void> {
-  const started = Date.now();
-  while (Date.now() - started < timeoutMs) {
-    try {
-      const response = await fetch(`${base}/health`);
-      const data = await response.json() as { ok?: boolean; version?: string };
-      if (response.ok && data.ok && data.version === "0.20") return;
-      if (response.ok && data.ok) throw new Error("端口 8787 正被旧版 Vibe-Git 占用，请先执行旧预览的停止命令");
-    } catch (error) {
-      if (error instanceof Error && error.message.includes("旧版")) throw error;
-    }
-    await new Promise((resolveDelay) => setTimeout(resolveDelay, 300));
-  }
-  throw new Error(`Host 启动超时，请查看 ${hostLogPath()}`);
+  vibe-git work list | pull <workstream-id> [output]
+  vibe-git task start <task-id> | integrate <task-id> | sync [task-id] | done <task-id>
+  vibe-git pr submit <任意文件.md> | list
+超敏捷主线
+${AGILE_USAGE}
+兼容原有需求流程
+${COORDINATION_USAGE}`;
 }
 
 async function stopDaemon(config: ClientConfig | null): Promise<ClientConfig | null> {
@@ -79,8 +80,7 @@ async function stopDaemon(config: ClientConfig | null): Promise<ClientConfig | n
 
 async function spawnDaemon(config: ClientConfig): Promise<ClientConfig> {
   await stopDaemon(config);
-  await mkdir(dirname(daemonLogPath()), { recursive: true });
-  const fd = openSync(daemonLogPath(), "a");
+  const fd = openLogFile(daemonLogPath());
   const child = spawn(process.execPath, [CLI_ENTRY, "daemon"], {
     detached: true, windowsHide: true, cwd: config.workspace, stdio: ["ignore", fd, fd], env: process.env
   });
@@ -90,53 +90,18 @@ async function spawnDaemon(config: ClientConfig): Promise<ClientConfig> {
   return updated;
 }
 
-async function hostStart(): Promise<void> {
-  const existing = await readJson<HostProcess>(hostProcessPath());
-  let info: HostProcess;
-  if (existing && isAlive(existing.pid)) {
-    await waitForHost(existing.hostUrl, 3_000);
-    info = existing;
-  } else {
-    if (!existsSync(HOST_ENTRY)) throw new Error("尚未构建 Host。请先在源码目录执行 npm run build。 ");
-    await mkdir(vibeHome(), { recursive: true });
-    const fd = openSync(hostLogPath(), "a");
-    const child = spawn(process.execPath, [HOST_ENTRY], {
-      detached: true, windowsHide: true, cwd: ROOT, stdio: ["ignore", fd, fd],
-      env: { ...process.env, PORT: "8787", HOST: "0.0.0.0", VIBE_GIT_TUNNEL_TARGET: LOCAL_HOST }
-    });
-    child.unref(); closeSync(fd);
-    info = { pid: child.pid!, hostUrl: LOCAL_HOST, startedAt: new Date().toISOString(), root: ROOT };
-    await writeJson(hostProcessPath(), info);
-    try { await waitForHost(LOCAL_HOST); }
-    catch (error) { try { process.kill(info.pid, "SIGTERM"); } catch { /* no-op */ } throw error; }
-  }
-
-  const captainPath = resolve(ROOT, "data/v20/captain.json");
-  const captain = await readJson<CaptainFile>(captainPath);
-  if (!captain) throw new Error(`无法读取 Captain 凭据：${captainPath}`);
+async function hostStart(workspacePath?: string): Promise<void> {
   const previous = await loadConfig(false);
+  const selected = await startupWorkspace(workspacePath, previous?.workspace);
+  const started = await startHost(selected.path, previous);
   if (previous) await stopDaemon(previous);
-  const config: ClientConfig = {
-    hostUrl: LOCAL_HOST, nodeId: captain.nodeId, nodeToken: captain.nodeToken, workspace: process.cwd(),
-    workTransport: previous?.nodeId === captain.nodeId ? previous.workTransport : "auto", daemonPid: null, connectedAt: new Date().toISOString()
-  };
-  await saveConfig(config);
-  await spawnDaemon(config);
-  await post(config, "/api/v1/nodes/heartbeat", {
-    workspaceReady: false, auditCodex: probeCodex({ CODEX_HOME: auditCodexHome() }).state,
-    workCodex: probeCodex().state, workTransport: config.workTransport, rateLimits: [], git: null, currentTaskId: null
-  }).catch(() => undefined);
-
-  let tunnelMessage = "";
-  try {
-    const tunnel = await api<{ installed: boolean; running: boolean; url: string | null }>(config, "/api/v1/local/cloudflare");
-    if (!tunnel.installed) await post(config, "/api/v1/local/cloudflare/install");
-    if (!tunnel.running) await post(config, "/api/v1/local/cloudflare/start");
-  } catch (error) {
-    tunnelMessage = `\nQuick Tunnel 未能自动启动：${error instanceof Error ? error.message : String(error)}\n可重试：vibe-git host start`;
-  }
-  const invite = await api<{ joinUrl: string; command: string }>(config, "/api/v1/invite");
-  out(`Vibe-Git Host 已启动\n管理页：运行 vibe-git open\n成员加入：${invite.command}${tunnelMessage}`);
+  await saveConfig(started.config);
+  const running = await spawnDaemon(started.config);
+  const data = await api<V20BootstrapPayload>(running, "/api/v1/bootstrap");
+  await rememberProject(running, data);
+  const tunnelMessage = await startTunnel(running);
+  const invite = await api<{ command: string }>(running, "/api/v1/invite");
+  out('Vibe-Git Host 已启动\n项目工作区：' + selected.path + '\n房间数据：' + started.info.dataRoot + '\n管理页：运行 vibe-git open\n成员加入：' + invite.command + (tunnelMessage ? '\n' + tunnelMessage : ''));
 }
 
 async function hostStatus(): Promise<void> {
@@ -151,21 +116,14 @@ async function hostStatus(): Promise<void> {
 }
 
 async function hostStop(): Promise<void> {
-  const info = await readJson<HostProcess>(hostProcessPath());
-  let config = await loadConfig(false);
-  if (config) {
-    await post(config, "/api/v1/local/cloudflare/stop").catch(() => undefined);
-    config = await stopDaemon(config);
-  }
-  if (info?.pid && isAlive(info.pid)) {
-    try { process.kill(info.pid, "SIGTERM"); } catch { /* no-op */ }
-    for (let i = 0; i < 30 && isAlive(info.pid); i += 1) await new Promise((resolveDelay) => setTimeout(resolveDelay, 100));
-  }
-  await rm(hostProcessPath(), { force: true });
-  out("Host 与 Quick Tunnel 已停止");
+  const config = await loadConfig(false);
+  if (config) await rememberProject(config, await api<V20BootstrapPayload>(config, "/api/v1/bootstrap")).catch(() => undefined);
+  await stopDaemon(config);
+  await stopHost(config);
+  out("Host 与 Quick Tunnel 已停止，项目数据已保留");
 }
 
-async function connect(joinUrlRaw: string | undefined): Promise<void> {
+async function connect(joinUrlRaw: string | undefined, workspacePath?: string): Promise<void> {
   if (!joinUrlRaw) throw new Error("用法：vibe-git connect <join-url>");
   const url = new URL(joinUrlRaw);
   const match = url.pathname.match(/^\/join\/([^/]+)\/?$/);
@@ -173,36 +131,65 @@ async function connect(joinUrlRaw: string | undefined): Promise<void> {
   const hostUrl = url.origin;
   const old = await loadConfig(false);
   if (old) {
-    const reconnect = await fetch(`${hostUrl}/api/v1/bootstrap`, { headers: { authorization: `Bearer ${old.nodeToken}` } }).catch(() => null);
+    const previous = await api<V20BootstrapPayload>(old, "/api/v1/bootstrap").catch(() => null);
+    if (previous) await rememberProject(old, previous);
+  }
+  const infoResponse = await fetch(`${hostUrl}/api/v1/join-info`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ invite: decodeURIComponent(match[1]) }), signal: AbortSignal.timeout(10000) });
+  let candidate = old;
+  if (infoResponse.ok) { const info = await infoResponse.json() as { roomId: string }; candidate = await savedProjectConnection(info.roomId); }
+  else if (infoResponse.status !== 404) throw new Error("邀请链接已失效，请向队长获取新邀请");
+  if (candidate) {
+    const reconnect = await fetch(`${hostUrl}/api/v1/bootstrap`, { headers: { authorization: `Bearer ${candidate.nodeToken}` }, signal: AbortSignal.timeout(10000) }).catch(() => null);
     if (reconnect?.ok) {
-      const stable = { ...old, hostUrl, workspace: process.cwd(), connectedAt: new Date().toISOString() };
-      await saveConfig(stable); const running = await spawnDaemon(stable);
+      const selected = await startupWorkspace(workspacePath, candidate.workspace, "team-project");
+      const target = await reconnect.json() as V20BootstrapPayload;
+      if (old && old.nodeId !== candidate.nodeId) {
+        const previous = await api<V20BootstrapPayload>(old, "/api/v1/bootstrap").catch(() => null);
+        if (previous?.viewer.role === "captain" && previous.room.id !== target.room.id) { await post(old, "/api/v1/local/project-switch/prepare"); await stopHost(old); }
+        await stopDaemon(old);
+      }
+      const stable = { ...candidate, hostUrl, workspace: selected.path, connectedAt: new Date().toISOString() };
+      await saveConfig(stable); await rememberProject(stable, await api<V20BootstrapPayload>(stable, "/api/v1/bootstrap")); const running = await spawnDaemon(stable);
       out(`已用原节点重连：${stable.nodeId}\n工作区：${stable.workspace}\n后台进程：${running.daemonPid ?? "启动中"}`);
       return;
     }
   }
+  const selected = await startupWorkspace(workspacePath, undefined, "team-project");
   const response = await fetch(`${hostUrl}/api/v1/join`, {
     method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ invite: decodeURIComponent(match[1]) })
   });
   const value = await response.json() as JoinResponse & { error?: string };
   if (!response.ok) throw new Error(value.error || `Host 返回 ${response.status}`);
-  if (old) await stopDaemon(old);
+  if (old) {
+    const previous = await api<V20BootstrapPayload>(old, "/api/v1/bootstrap").catch(() => null);
+    if (previous?.viewer.role === "captain") {
+      await post(old, "/api/v1/local/project-switch/prepare");
+      try { await stopHost(old); }
+      catch (error) { await post(old, "/api/v1/local/project-switch/cancel").catch(() => undefined); throw error; }
+    }
+    await stopDaemon(old);
+  }
   const config: ClientConfig = {
     hostUrl: value.hostUrl || hostUrl, nodeId: value.node.id, nodeToken: value.nodeToken,
-    workspace: process.cwd(), workTransport: "auto", daemonPid: null, connectedAt: new Date().toISOString()
+    workspace: selected.path, workTransport: "auto", daemonPid: null, connectedAt: new Date().toISOString()
   };
   await saveConfig(config);
+  await rememberProject(config, await api<V20BootstrapPayload>(config, "/api/v1/bootstrap"));
   const running = await spawnDaemon(config);
   out(`连接成功：${value.node.label} (${value.node.id})\n工作区：${running.workspace}\n后台进程：${running.daemonPid ?? "启动中"}`);
 }
 
 async function status(): Promise<void> {
   const config = await loadConfig(); if (!config) return;
-  const data = await api<V20BootstrapPayload>(config, "/api/v1/bootstrap");
+  let data: V20BootstrapPayload;
+  try { data = (await api<WorkspaceResources>(config, "/api/v1/workspace/resources?names=overview,members,tasks,requirements,notifications")).data as V20BootstrapPayload; }
+  catch (error) { if (!(error instanceof ApiError) || error.status !== 404) throw error; data = await api<V20BootstrapPayload>(config, "/api/v1/bootstrap"); }
   const mine = data.tasks.filter((task) => task.assigneeNodeId === config.nodeId);
   out({
     node: data.viewer, daemon: { pid: config.daemonPid, running: isAlive(config.daemonPid) },
     room: data.room, auditPool: data.auditPool, myTasks: mine.map((task) => ({ id: task.id, title: task.title, status: task.status })),
+    workspace: config.workspace, preference: await collaborationPreference(config.workspace),
+    agile: data.agile ? { enabled: data.agile.enabled, activeFlow: data.agile.activeFlow ? { id: data.agile.activeFlow.id, status: data.agile.activeFlow.status, kind: data.agile.activeFlow.kind } : null } : null,
     unreadMessages: data.notifications.filter((item) => !item.readAt).length
   });
 }
@@ -236,13 +223,49 @@ async function main(): Promise<void> {
   const [group, action, third, fourth] = args;
   if (group === "daemon") { await runDaemon(); return; }
   if (!group || group === "help" || group === "--help" || group === "-h") { out(usage()); return; }
+  if (group === "doctor") { out(await startupStatus(await loadConfig(false), action)); return; }
+  if (group === "preference") {
+    const config = await loadConfig(false);
+    const workspace = resolve((action === "set" ? fourth : third) || config?.workspace || process.cwd());
+    if (action === "show") { out(await collaborationPreference(workspace)); return; }
+    if (action === "set") { out(await saveCollaborationPreference(workspace, third)); return; }
+    throw new Error("用法：vibe-git preference show [项目目录] | set assisted|automatic [项目目录]");
+  }
+
+  if (await handleAgileCommand(args, bootstrap, out)) return;
+  if (await handleCoordinationCommand(args, bootstrap, out)) return;
+
+  if (group === "project") {
+    const { config, data } = await bootstrap();
+    const projects = projectController(config, {
+      busy: () => data.viewer.activeJobCount ? "active-job" : null,
+      beforeSwitch: async () => { await stopDaemon(config); },
+      changed: async () => { Object.assign(config, await spawnDaemon(config)); }
+    });
+    if (action === "list") { out(await projects.list()); return; }
+    if (action === "switch" && third) { out(await projects.select(resolve(third), data.room.id)); return; }
+    throw new Error("用法：project list | switch <项目目录>");
+  }
+
+  if (group === "compute") {
+    const { config, data } = await bootstrap();
+    if (action === "status") { out(computeStatus(config)); return; }
+    if (data.viewer.role !== "captain") throw new Error("只有队长可以更改团队 AI 连接");
+    if (action === "test") { out(await testCompute(config)); return; }
+    if (action === "use") {
+      if (data.viewer.activeJobCount) throw new Error("本机仍有作业，请结束后再切换 AI 连接");
+      out(await savePanelCompute(config, { provider: third, ...(fourth ? { model: fourth } : {}), ...(args[4] ? { baseUrl: args[4] } : {}) }, async () => { Object.assign(config, await spawnDaemon(config)); }));
+      return;
+    }
+    throw new Error("用法：compute status | use codex | use api <模型名> [Base-URL] | test；Key 使用本机 OPENAI_API_KEY，不写入命令或聊天");
+  }
 
   if (group === "host") {
-    if (action === "start") return hostStart();
+    if (action === "start") return hostStart(third);
     if (action === "status") return hostStatus();
     if (action === "stop") return hostStop();
   }
-  if (group === "connect") return connect(action);
+  if (group === "connect") return connect(action, third);
   if (group === "status") return status();
   if (group === "logs") {
     const path = daemonLogPath();
@@ -255,21 +278,41 @@ async function main(): Promise<void> {
   }
   if (group === "open") {
     const config = await loadConfig(); if (!config) return;
-    const ticket = await post<BrowserTicketResponse>(config, "/api/v1/browser-ticket"); openUrl(ticket.url); out("已在浏览器中打开 Vibe-Git"); return;
+    let panel = await readJson<{ port: number; pid: number }>(localPanelPath());
+    if (!panel || !isAlive(panel.pid)) { await spawnDaemon(config); panel = null; }
+    let url: string | null = null;
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+      panel = panel ?? await readJson<{ port: number; pid: number }>(localPanelPath());
+      if (panel && isAlive(panel.pid)) {
+        try {
+          const response = await fetch(`http://127.0.0.1:${panel.port}/_local/ticket`,
+            { method: "POST", headers: { "x-vibe-git-control": config.nodeToken } });
+          if (response.ok) { url = (await response.json() as { url: string }).url; break; }
+        } catch { /* daemon has not bound its local panel yet */ }
+      }
+      panel = null;
+      await new Promise((delay) => setTimeout(delay, 250));
+    }
+    if (!url) throw new Error("本机面板尚未就绪，请检查 vibe-git logs");
+    openUrl(url); out("已在本机浏览器中打开 Vibe-Git；Codex 对话只在此电脑可用"); return;
   }
   if (group === "codex") {
     if (action === "bind") {
-      await mkdir(auditCodexHome(), { recursive: true, mode: 0o700 });
-      const result = spawn(process.env.CODEX_BIN?.trim() || "codex", ["login", "--device-auth"], { stdio: "inherit", env: { ...process.env, CODEX_HOME: auditCodexHome() } });
-      const code = await new Promise<number | null>((resolveExit) => result.once("exit", resolveExit));
+      const command = codexInvocation();
+      await mkdir(defaultCodexHome(), { recursive: true, mode: 0o700 });
+      const result = spawn(command.file, [...command.prefixArgs, "login", "--device-auth"], {
+        stdio: "inherit", windowsHide: true, env: { ...process.env, CODEX_HOME: defaultCodexHome() }
+      });
+      const code = await new Promise<number | null>((resolveExit, reject) => {
+        result.once("error", (error) => reject(new Error(`无法启动 Codex CLI：${error.message}`)));
+        result.once("exit", resolveExit);
+      });
       if (code !== 0) throw new Error(`Codex device-auth 失败（退出码 ${code ?? "null"}）`);
-      out("专用审核 Codex 已绑定；凭据只保存在本机 ~/.vibe-git/audit-codex"); return;
+      out("Codex 算力网已接入；审核与开发共用本机默认登录"); return;
     }
-    if (action === "status") { out({ home: auditCodexHome(), ...probeCodex({ CODEX_HOME: auditCodexHome() }) }); return; }
+    if (action === "status") { out({ home: defaultCodexHome(), ...probeCodex({ CODEX_HOME: defaultCodexHome() }) }); return; }
     if (action === "unbind") {
-      const target = auditCodexHome();
-      if (target !== resolve(homedir(), ".vibe-git", "audit-codex") && !process.env.VIBE_GIT_HOME) throw new Error("拒绝删除非预期的 Codex 目录");
-      await rm(target, { recursive: true, force: true }); out("专用审核 Codex 已解绑；日常 ~/.codex 未受影响"); return;
+      throw new Error("审核与开发已共用本机 Codex 登录。如需退出，请在本机运行 codex logout；这会同时退出其他使用该登录的 Codex 客户端。");
     }
   }
   if (group === "config" && action === "set" && third === "work.transport") {
@@ -284,8 +327,12 @@ async function main(): Promise<void> {
     if (action === "rotate") { const value = await post<{ command: string }>(config, "/api/v1/invite/rotate"); out(`邀请已轮换：\n${value.command}`); return; }
   }
   if (group === "plan" && action === "submit") {
-    const config = await loadConfig(); if (!config) return; const markdown = await readMarkdown(third, "计划");
-    const doc = await post<MarkdownDocument>(config, "/api/v1/plans", markdown);
+    const { config, data } = await bootstrap(); const markdown = await readMarkdown(third, "计划");
+    const current = data.plans.find((item) => item.ownerNodeId === data.viewer.id);
+    const doc = current
+      ? await api<MarkdownDocument>(config, `/api/v1/plans/${encodeURIComponent(current.id)}`, {
+        method: "PUT", body: JSON.stringify({ ...markdown, expectedRevision: current.revision }) })
+      : await post<MarkdownDocument>(config, "/api/v1/plans", markdown);
     out(`${doc.filename} 已作为计划提交：r${doc.revision} ${doc.sha256}`); return;
   }
   if (group === "align") {
@@ -310,10 +357,50 @@ async function main(): Promise<void> {
       const updated = await post<AlignmentRun>(config, `/api/v1/alignments/${encodeURIComponent(third)}/resolve`, { issueId, optionId, expectedRevision: alignment.decisionRevision ?? 0 });
       out(`已选择 ${optionId}；当前对齐状态 ${updated.status}`); return;
     }
+    if (action === "downgrade") {
+      const taskId = fourth, upstreamTaskId = args[4];
+      if (!third || !taskId || !upstreamTaskId) throw new Error("用法：vibe-git align downgrade <alignment-id> <task-id> <upstream-task-id>");
+      await post(config, `/api/v1/alignments/${encodeURIComponent(third)}/downgrade`, { taskId, upstreamTaskId });
+      out("依赖已降级为等待上游完成"); return;
+    }
     if (action === "export") {
       if (!third) throw new Error("用法：vibe-git align export <alignment-id>");
       const markdown = await api<string>(config, `/api/v1/alignments/${encodeURIComponent(third)}/export`);
       const path = resolve(`alignment-${third}.md`); await writeFile(path, markdown, "utf8"); out(`已导出：${path}`); return;
+    }
+  }
+  if (group === "stage" && action === "replan") {
+    if (!third) throw new Error("缺少 stage-id");
+    const config = await loadConfig(); if (!config) return;
+    const alignment = await post<AlignmentRun>(config, `/api/v1/stages/${encodeURIComponent(third)}/replan`);
+    out(`阶段重编排已排队：${alignment.id}`); return;
+  }
+  if (group === "stage" && action === "activate") {
+    if (!third) throw new Error("缺少重编排 alignment-id");
+    const config = await loadConfig(); if (!config) return;
+    await post(config, `/api/v1/alignments/${encodeURIComponent(third)}/activate-replan`);
+    out("工作主线已原子替换，旧任务保留归档"); return;
+  }
+  if (group === "contract") {
+    const { config, data } = await bootstrap();
+    if (action === "list") { out(data.contracts.map((item) => ({ id: item.id, name: item.name, revision: item.revision,
+      status: item.status, acknowledgedNodeIds: item.acknowledgedNodeIds }))); return; }
+    const contract = data.contracts.find((item) => item.id === third);
+    if (!contract) throw new Error("接口契约不存在");
+    if (action === "show") { out(contract); return; }
+    if (action === "ack") { await post(config, contract.stageId ? `/api/v1/coordination/contracts/${encodeURIComponent(contract.id)}/ack` : `/api/v1/contracts/${encodeURIComponent(contract.id)}/ack`,
+      { expectedRevision: contract.revision, sha256: contract.sha256 }); out(`已确认契约 ${contract.id} r${contract.revision}`); return; }
+    if (action === "publish") { await post(config, `/api/v1/contracts/${encodeURIComponent(contract.id)}/publish`,
+      { expectedRevision: contract.revision, sha256: contract.sha256 }); out(`已发布修订契约 ${contract.id} r${contract.revision}`); return; }
+  }
+  if (group === "work") {
+    const { config, data } = await bootstrap();
+    const visible = data.workstreams.filter((item) => data.viewer.role === "captain" || item.ownerNodeId === config.nodeId);
+    if (action === "list") { out(visible.map((item) => ({ id: item.id, mission: item.mission, status: item.status, taskIds: item.taskIds }))); return; }
+    if (action === "pull") {
+      if (!third || !visible.some((item) => item.id === third)) throw new Error("工作主线不存在或无权下载");
+      const markdown = await api<string>(config, `/api/v1/workstreams/${encodeURIComponent(third)}/brief`);
+      const path = resolve(fourth || "workstream.md"); await writeFile(path, markdown, "utf8"); out(`已导出：${path}`); return;
     }
   }
   if (group === "tasks" && action === "publish") {
@@ -323,11 +410,17 @@ async function main(): Promise<void> {
   }
   if (group === "task") {
     const { config, data } = await bootstrap();
-    if (action === "list") { out(data.tasks.filter((item) => data.viewer.role === "captain" || item.assigneeNodeId === config.nodeId).map((item) => ({ id: item.id, title: item.title, assignee: item.assigneeNodeId, status: item.status }))); return; }
+    if (action === "list") { out(data.tasks.filter((item) => data.viewer.role === "captain" || item.assigneeNodeId === config.nodeId).map((item) => ({ id: item.id, title: item.title, assignee: item.assigneeNodeId, status: item.status,
+      workstreamId: item.workstreamId ?? null, dependencyEdges: item.dependencyEdges ?? [] }))); return; }
     if (action === "assign") {
       if (!third || !fourth) throw new Error("用法：vibe-git task assign <task-id> <node-id>");
       const alignment = [...data.alignments].reverse().find((item) => item.status === "READY" && item.tasks.some((task) => task.id === third));
-      if (!alignment) throw new Error("没有包含该草稿任务的待发布对齐稿");
+      if (!alignment) {
+        const task = data.tasks.find(task => task.id === third);
+        if (!task) throw new Error("任务不存在");
+        await post(config, "/api/v1/tasks/assign", { taskIds: [third], assigneeNodeId: fourth, expectedTaskRevisions: { [third]: task.revision } });
+        out("负责人已更新：" + third); return;
+      }
       await post(config, `/api/v1/alignments/${encodeURIComponent(alignment.id)}/assign`, { taskId: third, assigneeNodeId: fourth }); out(`已将 ${third} 改派给 ${fourth}`); return;
     }
     if (action === "pull") {
@@ -341,8 +434,10 @@ async function main(): Promise<void> {
       out(`${doc.filename} 已作为任务细化上传：r${doc.revision}`); return;
     }
     if (action === "start") { if (!third) throw new Error("缺少 task-id"); const job = await post<{ id: string }>(config, `/api/v1/tasks/${encodeURIComponent(third)}/start`); out(`开工作业已发布：${job.id}`); return; }
+    if (action === "integrate") { if (!third) throw new Error("缺少 task-id"); const job = await post<{ id: string }>(config, `/api/v1/tasks/${encodeURIComponent(third)}/integrate`); out(`真实集成验证已排队：${job.id}`); return; }
     if (action === "sync") { const job = await post<{ id: string }>(config, third ? `/api/v1/tasks/${encodeURIComponent(third)}/sync` : "/api/v1/tasks/sync"); out(`同步作业已发布：${job.id}`); return; }
-    if (action === "done") { if (!third) throw new Error("缺少 task-id"); await post(config, `/api/v1/tasks/${encodeURIComponent(third)}/done`); out(`${third} 已确认完成`); return; }
+    if (action === "done") { if (!third) throw new Error("缺少 task-id"); const task = data.tasks.find(item => item.id === third); if (!task) throw new Error("任务不存在");
+      await post(config, `/api/v1/tasks/${encodeURIComponent(third)}/${task.executionMode === "external" ? "external-done" : "done"}`, task.executionMode === "external" ? { expectedRevision: task.revision } : {}); out(`${third} 已确认完成`); return; }
   }
   if (group === "pr") {
     const config = await loadConfig(); if (!config) return;
@@ -371,5 +466,8 @@ async function main(): Promise<void> {
 
 main().catch((error) => {
   console.error(`错误：${error instanceof Error ? error.message : String(error)}`);
+  const value = error as { code?: string; status?: number };
+  const recovery = recoveryAdvice(value?.code, value?.status);
+  console.error(recovery.preserved + "\n下一步：" + recovery.next);
   process.exitCode = 1;
 });

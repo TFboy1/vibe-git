@@ -2,7 +2,12 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { once } from "node:events";
+import { PassThrough } from "node:stream";
+import { setImmediate } from "node:timers/promises";
+import { EventHub, streamEvents } from "../src/events/hub.js";
+import type { RoomEvent } from "@vibe-git/protocol";
 import type { AgentJob, AlignmentRun, CloudflareTunnelStatus, CollaborationNode, StageTask, V20BootstrapPayload } from "@vibe-git/protocol";
 import { buildApp } from "../src/app.js";
 import type { CloudflareManager } from "../src/integrations/cloudflare/manager.js";
@@ -19,6 +24,47 @@ class FakeCloudflare implements CloudflareManager {
 
 const roots: string[] = [];
 afterEach(async () => { await Promise.all(roots.splice(0).map((path) => rm(path, { recursive: true, force: true }))); });
+
+describe("持久化事件流背压", () => {
+  const outputs: PassThrough[] = [];
+  const event = (seq: number): RoomEvent => ({ seq, type: "job.progress", actorId: "system", source: "system", entityType: "agent_job", entityId: "job", payload: { detail: "x".repeat(1000) }, createdAt: new Date().toISOString() });
+  afterEach(async () => { for (const output of outputs.splice(0)) output.destroy(); await setImmediate(); vi.useRealTimers(); });
+  it("暂停消费时不读取更多批次，恢复后按顺序补齐历史与暂停期间的事件", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    const output = new PassThrough({ highWaterMark: 128 }); outputs.push(output);
+    const hub = new EventHub(), events = Array.from({ length: 250 }, (_, i) => event(i + 1));
+    const read = vi.fn((cursor: number) => events.filter(item => item.seq > cursor).slice(0, 100));
+    const initial = streamEvents(output, hub, read, 0);
+    expect(output.writableNeedDrain).toBe(true); expect(read).toHaveBeenCalledTimes(1);
+    const buffered = output.writableLength;
+    vi.advanceTimersByTime(60_000);
+    for (let i = 251; i <= 300; i++) { const next = event(i); events.push(next); hub.publish(next); }
+    expect(read).toHaveBeenCalledTimes(1); expect(output.writableLength).toBe(buffered);
+    const chunks: Buffer[] = []; output.on("data", chunk => chunks.push(chunk as Buffer)); output.resume();
+    await initial;
+    const delivered = [...Buffer.concat(chunks).toString("utf8").matchAll(/^id: (\d+)$/gm)].map(match => Number(match[1]));
+    expect(delivered).toEqual(Array.from({ length: 300 }, (_, i) => i + 1));
+    const next = event(301); events.push(next); hub.publish(next); await setImmediate();
+    expect(Buffer.concat(chunks).toString("utf8")).toContain("id: 301\n");
+  });
+  it("背压期间断开连接会取消等待、定时器与订阅", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    const output = new PassThrough({ highWaterMark: 128 }); outputs.push(output);
+    const hub = new EventHub(), read = vi.fn((cursor: number) => cursor < 1 ? [event(1)] : []);
+    const initial = streamEvents(output, hub, read, 0);
+    const closed = once(output, "close"); output.destroy(); await closed; await initial;
+    expect(vi.getTimerCount()).toBe(0);
+    const count = read.mock.calls.length; hub.publish(event(2)); await setImmediate();
+    expect(read).toHaveBeenCalledTimes(count);
+  });
+  it("从已确认的游标继续发送，不重复旧事件", async () => {
+    const output = new PassThrough(); outputs.push(output);
+    const hub = new EventHub(), events = [event(1), event(2), event(3)], chunks: Buffer[] = [];
+    output.on("data", chunk => chunks.push(chunk as Buffer));
+    await streamEvents(output, hub, cursor => events.filter(item => item.seq > cursor), 2);
+    expect([...Buffer.concat(chunks).toString("utf8").matchAll(/^id: (\d+)$/gm)].map(match => Number(match[1]))).toEqual([3]);
+  });
+});
 
 async function setup() {
   const root = await mkdtemp(resolve(tmpdir(), "vibe-git-v20-test-")); roots.push(root);
@@ -55,7 +101,8 @@ async function bootstrap(app: Awaited<ReturnType<typeof buildApp>>, token: strin
 async function completeAlignment(app: Awaited<ReturnType<typeof buildApp>>, captainToken: string, memberToken: string, memberId: string): Promise<AlignmentRun> {
   expect((await post(app, "/api/v1/nodes/heartbeat", captainToken, heartbeat)).statusCode).toBe(200);
   expect((await post(app, "/api/v1/nodes/heartbeat", memberToken, heartbeat)).statusCode).toBe(200);
-  expect((await post(app, "/api/v1/plans", memberToken, { filename: "plan.md", content: "# 成员计划\n实现可验证功能" })).statusCode).toBe(200);
+  if (!(await bootstrap(app, memberToken)).plans.some(plan => plan.ownerNodeId === memberId))
+    expect((await post(app, "/api/v1/plans", memberToken, { filename: "plan.md", content: "# 成员计划\n实现可验证功能" })).statusCode).toBe(200);
   const queued = await post(app, "/api/v1/alignments", captainToken);
   expect(queued.statusCode).toBe(200);
   const alignment = queued.json() as AlignmentRun;
@@ -75,6 +122,28 @@ async function completeAlignment(app: Awaited<ReturnType<typeof buildApp>>, capt
 }
 
 describe("Vibe-Git v0.20 Host", () => {
+  it("空闲作业轮询保持长连接，直到客户端断开", async () => {
+    const { app, captain } = await setup();
+    const controller = new AbortController();
+    try {
+      const address = await app.listen({ host: "127.0.0.1", port: 0 });
+      const pending = fetch(`${address}/api/v1/nodes/jobs/next`, {
+        method: "POST", headers: { authorization: `Bearer ${captain.nodeToken}`, "content-type": "application/json" },
+        body: "{}", signal: controller.signal
+      });
+      const outcome = await Promise.race([
+        pending.then(response => response.status, () => "aborted"),
+        new Promise<string>(resolveDelay => setTimeout(() => resolveDelay("pending"), 250))
+      ]);
+      expect(outcome).toBe("pending");
+      controller.abort();
+      await pending.catch(() => undefined);
+    } finally {
+      controller.abort();
+      await app.close();
+    }
+  });
+
   it("动态加入、邀请轮换、会话票据和撤销不会泄漏凭据", async () => {
     const { app, captain, invite, member } = await setup();
     const before = await bootstrap(app, captain.nodeToken);
@@ -132,7 +201,7 @@ describe("Vibe-Git v0.20 Host", () => {
     expect((await post(app, "/api/v1/plans", member.nodeToken, { filename: "empty.md", content: "" })).statusCode).toBe(400);
     const first = await post(app, "/api/v1/plans", member.nodeToken, { filename: "frontend-design.md", content: "# A" });
     const same = await post(app, "/api/v1/plans", member.nodeToken, { filename: "frontend-design.md", content: "# A" });
-    const second = await post(app, "/api/v1/plans", member.nodeToken, { filename: "implementation-notes.MD", content: "# B" });
+    const second = await put(app, `/api/v1/plans/${first.json().id}`, member.nodeToken, { expectedRevision: 1, filename: "implementation-notes.MD", content: "# B" });
     expect(first.json().revision).toBe(1); expect(same.json().id).toBe(first.json().id); expect(second.json().revision).toBe(2);
     expect(first.json().filename).toBe("frontend-design.md"); expect(second.json().filename).toBe("implementation-notes.MD");
     expect(first.json().sha256).toMatch(/^[0-9a-f]{64}$/);
@@ -498,10 +567,16 @@ describe("Vibe-Git v0.20 Host", () => {
       summaryMarkdown: "# 无现有任务受影响", requirementPatchMarkdown: "增加日志字段说明", decisions: [{ changeId: change.id, verdict: "accept", rationale: "合理" }],
       affectedTaskIds: [], replacementTasks: []
     } });
+    expect(service.repo.getPullRequest(change.id)?.reviewedAt).toBeTruthy();
+    expect((await post(app, `/api/v1/reviews/${review.id}/apply`, member.nodeToken)).statusCode).toBe(403);
     expect((await post(app, `/api/v1/reviews/${review.id}/apply`, captain.nodeToken)).statusCode).toBe(200);
     const requirement = service.repo.requirementMarkdown();
     expect(requirement).toContain("UNIQUE_OLD_REQUIREMENT_END");
     expect(requirement).toContain("增加日志字段说明");
+    expect(service.repo.listRequirementVersions().map(item => item.revision)).toEqual([1, 2]);
+    expect(service.repo.listRequirementVersions().at(-1)?.markdown).toBe(requirement);
+    expect(service.repo.getStage(stage.id)?.requirementRevision).toBe(2);
+    expect(service.repo.getStage(stage.id)?.requirementMarkdown).toBe(requirement);
     await app.close();
   });
 });

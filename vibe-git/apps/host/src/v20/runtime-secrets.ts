@@ -35,6 +35,7 @@ export async function ensureV20Runtime(repo: V20Repository, dataDir: string): Pr
     repo.setRequirementRevision(0);
     repo.setRequirementMarkdown("");
     repo.setMeta("v20_schema_version", "20");
+    repo.setMeta("flow_mode", "agile");
   }
 
   let captain = await readJson<CaptainCredentialFile>(captainPath);
@@ -47,7 +48,7 @@ export async function ensureV20Runtime(repo: V20Repository, dataDir: string): Pr
     const now = new Date().toISOString();
     const node: CollaborationNode = storedCaptain ? { ...storedCaptain, revoked: false } : {
       id: nodeId, label: "Captain", role: "captain", revoked: false, connected: false,
-      workspaceReady: false, auditCodex: "unverified", workCodex: "unverified", workTransport: "auto",
+      workspaceReady: false, codex: "unverified", workTransport: "auto",
       activeJobCount: 0, rateLimits: [], git: null, currentTaskId: null, lastSeenAt: null,
       lastAuditJobAt: null, createdAt: now
     };
@@ -69,8 +70,8 @@ export async function rotateInvite(repo: V20Repository, dataDir: string): Promis
   const room = repo.room();
   if (!room) throw new Error("Vibe-Git 房间尚未初始化");
   const inviteToken = newSecret();
-  repo.setInviteHash(hashSecret(inviteToken));
   await mkdir(dataDir, { recursive: true, mode: 0o700 });
   await writePrivate(join(dataDir, "invite.json"), { roomId: room.id, inviteToken });
+  repo.setInviteHash(hashSecret(inviteToken));
   return inviteToken;
 }

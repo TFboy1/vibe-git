@@ -28,14 +28,17 @@ export interface RepositoryContext {
 }
 
 export interface CollaborationNode {
+  apiReady?: boolean;
   id: string;
   label: string;
   role: NodeRole;
   revoked: boolean;
   connected: boolean;
   workspaceReady: boolean;
-  auditCodex: CapabilityStateV20;
-  workCodex: CapabilityStateV20;
+  codex?: CapabilityStateV20;
+  /** Legacy node input, read until the next unified heartbeat. */
+  auditCodex?: CapabilityStateV20;
+  workCodex?: CapabilityStateV20;
   workTransport: WorkTransport;
   activeJobCount: number;
   rateLimits: RateLimitWindow[];
@@ -49,6 +52,7 @@ export interface CollaborationNode {
 
 export type MarkdownKind = "plan" | "task_detail" | "change";
 export interface MarkdownDocument {
+  restoredFromDocumentId?: string;
   id: string;
   kind: MarkdownKind;
   ownerNodeId: string;
@@ -59,6 +63,35 @@ export interface MarkdownDocument {
   bytes: number;
   content: string;
   createdAt: string;
+  impactedModuleIds?: string[];
+  impactReviewed?: boolean;
+}
+
+export interface ProjectWorkPackage {
+  id: string;
+  name: string;
+  status: "planned" | "in_progress" | "blocked" | "done";
+  plannedStart: string | null;
+  plannedEnd: string | null;
+  taskIds: string[];
+}
+
+export interface ProjectModule {
+  id: string;
+  name: string;
+  status: "planned" | "in_progress" | "blocked" | "done";
+  plannedStart: string | null;
+  plannedEnd: string | null;
+  packages: ProjectWorkPackage[];
+}
+
+export interface PlanImpactPreview {
+  assessmentId: string;
+  suggestedModuleIds: string[];
+  confirmedModuleIds: string[];
+  relatedPlans: Array<{ documentId: string; ownerNodeId: string; filename: string; moduleIds: string[] }>;
+  moduleRevision: number;
+  unverified: boolean;
 }
 
 export interface AlignmentTaskDraft {
@@ -72,6 +105,61 @@ export interface AlignmentTaskDraft {
   sourcePlanNodeIds: string[];
   assignmentRationale?: string;
   effort?: "S" | "M" | "L";
+  workstreamId?: string;
+  brief?: TaskBrief;
+  dependencyEdges?: DependencyEdge[];
+}
+
+export interface DependencyEdge {
+  upstreamTaskId: string;
+  mode: "HARD" | "CONTRACT";
+  reason: string;
+  contractId: string | null;
+  contractRevision: number | null;
+}
+
+export interface TaskBrief {
+  deliverables: string[];
+  ownedPaths: string[];
+  excludedPaths: string[];
+  requirementRefs: string[];
+  interfaceNotes: string[];
+  mockStrategy: string;
+  integrationSteps: string[];
+  verificationCommands: string[];
+  handoff: string;
+}
+
+export interface Workstream {
+  id: string;
+  alignmentId: string;
+  stageId: string | null;
+  ownerNodeId: string;
+  mission: string;
+  boundary: string;
+  taskIds: string[];
+  revision: number;
+  status: "DRAFT" | "PUBLISHED" | "ARCHIVED";
+}
+
+export interface InterfaceContract {
+  id: string;
+  alignmentId: string;
+  stageId: string | null;
+  providerTaskId: string;
+  consumerTaskIds: string[];
+  kind: "module" | "http" | "event" | "file";
+  name: string;
+  signature: string;
+  behavior: string[];
+  examples: string[];
+  errors: string[];
+  testCommand: string;
+  handoff: string;
+  revision: number;
+  sha256: string;
+  acknowledgedNodeIds: string[];
+  status: "DRAFT" | "PUBLISHED" | "SUPERSEDED";
 }
 
 export interface AlignmentIssue {
@@ -84,9 +172,22 @@ export interface AlignmentIssue {
 }
 
 export type AlignmentStatus = "QUEUED" | "RUNNING" | "NEEDS_DECISION" | "READY" | "PUBLISHED" | "FAILED";
+export interface PlanImpactFinding {
+  documentId: string;
+  moduleIds: string[];
+  rationale: string;
+}
+
 export interface AlignmentRun {
+  quickIntentId?: string;
+  quickIntentRevision?: number;
+  quickPlan?: import("./coordination.js").QuickPlanInput;
+  draftRevision?: number;
+  skippedNodeIds?: string[];
+  planImpacts?: PlanImpactFinding[];
+  moduleRevisionSnapshot?: number;
   id: string;
-  source: "plans" | "change_review";
+  source: "plans" | "change_review" | "stage_replan";
   status: AlignmentStatus;
   planSnapshot: Array<{ nodeId: string; documentId: string; revision: number; sha256: string }>;
   requirementBaseRevision: number;
@@ -107,6 +208,9 @@ export interface AlignmentRun {
   summaryJobIds?: string[];
   summaryParts?: Record<string, string>;
   summaryRound?: number;
+  detailJobIds?: string[];
+  detailedNodeIds?: string[];
+  replanStageId?: string | null;
 }
 
 export type StageStatus = "ACTIVE" | "REVIEWING" | "AWAITING_APPLY" | "COMPLETED";
@@ -122,6 +226,7 @@ export interface DevelopmentStage {
   completedAt: string | null;
   baselineSha?: string | null;
   nextStageDraftTasks?: ReplacementTask[];
+  replanRevision?: number;
 }
 
 export interface ImpactIndex {
@@ -153,7 +258,9 @@ export type StageTaskStatus =
   | "REFINING"
   | "READY"
   | "STARTING"
+  | "PREPARING_MOCK"
   | "IN_PROGRESS"
+  | "WAITING_INTEGRATION"
   | "WAITING_CONFIRMATION"
   | "PAUSED"
   | "BLOCKED"
@@ -161,6 +268,17 @@ export type StageTaskStatus =
   | "FAILED";
 
 export interface StageTask {
+  flow?: "agile";
+  packageRevision?: number;
+  requirementRevision?: number;
+  reworkOfTaskId?: string | null;
+  reportEvidence?: Array<{ reportId: string; taskRevision: number; requirementRevision: number; action: string; summary: string; evidence: string[]; createdAt: string }>;
+  executionMode?: "external" | "codex";
+  progressSummary?: string;
+  externalEvidence?: import("./coordination.js").ExternalEvidence | null;
+  pendingChangeId?: string | null;
+  pauseRequested?: boolean;
+  changeNotes?: string[];
   id: string;
   stageId: string;
   assigneeNodeId: string;
@@ -176,15 +294,26 @@ export interface StageTask {
   activeJobId: string | null;
   runtimeId: string | null;
   lastGit: GitSnapshot | null;
+  baselineSha?: string | null;
   publishedAt: string;
   startedAt: string | null;
   finishedAt: string | null;
   doneAt: string | null;
   updatedAt: string;
+  workstreamId?: string;
+  brief?: TaskBrief;
+  dependencyEdges?: DependencyEdge[];
+  mockEvidence?: { contractHashes: Record<string, string>; verifiedAt: string; summary: string } | null;
+  integrationEvidence?: { contractHashes: Record<string, string>; headSha: string; verifiedAt: string; summary: string } | null;
+  blockedReason?: string | null;
+  archived?: boolean;
 }
 
 export type PullRequestStatus = "QUEUED" | "IN_REVIEW" | "APPLIED" | "REJECTED";
 export interface VibePullRequest {
+  sourcePlanDocumentId?: string;
+  flow?: "agile";
+  title?: string;
   id: string;
   submitterNodeId: string;
   documentId: string;
@@ -194,6 +323,33 @@ export interface VibePullRequest {
   reviewId: string | null;
   createdAt: string;
   decidedAt: string | null;
+  submittedGit?: GitSnapshot | null;
+  reviewedPaths?: string[];
+  reviewedAt?: string | null;
+}
+
+export interface RequirementVersion {
+  revision: number;
+  markdown: string;
+  source: "alignment" | "review";
+  sourceId: string;
+  createdAt: string;
+}
+
+export interface AlignmentDraftVersion {
+  alignmentId: string;
+  revision: number;
+  tasks: AlignmentTaskDraft[];
+  contracts: InterfaceContract[];
+  editorNodeId: string;
+  createdAt: string;
+}
+
+export interface AlignmentReadReceipt {
+  alignmentId: string;
+  nodeId: string;
+  revision: number;
+  readAt: string;
 }
 
 export interface ImpactDecision {
@@ -212,6 +368,18 @@ export interface ReplacementTask {
   dependencies?: string[];
 }
 
+export interface ContractUpdate {
+  contractId: string;
+  changeIds: string[];
+  name: string;
+  signature: string;
+  behavior: string[];
+  examples: string[];
+  errors: string[];
+  testCommand: string;
+  handoff: string;
+}
+
 export type ImpactReviewStatus = "QUEUED" | "RUNNING" | "NEEDS_EVIDENCE" | "AWAITING_CAPTAIN" | "APPLIED" | "REJECTED" | "FAILED" | "CANCELLED";
 export interface ImpactReviewBatch {
   id: string;
@@ -225,6 +393,7 @@ export interface ImpactReviewBatch {
   affectedTaskIds: string[];
   affectedNodeIds: string[];
   replacementTasks: ReplacementTask[];
+  contractUpdates?: ContractUpdate[];
   pausedTaskStates: Record<string, StageTaskStatus>;
   executorNodeId: string | null;
   agentJobId: string | null;
@@ -248,7 +417,7 @@ export interface ImpactReviewBatch {
   clearedNodeIds?: string[];
 }
 
-export type AgentJobKind = "ALIGN_PLANS" | "ALIGN_FINALIZE" | "SUMMARIZE_PLAN" | "SUMMARIZE_CHANGE" | "IMPACT_INDEX" | "IMPACT_PROBE" | "REVIEW_CHANGES" | "RUN_TASK" | "INTERRUPT_TASK" | "SYNC_NODE";
+export type AgentJobKind = import("./agile.js").AgilePhase | "ASSESS_CHANGE" | "PLAN_INTENT" | "ALIGN_PLANS" | "ALIGN_FINALIZE" | "DESCRIBE_WORKSTREAM" | "SUMMARIZE_PLAN" | "SUMMARIZE_CHANGE" | "IMPACT_INDEX" | "IMPACT_PROBE" | "REVIEW_CHANGES" | "PREPARE_MOCK" | "INTEGRATE_TASK" | "RUN_TASK" | "INTERRUPT_TASK" | "SYNC_NODE";
 export type AgentJobStatus = "QUEUED" | "LEASED" | "RUNNING" | "COMPLETED" | "FAILED" | "CANCELLED";
 export interface AgentJob {
   id: string;
@@ -285,6 +454,8 @@ export interface AuditPoolStatus {
 }
 
 export interface V20BootstrapPayload {
+  agile?: import("./agile.js").AgileSnapshot;
+  coordination?: import("./coordination.js").CoordinationSnapshot;
   room: {
     id: string;
     requirementRevision: number;
@@ -294,10 +465,17 @@ export interface V20BootstrapPayload {
   viewer: CollaborationNode;
   nodes: CollaborationNode[];
   plans: MarkdownDocument[];
+  modules: ProjectModule[];
+  moduleRevision: number;
   alignments: AlignmentRun[];
   stages: DevelopmentStage[];
   tasks: StageTask[];
+  workstreams: Workstream[];
+  contracts: InterfaceContract[];
   pullRequests: VibePullRequest[];
+  requirementVersions: RequirementVersion[];
+  alignmentDraftVersions: AlignmentDraftVersion[];
+  alignmentReads: AlignmentReadReceipt[];
   reviews: ImpactReviewBatch[];
   notifications: Notification[];
   auditPool: AuditPoolStatus;
@@ -305,9 +483,12 @@ export interface V20BootstrapPayload {
 }
 
 export interface NodeHeartbeatInput {
+  apiReady?: boolean;
   workspaceReady: boolean;
-  auditCodex: CapabilityStateV20;
-  workCodex: CapabilityStateV20;
+  codex?: CapabilityStateV20;
+  /** Legacy node input, read until the next unified heartbeat. */
+  auditCodex?: CapabilityStateV20;
+  workCodex?: CapabilityStateV20;
   workTransport: WorkTransport;
   rateLimits: RateLimitWindow[];
   git: GitSnapshot | null;
@@ -316,11 +497,20 @@ export interface NodeHeartbeatInput {
 }
 
 export interface JobResultInput {
+  errorCode?: JobFailureCode;
   leaseToken: string;
-  phase: "started" | "completed" | "failed" | "interrupted";
+  phase: "started" | "progress" | "completed" | "failed" | "interrupted";
+  activity?: import("./runtime.js").JobActivityInput;
   runtimeId?: string | null;
   result?: unknown;
   error?: string;
+}
+
+export const JOB_FAILURE_CODES = ["REVISION_CONFLICT", "WORKSPACE_CHANGED", "EXECUTION_FAILED", "LEASE_EXPIRED"] as const;
+export type JobFailureCode = typeof JOB_FAILURE_CODES[number];
+export function jobFailureCode(error: unknown): JobFailureCode | undefined {
+  const code = error && typeof error === "object" && "code" in error ? error.code : undefined;
+  return JOB_FAILURE_CODES.includes(code as JobFailureCode) ? code as JobFailureCode : undefined;
 }
 
 export interface JoinResponse {

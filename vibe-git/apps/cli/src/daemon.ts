@@ -1,13 +1,27 @@
-import { appendFile, mkdir, stat } from "node:fs/promises";
+import { jobFailureCode } from "@vibe-git/protocol";
+import { rm, stat } from "node:fs/promises";
+import { appendLog } from "@vibe-git/protocol/logging";
 import { execFileSync } from "node:child_process";
-import { dirname } from "node:path";
-import type { AgentJob, GitSnapshot, NodeHeartbeatInput, RateLimitWindow } from "@vibe-git/protocol";
-import { api, post } from "./api.js";
-import { auditCodexHome, daemonLogPath, loadConfig, saveConfig, type ClientConfig } from "./config.js";
+import { realpathSync } from "node:fs";
+import { resolve } from "node:path";
+import type { AgentJob, GitSnapshot, NodeHeartbeatInput, RateLimitWindow, V20BootstrapPayload } from "@vibe-git/protocol";
+import { api, post, ApiError } from "./api.js";
+import { defaultCodexHome, daemonLogPath, loadConfig, saveConfig, readJson, type ClientConfig } from "./config.js";
 import { probeCodex, readRateLimits, runAudit, startDevelopment, type ActiveRun } from "./codex.js";
 import { impactIndex, repositoryContext, worktreeFingerprint } from "./evidence.js";
+import { integrateWithReal, prepareMock } from "./mock.js";
+import { localPanelPath, startLocalPanel } from "./local-panel.js";
+import { assertProjectWorkspacePath } from "./local-workspace.js";
+import { computeStatus, runStructuredJob } from "./agile-ai.js";
+import { activityReporter } from "./job-activity.js";
+import { rememberProject } from "./projects.js";
 
+const executing = new Map<string, string>();
 const active = new Map<string, ActiveRun>();
+const activeJobIds = new Map<string, string>();
+const reporters = new Map<string, ReturnType<typeof activityReporter>>();
+let claimController: AbortController | undefined;
+const jobControllers = new Map<string, AbortController>();
 let stopping = false;
 let quota: RateLimitWindow[] = [];
 let lastQuotaAt = 0;
@@ -22,18 +36,22 @@ const PROBE_SCHEMA = {
   }
 } as const;
 
+import { gitExecutable } from "./git-command.js";
+
 async function log(value: string): Promise<void> {
   const line = `[${new Date().toISOString()}] ${value.replace(/[\r\n]+/g, " ").slice(0, 4_000)}\n`;
-  await mkdir(dirname(daemonLogPath()), { recursive: true });
-  await appendFile(daemonLogPath(), line, "utf8").catch(() => undefined);
+  try { appendLog(daemonLogPath(), line); } catch { /* Logging must not stop the daemon. */ }
 }
 
 function git(cwd: string, args: string[]): string {
-  return execFileSync("git", args, { cwd, encoding: "utf8", windowsHide: true, timeout: 8_000, stdio: ["ignore", "pipe", "ignore"] }).trim();
+  const bin = gitExecutable();
+  return execFileSync(bin, args, { cwd, encoding: "utf8", windowsHide: true, timeout: 8_000, stdio: ["ignore", "pipe", "ignore"] }).trim();
 }
 
 function probeGit(workspace: string): GitSnapshot | null {
   try {
+    const canonical = assertProjectWorkspacePath(realpathSync(workspace));
+    if (resolve(git(canonical, ["rev-parse", "--show-toplevel"])) !== canonical) return null;
     const headSha = git(workspace, ["rev-parse", "HEAD"]);
     if (!/^[0-9a-f]{40}$/i.test(headSha)) return null;
     return {
@@ -43,11 +61,12 @@ function probeGit(workspace: string): GitSnapshot | null {
   } catch { return null; }
 }
 
-async function heartbeat(config: ClientConfig, taskId?: string, captain = false): Promise<void> {
+async function heartbeat(connection: ClientConfig, taskId?: string, captain = false): Promise<void> {
+  const config = { ...connection };
   const normal = probeCodex();
-  const audit = probeCodex({ CODEX_HOME: auditCodexHome() });
+  const audit = normal;
   if (audit.state === "available" && Date.now() - lastQuotaAt > 5 * 60_000) {
-    quota = await readRateLimits(auditCodexHome());
+    quota = await readRateLimits(defaultCodexHome());
     lastQuotaAt = Date.now();
   }
   const gitState = probeGit(config.workspace);
@@ -56,42 +75,58 @@ async function heartbeat(config: ClientConfig, taskId?: string, captain = false)
     if (fingerprint) gitState.fingerprint = fingerprint;
   }
   if (captain && (!contextCache || Date.now() - contextCache.at > 60_000 || contextCache.value?.headSha !== gitState?.headSha)) {
-    contextCache = { at: Date.now(), value: gitState ? await repositoryContext(config.workspace).catch(() => null) : null };
+    const snapshot = gitState ? await api<V20BootstrapPayload>(config, "/api/v1/bootstrap").catch(() => null) : null;
+    const flow = snapshot?.agile?.activeFlow;
+    const focusPaths = [...(flow?.tasks.flatMap(task => task.ownedPaths) ?? []), ...(snapshot?.tasks.flatMap(task => task.brief?.ownedPaths ?? []) ?? [])];
+    contextCache = { at: Date.now(), value: gitState ? await repositoryContext(config.workspace,
+      flow?.draftMarkdown || snapshot?.room.currentRequirementMarkdown || "", focusPaths).catch(() => null) : null };
   }
   const input: NodeHeartbeatInput = {
-    workspaceReady: Boolean(gitState), auditCodex: audit.state, workCodex: normal.state,
+    apiReady: captain && computeStatus(config).ready,
+    workspaceReady: Boolean(gitState), codex: normal.state,
     workTransport: config.workTransport, rateLimits: quota, git: gitState,
     currentTaskId: taskId ?? active.keys().next().value ?? null,
     ...(captain ? { repositoryContext: contextCache?.value ?? null } : {})
   };
-  await post(config, "/api/v1/nodes/heartbeat", input);
+  if (connection.nodeId === config.nodeId) await post(config, "/api/v1/nodes/heartbeat", input);
 }
 
 async function report(config: ClientConfig, job: AgentJob, body: Record<string, unknown>): Promise<void> {
+  if (["completed", "failed", "interrupted"].includes(String(body.phase))) await reporters.get(job.id)?.flush();
   await post(config, `/api/v1/jobs/${encodeURIComponent(job.id)}/status`, { leaseToken: job.leaseToken, ...body });
 }
 
 async function executeJob(config: ClientConfig, job: AgentJob): Promise<void> {
+  const activity = activityReporter(config, job); reporters.set(job.id, activity);
+  const controller = new AbortController(); jobControllers.set(job.id, controller);
   try {
     if (!job.leaseToken) throw new Error("Host 返回了无租约作业");
-    if (job.kind === "ALIGN_PLANS" || job.kind === "REVIEW_CHANGES") {
+    if (job.kind.startsWith("AGILE_")) {
+      const runtimeId = "agile-" + process.pid + "-" + Date.now();
+      await report(config, job, { phase: "started", runtimeId });
+      const result = await runStructuredJob(config, job.payload.provider === "api" ? "api" : "codex",
+        String(job.payload.prompt ?? ""), job.payload.outputSchema as Record<string, unknown>, controller.signal, activity.emit);
+      await report(config, job, { phase: "completed", runtimeId, result });
+      return;
+    }
+    if (job.kind === "ASSESS_CHANGE" || job.kind === "PLAN_INTENT" || job.kind === "ALIGN_PLANS" || job.kind === "DESCRIBE_WORKSTREAM" || job.kind === "REVIEW_CHANGES") {
       const runtimeId = `audit-${process.pid}-${Date.now()}`;
       await report(config, job, { phase: "started", runtimeId });
-      const result = await runAudit(String(job.payload.prompt ?? ""), job.payload.outputSchema, config.workspace, auditCodexHome());
+      const result = await runAudit(String(job.payload.prompt ?? ""), job.payload.outputSchema, config.workspace, defaultCodexHome(), controller.signal, { onActivity: activity.emit });
       await report(config, job, { phase: "completed", runtimeId, result });
       return;
     }
     if (job.kind === "ALIGN_FINALIZE") {
       const runtimeId = `audit-${process.pid}-${Date.now()}`;
       await report(config, job, { phase: "started", runtimeId });
-      const result = await runAudit(String(job.payload.prompt ?? ""), job.payload.outputSchema, config.workspace, auditCodexHome());
+      const result = await runAudit(String(job.payload.prompt ?? ""), job.payload.outputSchema, config.workspace, defaultCodexHome(), controller.signal, { onActivity: activity.emit });
       await report(config, job, { phase: "completed", runtimeId, result });
       return;
     }
     if (job.kind === "SUMMARIZE_CHANGE" || job.kind === "SUMMARIZE_PLAN") {
       const runtimeId = `summary-${process.pid}-${Date.now()}`;
       await report(config, job, { phase: "started", runtimeId });
-      const result = await runAudit(String(job.payload.prompt ?? ""), job.payload.outputSchema, config.workspace, auditCodexHome());
+      const result = await runAudit(String(job.payload.prompt ?? ""), job.payload.outputSchema, config.workspace, defaultCodexHome(), controller.signal, { onActivity: activity.emit });
       await report(config, job, { phase: "completed", runtimeId, result });
       return;
     }
@@ -123,14 +158,14 @@ async function executeJob(config: ClientConfig, job: AgentJob): Promise<void> {
           `需求变更摘要：${changeBrief}`
         ].join("\n\n");
         if (Buffer.byteLength(prompt, "utf8") > 48 * 1024) throw new Error("本地取证提示词超出预算");
-        let result = await runAudit(prompt, PROBE_SCHEMA, config.workspace, auditCodexHome()) as { status: string; reason: string; paths: string[] };
+        let result = await runAudit(prompt, PROBE_SCHEMA, config.workspace, defaultCodexHome(), controller.signal, { onActivity: activity.emit }) as { status: string; reason: string; paths: string[] };
         if (result.status === "uncertain") {
           const secondPrompt = [prompt,
             "第一次检索仍无法排除影响。请再做一轮只读补查：沿任务入口、依赖和验收路径扩展，不重复已查文件；本轮仍最多 20 个文件、每文件 200 行。确实无法判断则继续返回 uncertain，说明缺少什么证据。",
             `第一次结论：${JSON.stringify({ reason: String(result.reason ?? "").slice(0, 1_000), paths: Array.isArray(result.paths) ? result.paths.slice(0, 20) : [] })}`
           ].join("\n\n");
           if (Buffer.byteLength(secondPrompt, "utf8") > 48 * 1024) throw new Error("补查提示词超出预算");
-          result = await runAudit(secondPrompt, PROBE_SCHEMA, config.workspace, auditCodexHome()) as { status: string; reason: string; paths: string[] };
+          result = await runAudit(secondPrompt, PROBE_SCHEMA, config.workspace, defaultCodexHome(), controller.signal, { onActivity: activity.emit }) as { status: string; reason: string; paths: string[] };
         }
         if (result.status === "affected") affectedTaskIds.push(task.id);
         else if (result.status === "unaffected") unaffectedTaskIds.push(task.id);
@@ -144,14 +179,32 @@ async function executeJob(config: ClientConfig, job: AgentJob): Promise<void> {
         affectedTaskIds, unaffectedTaskIds, uncertainTaskIds, findings, createdAt: new Date().toISOString() } });
       return;
     }
+    if (job.kind === "PREPARE_MOCK") {
+      const contracts = Array.isArray(job.payload.contracts) ? job.payload.contracts as Parameters<typeof prepareMock>[2] : [];
+      if (!contracts.length) throw new Error("Mock 作业缺少接口契约");
+      const result = await prepareMock(config, job.entityId, contracts, async (runtimeId) => {
+        await report(config, job, { phase: "started", runtimeId });
+      });
+      await report(config, job, { phase: "completed", result: { verified: true, ...result } });
+      return;
+    }
+    if (job.kind === "INTEGRATE_TASK") {
+      const contracts = Array.isArray(job.payload.contracts) ? job.payload.contracts as Parameters<typeof integrateWithReal>[3] : [];
+      const upstreamShas = Array.isArray(job.payload.upstreamShas) ? job.payload.upstreamShas.map(String) : [];
+      await report(config, job, { phase: "started", runtimeId: `integration-${Date.now()}` });
+      const result = integrateWithReal(config, job.entityId, upstreamShas, contracts);
+      await heartbeat(config, job.entityId);
+      await report(config, job, { phase: "completed", result: { verified: true, ...result } });
+      return;
+    }
     if (job.kind === "RUN_TASK") {
       const requested = ["auto", "app-server", "cli"].includes(String(job.payload.transport)) ? String(job.payload.transport) as ClientConfig["workTransport"] : config.workTransport;
       const run = await startDevelopment(String(job.payload.prompt ?? ""), config.workspace, requested);
-      active.set(job.entityId, run);
+      active.set(job.entityId, run); activeJobIds.set(job.entityId, job.id);
       await report(config, job, { phase: "started", runtimeId: run.runtimeId });
       await heartbeat(config).catch(() => undefined);
       const result = await run.done;
-      active.delete(job.entityId);
+      if (active.get(job.entityId) === run) { active.delete(job.entityId); activeJobIds.delete(job.entityId); }
       await heartbeat(config).catch(() => undefined);
       await report(config, job, { phase: result.status === "completed" ? "completed" : result.status === "interrupted" ? "interrupted" : "failed", runtimeId: run.runtimeId, error: result.detail });
       return;
@@ -171,35 +224,67 @@ async function executeJob(config: ClientConfig, job: AgentJob): Promise<void> {
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
     await log(`${job.kind} ${job.id} 失败：${detail}`);
-    if (job.leaseToken) await report(config, job, { phase: "failed", error: detail }).catch(() => undefined);
-  }
+    if (job.leaseToken) await report(config, job, { phase: "failed", error: detail, ...(jobFailureCode(error) ? { errorCode: jobFailureCode(error) } : {}) }).catch(() => undefined);
+  } finally { await activity.flush(); reporters.delete(job.id); jobControllers.delete(job.id); }
 }
 
 export async function runDaemon(): Promise<void> {
   const config = await loadConfig();
   if (!config) return;
   await stat(config.workspace);
-  await saveConfig({ ...config, daemonPid: process.pid });
+  config.daemonPid = process.pid;
+  await saveConfig(config);
   await log(`节点守护进程启动：${config.nodeId}`);
-  const captain = await api<{ viewer?: { role?: string } }>(config, "/api/v1/bootstrap").then((value) => value.viewer?.role === "captain").catch(() => false);
-  const stop = () => { stopping = true; for (const run of active.values()) void run.interrupt(); };
+  let captain = false;
+  await rememberProject(config, await api<V20BootstrapPayload>(config, "/api/v1/bootstrap"));
+  const panel = await startLocalPanel(config, { beforeProjectSwitch: async () => {
+    claimController?.abort();
+  }, beforeSwitch: async () => {
+    const data = await api<V20BootstrapPayload>(config, "/api/v1/bootstrap");
+    const task = data.tasks.find(task => !task.archived && task.assigneeNodeId === config.nodeId &&
+      (task.activeJobId || task.pauseRequested || ["IN_PROGRESS", "STARTING", "PREPARING_MOCK", "WAITING_CONFIRMATION", "WAITING_INTEGRATION", "PAUSED"].includes(task.status) || (task.executionMode === "external" && task.status === "BLOCKED")));
+    if (task) throw new Error(`任务尚未结束，不能切换工作区：${task.title}`);
+  }, busy: () => executing.values().next().value ?? null, changed: async () => {
+    contextCache = null;
+    captain = await api<V20BootstrapPayload>(config, "/api/v1/bootstrap").then(data => data.viewer.role === "captain");
+    await heartbeat(config, undefined, captain);
+  } });
+  await log(`本机面板已监听 127.0.0.1:${panel.port}`);
+  captain = await api<{ viewer?: { role?: string } }>(config, "/api/v1/bootstrap").then((value) => value.viewer?.role === "captain").catch(() => false);
+  const stop = () => { stopping = true; claimController?.abort(); for (const controller of jobControllers.values()) controller.abort(); for (const run of active.values()) void run.interrupt(); };
   process.once("SIGINT", stop); process.once("SIGTERM", stop);
 
-  let nextHeartbeat = 0;
-  while (!stopping) {
-    if (Date.now() >= nextHeartbeat) {
-      await heartbeat(config, undefined, captain).catch((error) => log(`心跳失败：${error instanceof Error ? error.message : String(error)}`));
-      nextHeartbeat = Date.now() + 15_000;
+  try {
+    let nextHeartbeat = 0;
+    while (!stopping) {
+      if (panel.switching()) { await new Promise(done => setTimeout(done, 100)); continue; }
+      if (Date.now() >= nextHeartbeat) {
+        await heartbeat(config, undefined, captain).catch(error => { if (error instanceof ApiError && error.status === 403) stop(); return log(`心跳失败：${error instanceof Error ? error.message : String(error)}`); });
+        for (const [jobId, controller] of jobControllers) {
+          const state = await api<{ status: string }>(config, `/api/v1/jobs/${jobId}/state`).catch(() => null);
+          if (state && ["CANCELLED", "FAILED"].includes(state.status)) controller.abort();
+        }
+        if (stopping) break;
+        nextHeartbeat = Date.now() + 15_000;
+      }
+      try {
+        const requestedAt = Date.now();
+        const claimedConfig = { ...config }; claimController = new AbortController();
+        const job = await api<AgentJob | null>(claimedConfig, "/api/v1/nodes/jobs/next", { signal: claimController.signal, method: "POST", body: "{}", headers: { "content-type": "application/json" } });
+        if (job && claimedConfig.nodeId === config.nodeId && !panel.switching()) { executing.set(job.id, job.entityId); void executeJob(claimedConfig, job).finally(() => executing.delete(job.id)); }
+        // 兼容错误地立即返回 204 的旧 Host，避免空转耗尽磁盘和 CPU。
+        else if (Date.now() - requestedAt < 1_000) await new Promise(resolve => setTimeout(resolve, 3_000));
+      } catch (error) {
+        if (claimController?.signal.aborted) continue;
+        await log(`获取作业失败：${error instanceof Error ? error.message : String(error)}`);
+        await new Promise((resolve) => setTimeout(resolve, 3_000));
+      }
     }
-    try {
-      const job = await api<AgentJob | null>(config, "/api/v1/nodes/jobs/next", { method: "POST", body: "{}", headers: { "content-type": "application/json" } });
-      if (job) void executeJob(config, job);
-    } catch (error) {
-      await log(`获取作业失败：${error instanceof Error ? error.message : String(error)}`);
-      await new Promise((resolve) => setTimeout(resolve, 3_000));
-    }
+  } finally {
+    const latest = await loadConfig(false);
+    await panel.close();
+    if ((await readJson<{ pid: number }>(localPanelPath()))?.pid === process.pid) await rm(localPanelPath(), { force: true });
+    if (latest?.daemonPid === process.pid) await saveConfig({ ...latest, daemonPid: null });
+    await log("节点守护进程停止");
   }
-  const latest = await loadConfig(false);
-  if (latest?.daemonPid === process.pid) await saveConfig({ ...latest, daemonPid: null });
-  await log("节点守护进程停止");
 }
