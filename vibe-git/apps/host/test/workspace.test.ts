@@ -138,8 +138,8 @@ it("新作业按错误码恢复证据，不根据中文报错误判；无错误�
   expect(repo.eventsSince().find(event => event.type === "job.failed")!.payload).toMatchObject({ errorCode: "EXECUTION_FAILED" });
   repo.putJob({ ...job, id: "workspace-job" });
   service.reportJob(captain, "workspace-job", { leaseToken: job.leaseToken!, phase: "failed", errorCode: "WORKSPACE_CHANGED", error: "source moved" });
-  expect(repo.getReview(review.id)!.indexes[captain.id]).toBeUndefined();
+  expect(repo.getReview(review.id)!.indexes![captain.id]).toBeUndefined();
   repo.putReview(review); repo.putJob({ ...job, id: "legacy-job" });
   service.reportJob(captain, "legacy-job", { leaseToken: job.leaseToken!, phase: "failed", error: "工作树发生变化" });
-  expect(repo.getReview(review.id)!.indexes[captain.id]).toBeUndefined();
+  expect(repo.getReview(review.id)!.indexes![captain.id]).toBeUndefined();
 });
