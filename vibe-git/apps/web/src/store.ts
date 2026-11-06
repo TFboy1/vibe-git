@@ -114,11 +114,12 @@ export const useWorkspace = defineStore("workspace", () => {
     .sort((a, b) => Number(b.status === "PAUSED") - Number(a.status === "PAUSED") || Number(b.status === "IN_PROGRESS") - Number(a.status === "IN_PROGRESS")));
   const nextAction = computed(() => {
     const current = flow.value, flowPath = current?.kind === "review" ? "/issues" : "/requirements";
+    const tasks = (data.value?.tasks ?? []).filter(task => !task.archived);
     if (!captain.value) {
       const task = myTasks.value[0];
-      if (task) return { title: task.title, body: taskNextStep(task, data.value?.tasks ?? [], name), path: "/projects?view=packages&task=" + encodeURIComponent(task.id), label: "查看我的任务" };
+      if (task) return { title: task.title, body: taskNextStep(task, data.value?.tasks ?? [], name, data.value?.contracts ?? []), path: "/projects?view=packages&task=" + encodeURIComponent(task.id), label: "查看我的任务" };
       const leader = data.value?.nodes.find(node => node.role === "captain");
-      const done = data.value?.tasks.some(task => task.assigneeNodeId === data.value?.viewer.id && task.status === "DONE");
+      const done = tasks.some(task => task.assigneeNodeId === data.value?.viewer.id && task.status === "DONE");
       return { title: done ? "本轮任务已完成" : "等待" + (leader?.label ?? "队长") + "派发任务", body: current ? "队长正在" + (current.kind === "review" ? "审核需求变更" : "整理需求与分工") + "，发布后你的任务会自动出现。" : done ? "验收证据已保留；后续变更需要返工时会创建关联任务。" : "可以按需补充想法，也可以直接等待任务，无需提交个人计划。", path: current ? flowPath : "/requirements", label: "查看团队需求" };
     }
     if (current) {
@@ -131,6 +132,7 @@ export const useWorkspace = defineStore("workspace", () => {
     }
     if (!data.value?.room.requirementRevision) return { title: "从一个目标开始", body: "简述希望解决的问题，AI 只会追问影响方向的关键问题。成员可以按需补充想法。", path: "/requirements", label: "创建需求" };
     if (pendingChanges.value.length) return { title: pendingChanges.value.length + " 项需求变更待审核", body: "选择本轮要处理的变更，统一分析影响并形成新版需求。", path: "/issues", label: "处理需求变更" };
+    if (!tasks.some(task => task.status !== "DONE")) return { title: tasks.length ? "本轮任务已全部完成" : "本轮暂无待执行任务", body: "验收证据和交付记录已保留；需要新增或调整目标时提出需求变更。", path: "/projects", label: "查看任务与证据" };
     return { title: "团队正在按正式需求开发", body: "查看任务进度、依赖和阻碍；需要调整目标时提交需求变更。", path: "/projects", label: "查看团队任务" };
   });
   let refreshPromise: Promise<void> | null = null;
